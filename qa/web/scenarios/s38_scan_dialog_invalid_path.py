@@ -51,9 +51,11 @@ Assertions:
      offending path (the #144 "no silent no-op" guarantee).
   3. The scan dialog STAYS OPEN on failure (the user can correct + retry).
   4. Correct the source path to a real (empty) directory; Start Scan again.
-  5. The failure alert clears (status leaves ``'failed'``) AND the dialog
-     closes once the corrected scan completes — the failed state is
-     recoverable, not sticky.
+  5. The failure alert clears (status leaves ``'failed'``) AND the corrected
+     scan runs to completion — the failed state is recoverable, not sticky.
+     The recovery source is empty, so completion is the ``completed_empty``
+     result: since #896 the dialog stays open showing ``scan-empty-message``
+     (Qt ``_on_completed_empty`` parity) instead of closing.
 """
 from __future__ import annotations
 
@@ -68,7 +70,11 @@ from qa.web._invariants import (
     set_output_path,
     start_scan,
 )
-from qa.web.testid_constants import SCAN_DIALOG, scan_source_path_testid
+from qa.web.testid_constants import (
+    SCAN_DIALOG,
+    SCAN_EMPTY_MESSAGE,
+    scan_source_path_testid,
+)
 
 # A path component distinctive enough to assert on regardless of OS path
 # separators — this scenario runs on Windows locally and Linux in CI.
@@ -118,7 +124,8 @@ def run(*, base_url: str) -> None:
             # ── 4. Corrected path → error clears, scan recovers ────────────
             # Re-fill ONLY with a valid (empty) dir — label stays non-empty so
             # canStart still holds; the dir exists but has no media →
-            # completed_empty → finished → the dialog closes.
+            # completed_empty → the dialog stays open with the no-files
+            # message (#896).
             add_scan_source(page, valid_dir, idx=0, label="retry")
             assert page.get_by_test_id(scan_source_path_testid(0)).input_value() == valid_dir
             start_scan(page)
@@ -126,8 +133,16 @@ def run(*, base_url: str) -> None:
             # 5a. The failure alert clears the moment the new run flips status
             # off 'failed' (the #144 "valid input clears the error" analog)...
             alert.wait_for(state="hidden", timeout=10_000)
-            # 5b. ...and the corrected scan runs to completion, closing the
-            # dialog (proves the failed state was recoverable, not sticky).
-            page.get_by_test_id(SCAN_DIALOG).wait_for(state="hidden", timeout=30_000)
+            # 5b. ...and the corrected scan runs to completion (proves the
+            # failed state was recoverable, not sticky). The source is empty,
+            # so completion is the no-files message in the still-open dialog
+            # (#896, Qt _on_completed_empty parity) — not a close.
+            page.get_by_test_id(SCAN_EMPTY_MESSAGE).wait_for(
+                state="visible", timeout=30_000
+            )
+            assert page.get_by_test_id(SCAN_DIALOG).is_visible(), (
+                "the scan dialog closed after the recovered empty scan — the "
+                "no-files result must stay on screen (#896)"
+            )
     finally:
         shutil.rmtree(valid_dir, ignore_errors=True)

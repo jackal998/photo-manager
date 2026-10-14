@@ -1,0 +1,1 @@
+Keep the row context menu inside the window: flip above or left of the cursor, slide in, or scroll when it would not fit, so its lower items stay clickable in a short window (#897).

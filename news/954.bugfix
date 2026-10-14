@@ -1,0 +1,1 @@
+Stop an unclosed `[team-empty-ok: …]` bypass in a team-mode task comment from being closed by a later `]` (a checklist box, a markdown link) and waving an empty gate completion through; both team hooks' bypass tokens now sit on one line (#883).

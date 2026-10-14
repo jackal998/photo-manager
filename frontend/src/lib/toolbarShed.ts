@@ -22,6 +22,9 @@
 export interface ToolbarShedPlan {
   /** Render the manifest path input + its Open button. */
   manifestOpen: boolean;
+  /** Second stage (#918): fold Set Action…, the language toggle and Settings
+   *  into the toolbar's "⋯" overflow menu instead of rendering them inline. */
+  overflowMenu: boolean;
 }
 
 /**
@@ -36,6 +39,22 @@ export interface ToolbarShedPlan {
 export const TOOLBAR_MANIFEST_SHED_WIDTH = 1100;
 
 /**
+ * Below this measured toolbar width the second stage folds Set Action…, the
+ * language toggle and Settings into the "⋯" overflow menu (#918).
+ *
+ * It is the SAME width as the first stage, and that is a measurement, not a
+ * shortcut. The "roughly 920px" above did not survive a real run: on CI's wide
+ * fallback stack (no Segoe UI) the strip with only the manifest pair shed
+ * measured 127px over at a 1000px viewport, i.e. it needs ~1127px — MORE than
+ * 1100. Any second threshold below 1100 therefore leaves a band where the
+ * strip still scrolls. Folding the language toggle and Settings alone buys
+ * back ~106px there (their 141px + two gaps, less the ⋯ trigger), still ~21px
+ * short, which is why Set Action… folds too (the issue's "if still needed");
+ * with all three folded the strip needs ~890px on that stack.
+ */
+export const TOOLBAR_OVERFLOW_MENU_WIDTH = TOOLBAR_MANIFEST_SHED_WIDTH;
+
+/**
  * Decide what the toolbar shows at `width` px.
  *
  * `null` means "not measured yet" (first paint, or a headless environment
@@ -46,7 +65,10 @@ export const TOOLBAR_MANIFEST_SHED_WIDTH = 1100;
  */
 export function toolbarShedPlan(width: number | null): ToolbarShedPlan {
   if (width === null || !Number.isFinite(width) || width <= 0) {
-    return { manifestOpen: true };
+    return { manifestOpen: true, overflowMenu: false };
   }
-  return { manifestOpen: width >= TOOLBAR_MANIFEST_SHED_WIDTH };
+  return {
+    manifestOpen: width >= TOOLBAR_MANIFEST_SHED_WIDTH,
+    overflowMenu: width < TOOLBAR_OVERFLOW_MENU_WIDTH,
+  };
 }

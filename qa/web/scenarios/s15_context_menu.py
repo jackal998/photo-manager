@@ -32,6 +32,13 @@ Qt divergences:
   - (f) Group-row menu: right-click the group header and assert the REDUCED
     menu — By-Field + Remove present, Execute-selected/Keep/Delete/Lock/
     Open-folder absent.
+
+#897 addition (menu stays inside the window):
+  - (g) In a 400 px-tall window, right-click the LAST file row and prove the
+    menu's LAST item (Apply best-copy) is on screen and would receive the
+    click. Before #897 the menu opened at the cursor regardless, its lower
+    items sat past the viewport edge, and s73 had to widen its window to
+    dodge exactly this.
 """
 from __future__ import annotations
 
@@ -53,6 +60,7 @@ from qa.web.testid_constants import (
     ACTION_DIALOG,
     ACTION_FIELD_COMBO,
     CONTEXT_MENU,
+    CTX_APPLY_BEST_COPY,
     CTX_EXECUTE_SELECTED,
     CTX_LOCK,
     CTX_OPEN_FOLDER,
@@ -247,6 +255,48 @@ def run(*, base_url: str) -> None:
                     f"'{label}' must be ABSENT from the group-row reduced menu, "
                     f"testid={absent_testid!r}"
                 )
+            page.keyboard.press("Escape")
+            page.get_by_test_id(CONTEXT_MENU).wait_for(state="hidden", timeout=5_000)
+
+            # --- Step (g): a short window keeps every item reachable (#897) ---
+            page.set_viewport_size({"width": 1280, "height": 400})
+            page.wait_for_timeout(300)
+            right_click_row(page, row_file_testid(group_id, "neardup_04_q65.jpg"))
+            last_item = page.get_by_test_id(CTX_APPLY_BEST_COPY)
+            # If the menu had to scroll, this scrolls the MENU (the page itself
+            # never scrolls, #894) — which is the reach a user has too.
+            last_item.scroll_into_view_if_needed(timeout=5_000)
+            reach = page.evaluate(
+                """([menuId, itemId]) => {
+  const menu = document.querySelector(`[data-testid="${menuId}"]`);
+  const item = document.querySelector(`[data-testid="${itemId}"]`);
+  if (!menu || !item) return null;
+  const m = menu.getBoundingClientRect();
+  const r = item.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  return {
+    viewport: window.innerHeight,
+    menuTop: Math.round(m.top),
+    menuBottom: Math.round(m.bottom),
+    itemBottom: Math.round(r.bottom),
+    itemHit: hit !== null && (hit === item || item.contains(hit)),
+  };
+}""",
+                [CONTEXT_MENU, CTX_APPLY_BEST_COPY],
+            )
+            print(f"probe_status: s15 short_window_menu = {reach}")
+            assert reach is not None, "Step (g): the context menu did not open"
+            assert 0 <= reach["menuTop"] and reach["menuBottom"] <= reach["viewport"], (
+                f"Step (g): the context menu runs outside a {reach['viewport']} px "
+                f"window (top {reach['menuTop']}, bottom {reach['menuBottom']})"
+            )
+            assert reach["itemHit"], (
+                "Step (g): the menu's last item is not reachable in a short window "
+                f"(item bottom {reach['itemBottom']} vs viewport {reach['viewport']})"
+            )
+            # Playwright's own actionability check agrees: visible, stable,
+            # enabled and the one element a click at its centre would hit.
+            last_item.click(trial=True, timeout=5_000)
             page.keyboard.press("Escape")
             page.get_by_test_id(CONTEXT_MENU).wait_for(state="hidden", timeout=5_000)
     finally:

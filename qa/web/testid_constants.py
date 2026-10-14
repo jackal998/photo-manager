@@ -38,6 +38,16 @@ was told the row list starts at, which must equal the sticky column-header
 row's measured height.  A scenario compares the two to prove the virtualizer's
 coordinate space matches the real layout."""
 
+COL_SORT_SUBLABEL = "col-sort-sublabel"
+"""The Action header's sort sub-label (#923) — "Keep first" / "Delete first"
+after the field name while the decision sort is active (rendered uppercase:
+"ACTION · KEEP FIRST").  It truncates before the field name ever does."""
+
+COL_SORT_STALE_DOT = "col-sort-stale-dot"
+"""The 4px accent dot right of the Action header's ▴/▾ (#923).  Present only
+while a decision changed under the Action sort — the rows deliberately stay put
+(design F3's deferred re-sort) — and gone after the next re-sort."""
+
 RESULT_COL_HEADER_ROW = "result-col-header-row"
 """Root of the sticky column-header row inside the result tree (#685/#699).
 
@@ -149,6 +159,25 @@ Execute dialog as MAIN_EXECUTE_BUTTON.  Never hidden: at zero marked rows it is
 DISABLED with the label still reading "Delete 0 files…", so the only
 destructive control on the screen never moves under the cursor."""
 
+MAIN_OVERFLOW_MENU = "main-overflow-menu"
+"""The toolbar's "⋯" overflow trigger (#918).  Rendered ONLY below the second
+shed threshold (lib/toolbarShed.ts), where it replaces the inline Set Action…,
+language toggle and Settings buttons so the strip fits instead of scrolling the
+Delete CTA off its end.  Absent at wider widths — its items are the buttons."""
+
+MAIN_OVERFLOW_SET_ACTION = "main-overflow-set-action"
+"""Overflow-menu item — opens the same Set Action dialog as ACTION_MAIN_BUTTON,
+and is disabled under the same `manifestPath === null` gate (#673)."""
+
+MAIN_OVERFLOW_LANG_EN = "main-overflow-lang-en"
+"""Overflow-menu item — switch the UI to English (checked when active)."""
+
+MAIN_OVERFLOW_LANG_ZH = "main-overflow-lang-zh"
+"""Overflow-menu item — switch the UI to 中文 (繁體) (checked when active)."""
+
+MAIN_OVERFLOW_SETTINGS = "main-overflow-settings"
+"""Overflow-menu item — opens the same Settings dialog as MAIN_SETTINGS_BUTTON."""
+
 MAIN_STATUS_STRIP = "main-status-strip"
 """The 30px status strip inside the footer.  Distinct from MAIN_STATUS_BAR (the
 summary <p> inside it) because the footer also carries the two conditional
@@ -234,6 +263,20 @@ MENU_VIEW_LANG_EN = "menu-view-lang-en"
 MENU_VIEW_LANG_ZH = "menu-view-lang-zh"
 """View → Language → 中文 (zh_TW) menu item."""
 
+MENU_VIEW_SORT_KEEP_FIRST = "menu-view-sort-keep-first"
+"""View → Sort by action → Keep first (#923).  The menu MIRROR of the Action
+column header's ascending sort (Keep → Skip → Delete); ticked while that order
+is the active one.  Re-picking it while the order is stale re-sorts."""
+
+MENU_VIEW_SORT_DELETE_FIRST = "menu-view-sort-delete-first"
+"""View → Sort by action → Delete first (#923) — the descending order
+(Delete → Skip → Keep); ticked while active."""
+
+MENU_VIEW_SORT_CLEAR = "menu-view-sort-clear"
+"""View → Sort by action → Clear sort (#923).  Clears whatever sort is active
+(one sort state), returning every group to the server order; disabled when no
+sort is active."""
+
 # ---------------------------------------------------------------------------
 # Filesystem picker (FsBrowser — directory / file / save modes)
 # ---------------------------------------------------------------------------
@@ -284,6 +327,9 @@ SCAN_OUTPUT_BROWSE = "scan-output-browse"
 
 SCAN_START_BUTTON = "scan-start-button"
 """'Start scan' button inside the scan dialog."""
+
+SCAN_EMPTY_MESSAGE = "scan-empty-message"
+"""No-files message the scan dialog keeps open after an empty scan (#896)."""
 
 SCAN_CANCEL_BUTTON = "scan-cancel-button"
 """'Cancel' button shown while a scan is running."""

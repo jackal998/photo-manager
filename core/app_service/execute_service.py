@@ -48,6 +48,14 @@ def _load_decided_rows(
     never trusts client-supplied lock state.  Only rows with outcome=''
     (in-review) are considered; already-executed rows are skipped.
 
+    Only rows the review SHOWS are considered (#941, "visible = committed"):
+    a row counts only if its group still has >= 2 in-review members. That is
+    the same group-survivor rule as ManifestRepository.load()'s orphan-skip,
+    and the complement of _fetch_singleton_rows. A kept actioned singleton,
+    left alone by a partial execute, is hidden from the review, so no tree,
+    count or #733 confirm ever shows it. It must not be deleted here. It keeps
+    its decision and stays a prune candidate.
+
     Args:
         manifest_path: Absolute path to the manifest sqlite.
         scope_paths: Optional whitelist of paths to restrict the query to.
@@ -62,9 +70,18 @@ def _load_decided_rows(
     conn = _connect(manifest_path)
     try:
         rows = conn.execute(
-            "SELECT source_path, user_decision, is_locked "
-            "FROM migration_manifest "
-            "WHERE outcome = '' AND user_decision IN ('delete', 'ignore')"
+            """
+            SELECT m.source_path, m.user_decision, m.is_locked
+            FROM migration_manifest m
+            JOIN (
+                SELECT group_id
+                FROM migration_manifest
+                WHERE outcome = '' AND group_id IS NOT NULL AND group_id != ''
+                GROUP BY group_id
+                HAVING COUNT(*) >= 2
+            ) reviewed ON m.group_id = reviewed.group_id
+            WHERE m.outcome = '' AND m.user_decision IN ('delete', 'ignore')
+            """
         ).fetchall()
     finally:
         conn.close()
@@ -111,7 +128,8 @@ def execute_decisions(
 
     Args:
         manifest_path: Absolute path to the manifest sqlite.
-        scope_paths: Optional subset of paths to execute (None = all).
+        scope_paths: Optional subset of paths to execute (None = every
+            decided row the review shows; see _load_decided_rows).
         recycle: True = send2trash; False = os.unlink.
         force_locked: If True, unlock-then-delete locked delete-decided rows.
             If False and any such rows exist, raises ValueError with locked paths.
@@ -331,6 +349,50 @@ def remove_from_review(
         groups = []
 
     return {"removed": len(safe_paths), "groups": groups}
+
+
+def restore_to_review(
+    manifest_path: str,
+    file_paths: list[str],
+    allowed_roots: list[str] | None = None,
+) -> dict[str, Any]:
+    """Undo an immediate Skip: put dismissed rows back in review (#909).
+
+    ``remove_from_review`` (and the singleton prune that can follow it) writes
+    nothing but ``outcome='ignored'`` — no file is touched, no delete CSV is
+    written — so resetting ``outcome`` to ``''`` reverses it exactly. Only rows
+    currently 'ignored' change; a 'deleted' row stays deleted.
+
+    Args:
+        manifest_path: Absolute path to the manifest sqlite.
+        file_paths: Paths to return to review.
+        allowed_roots: Trusted root directories.  Out-of-root rows in
+            ``file_paths`` are skipped (not restored), as in remove.
+
+    Returns:
+        Dict with keys: restored (rows changed), groups.
+    """
+    _require_manifest(manifest_path)
+    if allowed_roots:
+        safe_paths = [p for p in file_paths if is_under_roots(p, allowed_roots)]
+        for p in file_paths:
+            if not is_under_roots(p, allowed_roots):
+                logger.warning(
+                    "Refusing restore_to_review of out-of-root source_path: {}", p
+                )
+    else:
+        safe_paths = file_paths
+
+    restored = ManifestRepository().restore_to_review(manifest_path, safe_paths)
+
+    from core.app_service.review_service import load_review
+    try:
+        groups = load_review(manifest_path)["groups"]
+    except Exception as exc:
+        logger.warning("Failed to reload groups after restore: {}", exc)
+        groups = []
+
+    return {"restored": restored, "groups": groups}
 
 
 def _fetch_singleton_rows(conn) -> list:

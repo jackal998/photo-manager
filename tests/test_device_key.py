@@ -88,46 +88,46 @@ def test_device_key_relative_path_is_empty_bucket():
 # --- #565 — NAS server collapsing: all shares on one physical box → one bucket ---
 
 
-def _fake_resolver_linxiaoyun(letter: str) -> str:
-    """Test double: both H: and J: map to shares on \\LINXIAOYUN."""
+def _fake_resolver_nas_host(letter: str) -> str:
+    """Test double: both H: and J: map to shares on \\NAS-HOST."""
     mapping = {
-        "H:": "\\\\LinXiaoYun\\home",
-        "J:": "\\\\LinXiaoYun\\J",
+        "H:": "\\\\Nas-Host\\home",
+        "J:": "\\\\Nas-Host\\J",
     }
     return mapping.get(letter, "")
 
 
 def test_device_key_two_remote_letters_same_server_collapse(monkeypatch):
-    """H: and J: on the same NAS server both resolve to \\\\LINXIAOYUN.
+    """H: and J: on the same NAS server both resolve to \\\\NAS-HOST.
 
     This pins the 16→8 over-subscription fix: before #565 each letter
     became its own device bucket (H: and J:), each got _NAS_WORKERS=8, and
     the NAS box saw 16 concurrent SMB reads. After the fix they share one
-    bucket (\\\\LINXIAOYUN) and share one 8-reader pool.
+    bucket (\\\\NAS-HOST) and share one 8-reader pool.
     """
     monkeypatch.setattr(dk, "is_remote_drive", lambda p: str(p).upper() in {"H:", "J:"})
     # Clear module-level cache to avoid cross-test pollution.
     dk._unc_cache.clear()
 
-    key_h = dk.device_key("H:\\photos\\a.jpg", unc_resolver=_fake_resolver_linxiaoyun)
-    key_j = dk.device_key("J:\\backup\\b.jpg", unc_resolver=_fake_resolver_linxiaoyun)
+    key_h = dk.device_key("H:\\photos\\a.jpg", unc_resolver=_fake_resolver_nas_host)
+    key_j = dk.device_key("J:\\backup\\b.jpg", unc_resolver=_fake_resolver_nas_host)
 
-    assert key_h == "\\\\LINXIAOYUN"
-    assert key_j == "\\\\LINXIAOYUN"
+    assert key_h == "\\\\NAS-HOST"
+    assert key_j == "\\\\NAS-HOST"
     assert key_h == key_j  # same bucket → share one pool
 
 
 def test_device_key_native_unc_same_server_collapse():
     """Native UNC paths on the same server collapse without needing a resolver.
 
-    \\\\LINXIAOYUN\\home\\x.jpg and \\\\LINXIAOYUN\\J\\y.jpg both key to
-    \\\\LINXIAOYUN regardless of which share they're under.
+    \\\\NAS-HOST\\home\\x.jpg and \\\\NAS-HOST\\J\\y.jpg both key to
+    \\\\NAS-HOST regardless of which share they're under.
     """
-    key1 = dk.device_key("\\\\LINXIAOYUN\\home\\x.jpg")
-    key2 = dk.device_key("\\\\LINXIAOYUN\\J\\y.jpg")
+    key1 = dk.device_key("\\\\NAS-HOST\\home\\x.jpg")
+    key2 = dk.device_key("\\\\NAS-HOST\\J\\y.jpg")
 
-    assert key1 == "\\\\LINXIAOYUN"
-    assert key2 == "\\\\LINXIAOYUN"
+    assert key1 == "\\\\NAS-HOST"
+    assert key2 == "\\\\NAS-HOST"
     assert key1 == key2
 
 
@@ -163,7 +163,7 @@ def test_device_key_local_drive_unchanged(monkeypatch):
     monkeypatch.setattr(dk, "is_remote_drive", lambda p: False)
     dk._unc_cache.clear()
 
-    assert dk.device_key("C:\\Users\\J\\photos\\a.jpg") == "C:"
+    assert dk.device_key("C:\\Users\\<user>\\photos\\a.jpg") == "C:"
     assert dk.device_key(r"c:\documents\b.jpg") == "C:"
 
 
@@ -178,13 +178,13 @@ def test_device_key_resolver_cache_hit(monkeypatch):
 
     def _counting_resolver(letter: str) -> str:
         call_count["n"] += 1
-        return "\\\\LinXiaoYun\\home"
+        return "\\\\Nas-Host\\home"
 
     key1 = dk.device_key("H:\\a.jpg", unc_resolver=_counting_resolver)
     key2 = dk.device_key("H:\\b.jpg", unc_resolver=_counting_resolver)
 
-    assert key1 == "\\\\LINXIAOYUN"
-    assert key2 == "\\\\LINXIAOYUN"
+    assert key1 == "\\\\NAS-HOST"
+    assert key2 == "\\\\NAS-HOST"
     assert call_count["n"] == 1  # resolver called once, second hit was cached
 
 
@@ -272,5 +272,5 @@ class TestDeviceKeyReexport:
         monkeypatch.setattr(dk, "is_remote_drive", lambda p: str(p).upper() == "J:")
         dk._unc_cache.clear()
         assert wm.device_key(
-            "J:\\nas\\a.jpg", unc_resolver=lambda l: "\\\\LinXiaoYun\\J"
-        ) == "\\\\LINXIAOYUN"
+            "J:\\nas\\a.jpg", unc_resolver=lambda l: "\\\\Nas-Host\\J"
+        ) == "\\\\NAS-HOST"

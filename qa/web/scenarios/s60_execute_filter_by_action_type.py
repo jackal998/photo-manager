@@ -40,7 +40,8 @@ Assertions:
      rows are present (group-B rows absent); hidden-destructive banner absent.
   4. Type filter "Skip only" → only the 2 group-B execute rows are present
      (group-A rows absent) AND the hidden-destructive banner IS visible (the
-     2 hidden pending deletes).
+     2 hidden pending deletes) AND "Execute selected" is disabled, because the
+     one group-A row highlighted under "All decided" is now hidden (#940).
   5. Back to "Delete only" → Execute → all-delete confirm (group A is fully
      delete in the visible scope) → Yes → poll until the manifest drops to the
      2 group-B rows; assert (a) both group-A files gone from disk, (b) both
@@ -106,6 +107,7 @@ from qa.web.testid_constants import (
     EXECUTE_TYPE_FILTER,
     EXECUTE_HIDDEN_DESTRUCTIVE_BANNER,
     EXECUTE_BTN_EXECUTE,
+    EXECUTE_BTN_EXECUTE_SELECTED,
     EXECUTE_ALL_DELETE_CONFIRM,
     EXECUTE_ALL_DELETE_CONFIRM_YES,
     row_file_testid,
@@ -254,6 +256,21 @@ def run(*, base_url: str) -> None:
             open_execute_dialog(page)
             page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="visible", timeout=10_000)
 
+            # ── Highlight one group-A (delete) row under "All decided" ───────
+            # Assertion 4 re-checks "Execute selected" once "Skip only" hides
+            # this row (#940). Selecting commits nothing; the Execute in
+            # Assertion 5 is the plain button, which ignores the highlight.
+            exec_row_a0 = page.get_by_test_id(
+                execute_row_testid(group_a_id, _GROUP_A_BASENAMES[0])
+            )
+            exec_row_a0.wait_for(state="visible", timeout=10_000)
+            exec_row_a0.click()
+            exec_sel_btn = page.get_by_test_id(EXECUTE_BTN_EXECUTE_SELECTED)
+            assert not exec_sel_btn.is_disabled(), (
+                "Execute selected should be enabled with a visible highlighted "
+                "row under 'All decided'."
+            )
+
             # ── Assertion 3: "Delete only" shows ONLY group A ────────────────
             _select_type_filter(page, "Delete only")
             page.wait_for_timeout(200)
@@ -303,6 +320,15 @@ def run(*, base_url: str) -> None:
                 state="visible", timeout=5_000
             )
             print("probe_status: s60 hidden_destructive_banner_visible=True")
+            # #940 / #502: "Execute selected" acts only on highlighted rows the
+            # filter still shows. The only highlighted row (group A) is hidden
+            # now, so the button must be disabled — before #940 it stayed
+            # enabled and a click would have executed the hidden delete.
+            assert exec_sel_btn.is_disabled(), (
+                "Execute selected must be DISABLED under 'Skip only' when its "
+                "only highlighted row (a group-A delete) is hidden by the "
+                "filter — the hidden row would otherwise be executed (#940)."
+            )
 
             # ── Assertion 5: Execute under Delete-only commits ONLY group A ───
             _select_type_filter(page, "Delete only")

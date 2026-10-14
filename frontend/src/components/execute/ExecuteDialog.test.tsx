@@ -28,6 +28,7 @@ import {
   EXECUTE_ALL_DELETE_BANNER,
   EXECUTE_HIDDEN_DESTRUCTIVE_BANNER,
   EXECUTE_ALL_DELETE_CONFIRM,
+  EXECUTE_ALL_DELETE_CONFIRM_YES,
   EXECUTE_TYPE_FILTER,
   EXECUTE_TREE,
   EXECUTE_PREVIEW_PANE,
@@ -689,6 +690,121 @@ describe("ExecuteDialog", () => {
     await user.click(screen.getByTestId(EXECUTE_BTN_EXECUTE));
     // Visible scope = [ref.jpg] (delete) → all-delete gate fires first.
     expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toBeInTheDocument();
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+  });
+
+  // #502 composition rule (docs/features.md, "filter and 'Execute selected'
+  // highlight intersect"): a row highlighted under "All decided" and then
+  // hidden by the filter must NOT ride along on Execute selected. The bug sent
+  // the raw selection, so the hidden pending delete was executed with no
+  // confirm — the HiddenDestructiveBanner had just told the user it was out of
+  // scope.
+  it("under 'Skip only', Execute-selected does not send a highlighted delete row the filter hides", async () => {
+    const user = userEvent.setup();
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      openDialog([MIXED_GROUP]); // ref.jpg=delete, dup.jpg=ignore
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-ref.jpg"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-dup.jpg"), {
+        ctrlKey: true,
+      });
+    });
+    await selectFilter(user, /skip only/i);
+    expect(screen.queryByTestId("execute-row-1-ref.jpg")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId(EXECUTE_BTN_EXECUTE_SELECTED));
+
+    expect(executeDecisionsMock).toHaveBeenCalledOnce();
+    expect(executeDecisionsMock).toHaveBeenCalledWith({
+      scopePaths: ["/photos/dup.jpg"],
+    });
+  });
+
+  it("Execute-selected is disabled when every highlighted row is hidden by the filter", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      openDialog([MIXED_GROUP]);
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-ref.jpg"));
+    });
+    expect(screen.getByTestId(EXECUTE_BTN_EXECUTE_SELECTED)).toBeEnabled();
+
+    await selectFilter(user, /skip only/i);
+    expect(screen.getByTestId(EXECUTE_BTN_EXECUTE_SELECTED)).toBeDisabled();
+  });
+
+  // The confirm gate must judge the SAME narrowed set the call will send:
+  // under "Delete only" the highlighted skip row is hidden, so the visible
+  // selection is one delete row → the complete-delete confirm fires, and
+  // confirming commits only that row (the hidden skip row keeps its decision).
+  it("under 'Delete only', Execute-selected gates and commits only the visible highlighted rows", async () => {
+    const user = userEvent.setup();
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      openDialog([MIXED_GROUP]);
+    });
+    render(<ExecuteDialog />);
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-ref.jpg"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-1-dup.jpg"), {
+        ctrlKey: true,
+      });
+    });
+    await selectFilter(user, /delete only/i);
+    await user.click(screen.getByTestId(EXECUTE_BTN_EXECUTE_SELECTED));
+
+    expect(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM)).toBeInTheDocument();
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId(EXECUTE_ALL_DELETE_CONFIRM_YES));
+    expect(executeDecisionsMock).toHaveBeenCalledOnce();
+    expect(executeDecisionsMock).toHaveBeenCalledWith({
+      scopePaths: ["/photos/ref.jpg"],
+    });
+  });
+
+  // The dialog stays mounted (App renders it unconditionally), so its local
+  // highlight survives Cancel. Reopening via "Execute (only selected)" on a
+  // DIFFERENT group must not let that out-of-scope row ride along: it is not
+  // in the tree, and the confirm gate sees an empty in-scope subset, so the
+  // base code sent it with no prompt at all.
+  it("a highlight left over from an earlier open is not sent once the dialog is scoped to other groups", () => {
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    act(() => {
+      openDialog([MIXED_GROUP, ALL_DELETE_GROUP]); // unscoped "Execute…"
+    });
+    render(<ExecuteDialog />);
+    act(() => {
+      fireEvent.click(screen.getByTestId("execute-row-2-a.jpg"));
+    });
+    act(() => {
+      useAppStore.getState().closeExecuteDialog();
+    });
+
+    act(() => {
+      openDialog([MIXED_GROUP, ALL_DELETE_GROUP], [1]); // scoped to group 1
+    });
+    expect(screen.queryByTestId("execute-row-2-a.jpg")).not.toBeInTheDocument();
+    const btn = screen.getByTestId(EXECUTE_BTN_EXECUTE_SELECTED);
+    expect(btn).toBeDisabled();
+    act(() => {
+      fireEvent.click(btn);
+    });
     expect(executeDecisionsMock).not.toHaveBeenCalled();
   });
 

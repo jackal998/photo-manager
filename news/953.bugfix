@@ -1,0 +1,1 @@
+Make Execute skip a kept singleton the review no longer shows, so a partial execute can no longer lead to a whole group being deleted without a confirm (#941).

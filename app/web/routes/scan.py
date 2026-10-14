@@ -9,11 +9,13 @@ from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
 from app.web.models import ScanTask, WebScanRequest
 from app.web.registry import registry
 from core.app_service.cancel_token import _CancelToken
+from core.app_service.dtos import ScanConfig
 from core.app_service.scan_runner import run_pipeline
 from infrastructure.settings import load_settings
 
@@ -110,6 +112,13 @@ class SseScanBus:
 
     def log(self, msg: str) -> None:
         self._append_and_fanout("log", {"msg": msg})
+        # #886 — mirror every progress line into the rotating app log so a
+        # scan can be reconstructed after the dialog closes (#49; the desktop
+        # ScanWorker._emit did the same). The pipeline already paces these
+        # lines ("Hashed N/M" every 100 files, skips listed once), so this
+        # adds no per-file line, and the file sink is enqueue=True
+        # (infrastructure/logging.py) so the scan thread never waits on disk.
+        logger.info("scan: {}", msg)
 
     def stage(
         self,
@@ -178,6 +187,21 @@ class SseScanBus:
                 pass
 
 
+def _run_scan(config: ScanConfig, cancel_token: _CancelToken, bus: SseScanBus) -> None:
+    """Scan-thread body: run the pipeline; an escaping exception becomes a
+    ``failed`` event instead of a silently dead thread.
+
+    #886 — the exception is logged with its traceback first, so the rotating
+    app log keeps the forensic context the transient dialog loses (#49; the
+    desktop ScanWorker.run did the same).
+    """
+    try:
+        run_pipeline(config, cancel_token, bus)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.exception("Scan pipeline failed: {}", exc)
+        bus.failed(str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -226,13 +250,12 @@ async def start_scan(req: WebScanRequest) -> JSONResponse:
 
     bus = SseScanBus(task, loop)
 
-    def _run() -> None:
-        try:
-            run_pipeline(config, cancel_token, bus)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            bus.failed(str(exc))
-
-    thread = threading.Thread(target=_run, name=f"scan-{task_id[:8]}", daemon=True)
+    thread = threading.Thread(
+        target=_run_scan,
+        args=(config, cancel_token, bus),
+        name=f"scan-{task_id[:8]}",
+        daemon=True,
+    )
     task.thread = thread
     thread.start()
 

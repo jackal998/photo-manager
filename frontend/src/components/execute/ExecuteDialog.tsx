@@ -9,7 +9,7 @@
 //     currently selected ExecuteTree row.
 //   - Footer buttons:
 //       Execute           → store.executeDecisions()
-//       Execute selected  → store.executeDecisions({ scopePaths: [...selected] })
+//       Execute selected  → store.executeDecisions({ scopePaths: [...selected ∩ visible] })
 //       Cancel            → store.closeExecuteDialog()
 //   - Does NOT render LockConfirmDialog — that is a sibling mounted by the
 //     Integrate phase; we just let store.lockConflict drive it.
@@ -240,6 +240,19 @@ export function ExecuteDialog() {
     return paths;
   }, [scopedGroups, filter]);
 
+  /**
+   * The highlighted rows the user can still SEE — the "Execute selected"
+   * scope. #502: the filter and the highlight intersect (Qt's
+   * `effective_filter = type_paths ∩ paths_filter`), so a row highlighted
+   * under "All decided" and then hidden by the filter is never committed.
+   * `decidedPaths` is exactly the tree's rendered row set, so this also drops
+   * rows that left the tree for any other reason (executed, decision cleared).
+   */
+  const visibleSelectedPaths = useMemo(() => {
+    const visible = new Set(decidedPaths);
+    return sel.selectedPaths.filter((p) => visible.has(p));
+  }, [sel.selectedPaths, decidedPaths]);
+
   const allDeleteGroupIds = useMemo(
     () => findAllDeleteGroupIds(scopedGroups, filter),
     [scopedGroups, filter]
@@ -379,8 +392,8 @@ export function ExecuteDialog() {
   }, [executeDecisions, scopedGroups, filter, decidedPaths, scopeGroupNumbers]);
 
   const handleExecuteSelected = useCallback(() => {
-    if (sel.selectedPaths.length === 0) return;
-    const scopePaths = sel.selectedPaths;
+    if (visibleSelectedPaths.length === 0) return;
+    const scopePaths = visibleSelectedPaths;
     const ids = completeDeleteGroupIds(scopedGroups, scopePaths);
     if (ids.length > 0) {
       pendingExecOptsRef.current = { scopePaths };
@@ -390,7 +403,7 @@ export function ExecuteDialog() {
     } else {
       void executeDecisions({ scopePaths });
     }
-  }, [executeDecisions, sel.selectedPaths, scopedGroups]);
+  }, [executeDecisions, visibleSelectedPaths, scopedGroups]);
 
   const handleDeleteConfirmConfirm = useCallback(() => {
     setDeleteConfirmOpen(false);
@@ -599,7 +612,7 @@ export function ExecuteDialog() {
             variant="outline"
             data-testid={EXECUTE_BTN_EXECUTE_SELECTED}
             onClick={handleExecuteSelected}
-            disabled={executeRunning || sel.selectedPaths.length === 0}
+            disabled={executeRunning || visibleSelectedPaths.length === 0}
           >
             {t("web.execute_dialog.execute_selected", "Execute selected")}
           </Button>

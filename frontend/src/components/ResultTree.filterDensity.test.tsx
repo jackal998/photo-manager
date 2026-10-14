@@ -129,6 +129,8 @@ function seed(filterText = "") {
         panelWidths: { ...DEFAULT_PANEL_WIDTHS },
         density: "comfortable",
         filterText,
+        decisionSortSnapshot: null,
+        decisionResortSeq: 0,
       },
     });
   });

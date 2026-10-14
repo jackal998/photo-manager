@@ -161,7 +161,7 @@ def test_disk_incurs_seek_penalty_non_windows_is_none(monkeypatch):
 
 
 def test_collapsed_server_key_yields_nas_workers(monkeypatch):
-    """hash_workers_for_root('\\\\LINXIAOYUN') must return _NAS_WORKERS (8).
+    """hash_workers_for_root('\\\\NAS-HOST') must return _NAS_WORKERS (8).
 
     This pins the load-bearing coupling: if is_remote_drive didn't return True
     for a bare \\\\SERVER key, the collapsed bucket would silently regress from
@@ -179,5 +179,5 @@ def test_collapsed_server_key_yields_nas_workers(monkeypatch):
     # key: True (UNC prefix check, added in #565).
     monkeypatch.setattr(wm, "is_remote_drive", lambda p: str(p).startswith("\\\\"))
 
-    result = wm.hash_workers_for_root("\\\\LINXIAOYUN")
+    result = wm.hash_workers_for_root("\\\\NAS-HOST")
     assert result == wm._NAS_WORKERS  # must be 8, not min(4, cpu)

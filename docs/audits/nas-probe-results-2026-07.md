@@ -4,7 +4,7 @@ Owner-present session executed per `nas-probe-runbook-2026-07.md`. All probes
 at commit `6420dd9` (PR #784). Raw JSONs archived locally at
 `~/.claude/handovers/2026-07-21-probe-results/` (not committed — they contain
 personal library paths); every claim below carries the 4-tuple
-(probe + SHA `6420dd9` + args + JSON file). NAS: `\\LINXIAOYUN` mapped `J:`,
+(probe + SHA `6420dd9` + args + JSON file). NAS: `\\NAS-HOST` mapped `J:`,
 target trees `J:/圖片` (28,741 files / 266 dirs) and a generated
 5000×~40KB corpus (seed 42, deleted after the session as authorized).
 
@@ -100,7 +100,7 @@ a look if disk-cache growth ever matters (observation only).
 
 ## Cross-validation run — 2026-07-21, second tree (owner-requested)
 
-Full re-run on `\\LinXiaoYun\home\Photos\MobileBackup\iPhone\2024` — same
+Full re-run on `\\Nas-Host\home\Photos\MobileBackup\iPhone\2024` — same
 NAS box, different share (`home` vs `J`), very different composition:
 2,988 files / 12 dirs / 81.3 GB, HEIC-dominant (1,563) + 541 MOV +
 422 DNG, p50 2.4 MB but mean 27 MB (video-skewed). JSONs:

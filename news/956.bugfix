@@ -1,0 +1,1 @@
+Keep the Action dialog's Simple row in step with a hand-edited regex, so flipping its op builds on the edit instead of silently restoring the row's original value (#899).

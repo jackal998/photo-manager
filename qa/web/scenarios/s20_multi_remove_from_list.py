@@ -33,6 +33,10 @@ Web slice — main-tree multi-selection + #694 finalize:
      from list.  One click finalizes BOTH (fan-out + finalize): the rows vanish
      from GET /api/manifest (WHERE outcome='' excludes outcome='ignored') AND
      their files stay on disk (ignored ≠ deleted) — the desktop contract.
+  D. UNDO (#909): Branch C's one click had no confirm, so it raises the undo
+     toast — "2 files dropped from this review · Undo". Undo (POST
+     /api/restore) must put BOTH rows back in the tree, still undecided, with
+     the other rows' staged decisions untouched.
 
   NO GROUP-HEADER SELECTION: the web GroupRow is collapse-only, so the desktop
   group→file expansion sub-branch has no web equivalent and is dropped.
@@ -71,6 +75,8 @@ from qa.web.testid_constants import (
     CTX_SET_ACTION_DELETE,
     CTX_SET_ACTION_KEEP,
     CTX_SET_ACTION_REMOVE,
+    MAIN_TOAST,
+    MAIN_TOAST_UNDO,
     row_file_testid,
 )
 
@@ -242,6 +248,11 @@ def run(*, base_url: str) -> None:
             ctrl_click_row(page, row_file_testid(gid, _Q65))
             right_click_row(page, row_file_testid(gid, _Q72))
             click_context_item(page, CTX_SET_ACTION_REMOVE)
+            # Branch D's toast: pin it before the polling below spends its ~6 s
+            # (hover pauses the timer — Toast.tsx).
+            toast = page.get_by_test_id(MAIN_TOAST)
+            toast.wait_for(state="visible", timeout=5_000)
+            toast.hover()
 
             post_c = _await_removed(base_url, db_path, (_Q72, _Q65))
             print(f"probe_status: s20 branch_c post={ {k: post_c[k] for k in sorted(post_c)} }")
@@ -266,5 +277,34 @@ def run(*, base_url: str) -> None:
                     f"branch C disturbed {name}: {post_c.get(name)!r} (expected "
                     f"still 'delete')"
                 )
+
+            # ── Branch D — the skip's Undo (#909) ─────────────────────────────
+            toast_text = toast.inner_text()
+            print(f"probe_status: s20 branch_d toast={toast_text!r}")
+            assert "2 files dropped from this review" in toast_text, (
+                f"branch D: the immediate Skip must say how many rows left the "
+                f"review, got {toast_text!r}"
+            )
+            with page.expect_response(
+                lambda r: "/api/restore" in r.url and r.request.method == "POST",
+                timeout=15_000,
+            ):
+                page.get_by_test_id(MAIN_TOAST_UNDO).click()
+            post_d = _await_decisions(base_url, db_path, {_Q72: "", _Q65: ""})
+            print(f"probe_status: s20 branch_d post={ {k: post_d[k] for k in sorted(post_d)} }")
+            assert set(post_d) == set(_ALL), (
+                f"branch D: Undo must put both skipped rows back in the review, "
+                f"got {sorted(post_d)}"
+            )
+            for name in (_Q88, _Q80):
+                assert post_d.get(name) == "delete", (
+                    f"branch D disturbed {name}: {post_d.get(name)!r}"
+                )
+            # And in the tree the user is looking at, not just the API.
+            for name in (_Q72, _Q65):
+                page.get_by_test_id(row_file_testid(gid, name)).wait_for(
+                    state="visible", timeout=5_000
+                )
+            page.get_by_test_id(MAIN_TOAST).wait_for(state="detached", timeout=5_000)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

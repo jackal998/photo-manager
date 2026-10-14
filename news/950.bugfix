@@ -1,0 +1,1 @@
+Make "Execute selected" act only on highlighted rows the type filter still shows, so a delete hidden by "Skip only" is never executed (#940).

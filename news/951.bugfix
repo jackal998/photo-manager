@@ -1,0 +1,1 @@
+Include subfolders by default in the Scan dialog and keep it open with a "No media files found" message after a scan that finds nothing, instead of silently returning to Ready (#896).

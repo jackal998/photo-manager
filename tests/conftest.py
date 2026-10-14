@@ -27,9 +27,9 @@ def _isolate_unc_resolution(monkeypatch):
     ``_unc_cache`` and, by default, resolves via the real
     ``WNetGetConnectionW``. On a dev machine where a test drive letter (e.g.
     ``J:``) is a live NAS mapping, the real call leaks the actual server
-    (``\\\\LINXIAOYUN``) into the bucket key, and the memo persists across
+    (``\\\\NAS-HOST``) into the bucket key, and the memo persists across
     tests — so a later test that mocks ``is_remote_drive`` only for ``"J:"``
-    sees a ``\\\\LINXIAOYUN`` key it doesn't recognise and the per-device
+    sees a ``\\\\NAS-HOST`` key it doesn't recognise and the per-device
     worker count regresses 8→4. CI never hit this (no mapped drives there),
     so the suite passed in CI but failed on the dev machine in full-file runs.
 
@@ -43,7 +43,7 @@ def _isolate_unc_resolution(monkeypatch):
     fixture MUST patch the defining module: patching the re-exporting one
     would rebind a name ``device_key`` no longer reads, so the fixture would
     go quietly inert and the real ``WNetGetConnectionW`` would resolve a live
-    ``J:`` back to ``\\\\LINXIAOYUN`` on the dev machine — the exact
+    ``J:`` back to ``\\\\NAS-HOST`` on the dev machine — the exact
     dev-passes/CI-differs asymmetry described above.
     """
     import infrastructure.device_key as _dk
@@ -138,6 +138,35 @@ def _revive_wic_executor():
         initializer=executor._initializer,
         initargs=executor._initargs,
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_delete_log_dir(monkeypatch, tmp_path_factory):
+    """Keep every test's delete-audit CSV out of the user's real profile (#948).
+
+    ``write_delete_log`` falls back to ``get_delete_log_directory()`` —
+    ``%LOCALAPPDATA%\\PhotoManager\\delete_logs`` — when no ``log_dir`` is given,
+    and ``execute_decisions`` never passes one. That directory is the audit
+    trail a user reads to recover what a real Execute deleted; on the dev rig
+    it held 2369 pytest CSVs out of 2845 before this fixture.
+
+    Redirect it to a per-test temp dir, created only when a test actually
+    writes a delete log (most never do), so it never shows up inside a test's
+    own ``tmp_path``. Same trap as ``_isolate_unc_resolution``: patch the
+    DEFINING module, because ``write_delete_log`` looks the name up in
+    ``infrastructure.logging``'s globals. Guarded by
+    ``tests/test_web_execute_service.py::TestExecuteAuditCsvIsolation``.
+    """
+    import infrastructure.logging as _log
+
+    per_test_dir: list[str] = []
+
+    def _redirected_delete_log_dir() -> str:
+        if not per_test_dir:
+            per_test_dir.append(str(tmp_path_factory.mktemp("delete_logs")))
+        return per_test_dir[0]
+
+    monkeypatch.setattr(_log, "get_delete_log_directory", _redirected_delete_log_dir)
 
 
 # ---------------------------------------------------------------------------

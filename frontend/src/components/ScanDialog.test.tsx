@@ -43,6 +43,7 @@ import {
   SCAN_DHASH_PARITY_NOTE,
   SCAN_DHASH_THRESHOLD,
   SCAN_DIALOG,
+  SCAN_EMPTY_MESSAGE,
   SCAN_OUTPUT_PATH,
   SCAN_PHASH_PARITY_NOTE,
   SCAN_PHASH_THRESHOLD,
@@ -55,6 +56,7 @@ import {
   SCAN_STATUS_TEXT,
   scanSourceLabelTestid,
   scanSourcePathTestid,
+  scanSourceRecursiveTestid,
 } from "@/testids";
 
 // ---------------------------------------------------------------------------
@@ -206,7 +208,23 @@ describe("ScanDialog", () => {
     const [req] = startScanMock.mock.calls[0] as [{ sources: Record<string, string>; output_path: string; recursive_map: Record<string, boolean> }];
     expect(req.sources).toEqual({ MyPhotos: "D:/pics" });
     expect(req.output_path).toBe("D:/out.db");
-    expect(req.recursive_map).toEqual({ MyPhotos: false });
+    // #896 — the Recursive box was never touched, so subfolders are included
+    // (Qt default); unticked, a folder of subfolders scanned 0 files.
+    expect(req.recursive_map).toEqual({ MyPhotos: true });
+  });
+
+  it("a new source row includes subfolders by default (#896)", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    const first = screen.getAllByRole("checkbox", { name: /recursive/i });
+    expect(first).toHaveLength(1);
+    expect(first[0]).toBeChecked();
+
+    await user.click(screen.getByTestId(SCAN_ADD_SOURCE));
+    const both = screen.getAllByRole("checkbox", { name: /recursive/i });
+    expect(both).toHaveLength(2);
+    expect(both[1]).toBeChecked();
   });
 
   it("shows running-state UI when scan.status is running", () => {
@@ -292,19 +310,50 @@ describe("ScanDialog", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Connection refused");
   });
 
-  it("auto-closes dialog when completed_empty arrives (outputPath stays null)", async () => {
-    // Ship-blocker fix: when scan.status becomes "finished" with outputPath=null
-    // (i.e. the completed_empty terminal event), the dialog must still close.
-    // Previously the effect was gated on outputPath !== null, leaving the user
-    // stranded with the dialog open after an empty scan.
+  it("stays open after completed_empty with the no-files message and Start enabled (#896)", async () => {
+    // Qt `_on_completed_empty` parity: an empty scan leaves the dialog open with
+    // "No media files found" in view and Start Scan re-enabled, so the user can
+    // fix the sources and retry. The web dialog used to close here, leaving the
+    // status bar at "Ready" and nothing on screen to say the scan found nothing.
+    const user = userEvent.setup();
+    const resetScanMock = vi.fn();
+    useAppStore.setState({ resetScan: resetScanMock } as never);
+
     const { onOpenChange } = renderDialog();
+    await fillStartFields(user);
 
     act(() => {
-      // Simulate the store state left by the completed_empty SSE handler:
+      // The store state left by the completed_empty SSE handler:
       // status = "finished", outputPath still null.
       seedScanState({ status: "finished", outputPath: null });
     });
 
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(resetScanMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId(SCAN_DIALOG)).toBeInTheDocument();
+    expect(screen.getByTestId(SCAN_EMPTY_MESSAGE)).toHaveTextContent(
+      "No media files found — nothing to scan."
+    );
+    expect(screen.getByTestId(SCAN_START_BUTTON)).not.toBeDisabled();
+  });
+
+  it("closing the dialog after an empty result resets the scan (#896, #661 Bug 2)", async () => {
+    // The empty result is not reset while it is on screen; closing the dialog
+    // must reset it, or the idle-gated settings load never re-arms and the next
+    // open shows the stale no-files message.
+    const user = userEvent.setup();
+    const resetScanMock = vi.fn();
+    useAppStore.setState({ resetScan: resetScanMock } as never);
+
+    const { onOpenChange } = renderDialog();
+    act(() => {
+      seedScanState({ status: "finished", outputPath: null });
+    });
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    await user.keyboard("{Escape}");
+
+    expect(resetScanMock).toHaveBeenCalledOnce();
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
@@ -336,7 +385,7 @@ describe("ScanDialog", () => {
     const { onOpenChange } = renderDialog();
 
     act(() => {
-      seedScanState({ status: "finished", outputPath: null });
+      seedScanState({ status: "finished", outputPath: "C:/scan.db" });
     });
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -408,6 +457,24 @@ describe("ScanDialog", () => {
     expect(recursiveBoxes[1]).not.toBeChecked();
   });
 
+  it("loads a persisted source with no recursive flag as recursive (#896)", async () => {
+    // Qt's resolve_source_entries defaults a missing flag to True; an explicit
+    // persisted false (the user unticked the box) must still load unticked.
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [
+        { path: "C:/photos/legacy" },
+        { path: "C:/photos/flat", recursive: false },
+      ],
+    } as never);
+
+    renderDialog();
+
+    expect(await screen.findByDisplayValue("C:/photos/legacy")).toBeInTheDocument();
+    // By index testid: rows render sorted by path, so DOM order is not idx.
+    expect(screen.getByTestId(scanSourceRecursiveTestid(0))).toBeChecked();
+    expect(screen.getByTestId(scanSourceRecursiveTestid(1))).not.toBeChecked();
+  });
+
   it("persists sources and output via patchSettings when Start is clicked", async () => {
     const user = userEvent.setup();
     useAppStore.setState({ startScan: vi.fn().mockResolvedValue(undefined) } as never);
@@ -420,7 +487,7 @@ describe("ScanDialog", () => {
     await user.click(screen.getByTestId(SCAN_START_BUTTON));
 
     expect(mockPatchSettings).toHaveBeenCalledWith({
-      "sources.list": [{ path: "D:/pics", recursive: false }],
+      "sources.list": [{ path: "D:/pics", recursive: true }],
       "sources.output": "D:/out.db",
       // #743: the auto-tune preference persists (default ON here).
       "ui.scan_dialog.autotune_read_knee": true,

@@ -34,6 +34,7 @@ export function Toast() {
   const toast = useAppStore((s) => s.toast);
   const dismissToast = useAppStore((s) => s.dismissToast);
   const undoKeepBest = useAppStore((s) => s.undoKeepBest);
+  const undoSkipNow = useAppStore((s) => s.undoSkipNow);
 
   const [paused, setPaused] = useState(false);
   // Milliseconds still owed when the timer was last paused. Tracked rather
@@ -76,26 +77,39 @@ export function Toast() {
     toast.affectedCount === 1
       ? t("web.toast.file_singular", "file")
       : t("web.toast.file_plural", "files");
-  // Two sentences, one slot. Keep-best names its group and always writes
+  // Three sentences, one slot. Keep-best names its group and always writes
   // `delete`; a toolbar verb (slice TB) acts on a selection that may span
   // groups and writes whichever of the three decisions was pressed, so its
   // sentence names the VERB instead — the same three words the row control
-  // and the right-click menu use, from the one decision vocabulary.
-  const message =
-    toast.kind === "bulk-decision"
-      ? t("web.toast.bulk_decision", "{count} {fileWord} set to {verb}", {
-          count: toast.affectedCount,
-          fileWord,
-          verb: t(
-            DECISION_VOCAB[toast.decision ?? ""].key,
-            DECISION_VOCAB[toast.decision ?? ""].fallback
-          ),
-        })
-      : t(
-          "web.toast.keep_best",
-          "Group {n} · {count} {fileWord} marked for deletion",
-          { n: toast.groupNumber ?? 0, count: toast.affectedCount, fileWord }
-        );
+  // and the right-click menu use, from the one decision vocabulary. An
+  // immediate Skip (#909) writes no decision at all: the rows LEAVE the
+  // review, and the sentence says so with the count the issue requires.
+  let message: string;
+  if (toast.kind === "skip-now") {
+    message = t(
+      "web.toast.skip_now",
+      "{count} {fileWord} dropped from this review",
+      { count: toast.affectedCount, fileWord }
+    );
+  } else if (toast.kind === "bulk-decision") {
+    message = t("web.toast.bulk_decision", "{count} {fileWord} set to {verb}", {
+      count: toast.affectedCount,
+      fileWord,
+      verb: t(
+        DECISION_VOCAB[toast.decision ?? ""].key,
+        DECISION_VOCAB[toast.decision ?? ""].fallback
+      ),
+    });
+  } else {
+    message = t(
+      "web.toast.keep_best",
+      "Group {n} · {count} {fileWord} marked for deletion",
+      { n: toast.groupNumber ?? 0, count: toast.affectedCount, fileWord }
+    );
+  }
+  // A skip finalized `outcome`, so it is undone by /api/restore; the other two
+  // staged decisions, undone by a decision PATCH.
+  const undo = toast.kind === "skip-now" ? undoSkipNow : undoKeepBest;
   const lockedNote =
     toast.lockedCount > 0
       ? t(
@@ -145,7 +159,7 @@ export function Toast() {
           type="button"
           data-testid={MAIN_TOAST_UNDO}
           disabled={toast.undoing}
-          onClick={() => void undoKeepBest()}
+          onClick={() => void undo()}
           className={[
             "flex-shrink-0 rounded-[6px] px-2 py-0.5 font-semibold text-warm",
             "hover:bg-panel-hover disabled:opacity-50",

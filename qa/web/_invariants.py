@@ -179,16 +179,18 @@ def wait_log_line(page: "Page", pattern: str, timeout: float = 10_000) -> str:
 # Status pattern: manifest loaded (N groups · M files)
 # ---------------------------------------------------------------------------
 
-# The App.tsx status bar emits "N groups · M files" once a manifest is loaded.
-# Matches "0 groups · 0 files" (empty scan), "5 groups · 12 files", and — since
-# the 2026-09-13 copy audit split the nouns per count (S1) — the singular
-# "1 group · 1 file". zh_TW carries no plural marking, so its two catalog
-# values are identical and this pattern never sees a Chinese string.
-_STATUS_MANIFEST_LOADED = re.compile(r"\d+\s*groups?\s*·\s*\d+\s*files?", re.IGNORECASE)
+# The App.tsx status bar emits `web.status.summary` once a manifest is loaded:
+# "5 groups · 12 files" / "1 group · 1 file" in English, "5 個群組 · 12 個檔案" in
+# zh_TW. The waiter matches the SHAPE — a count and a word, the middle dot, a
+# count and a word — not the English nouns, so a scenario running in zh_TW can
+# reload a manifest too (#910). Pinned against both catalogs, and against every
+# other `web.status.*` string it must NOT match, in test_web_dom_probes.py.
+# Plain syntax only: `wait_status` re-compiles this pattern as a JS RegExp.
+_STATUS_MANIFEST_LOADED = re.compile(r"\d+\s*[^\s\d·]+\s*·\s*\d+\s*[^\s\d·]+")
 
-# Same shape, but capturing each count and the noun that follows it, so the
-# assertion below can require they AGREE. The waiter above deliberately keeps
-# the loose pattern — its job is "has a summary appeared yet", and a
+# The English wording, capturing each count and the noun that follows it, so
+# the assertion below can require they AGREE. The waiter above deliberately
+# keeps the loose pattern — its job is "has a summary appeared yet", and a
 # disagreeing form should fail fast in the assertion, not time out over 60s.
 _STATUS_SUMMARY_PARTS = re.compile(
     r"(\d+)\s*(groups?)\s*·\s*(\d+)\s*(files?)", re.IGNORECASE
@@ -237,7 +239,8 @@ def assert_manifest_summary(status_text: str, *, context: str) -> None:
 def wait_manifest_loaded(page: "Page", timeout: float = 60_000) -> str:
     """Wait until the main status bar reflects a loaded manifest.
 
-    The status bar shows ``"N groups · M files"`` once ``loadManifest``
+    The status bar shows ``"N groups · M files"`` (zh_TW: ``"N 個群組 · M 個檔案"``;
+    either locale satisfies the wait) once ``loadManifest``
     completes.  This is the correct post-scan / post-load signal because
     ``ScanDialog`` auto-unmounts ``ScanProgress`` on the SSE ``finished``
     event (removing ``scan-status-text`` from the DOM), then calls
@@ -315,6 +318,7 @@ def add_scan_source(
     *,
     idx: int = 0,
     label: str = "",
+    recursive: bool = False,
     timeout: float = 5_000,
 ) -> None:
     """Ensure a source row exists at position ``idx`` and fill its inputs.
@@ -340,6 +344,11 @@ def add_scan_source(
         0-based position of the source row (default 0 — the pre-existing row).
     label:
         Label text to fill.  Defaults to ``os.path.basename(path)``.
+    recursive:
+        State to SET on the row's "recursive" checkbox.  The ScanDialog now
+        defaults it to checked (#896, Qt parity), so the helper always sets
+        it explicitly; the default ``False`` keeps every existing driver's
+        non-recursive scan scope unchanged.
     timeout:
         Maximum milliseconds to wait for each element.
     """
@@ -350,6 +359,14 @@ def add_scan_source(
     label_input.wait_for(state="visible", timeout=timeout)
     label_input.fill(effective_label)
     page.get_by_test_id(f"scan-source-{idx}-path").fill(path)
+    box = page.get_by_test_id(scan_source_recursive_testid(idx))
+    box.set_checked(recursive)
+    assert box.is_checked() == recursive, (
+        f"recursive checkbox for source row {idx} is "
+        f"{'checked' if box.is_checked() else 'unchecked'}, expected "
+        f"{'checked' if recursive else 'unchecked'} — the scan would walk the "
+        f"wrong scope"
+    )
 
 
 def set_output_path(page: "Page", path: str) -> None:
@@ -420,11 +437,11 @@ def run_scan(
         Maximum milliseconds to wait for the manifest-loaded status bar text.
         Scans on large directories can take several minutes.
     recursive:
-        Tick every source row's "recursive" checkbox before starting.  The
-        ScanDialog default is UNCHECKED (``ScanDialog.tsx:60`` —
-        ``recursive: false``), so a scenario whose fixture has a nested
-        subdirectory gets that subdirectory silently skipped unless it passes
-        ``recursive=True``.  Default False so existing callers are unchanged.
+        Set every source row's "recursive" checkbox to this state before
+        starting (via :func:`add_scan_source`).  The ScanDialog default is
+        CHECKED since #896, but a scenario whose fixture has a nested
+        subdirectory it must NOT walk relies on the helper unticking it, so
+        the default False keeps existing callers' scan scope unchanged.
 
     Returns
     -------
@@ -436,16 +453,9 @@ def run_scan(
     for idx, spec in enumerate(sources):
         if isinstance(spec, tuple):
             lbl, pth = spec
-            add_scan_source(page, pth, idx=idx, label=lbl)
+            add_scan_source(page, pth, idx=idx, label=lbl, recursive=recursive)
         else:
-            add_scan_source(page, spec, idx=idx)
-        if recursive:
-            box = page.get_by_test_id(scan_source_recursive_testid(idx))
-            box.check()
-            assert box.is_checked(), (
-                f"recursive checkbox for source row {idx} did not tick — the "
-                f"scan would silently skip every subdirectory of that source"
-            )
+            add_scan_source(page, spec, idx=idx, recursive=recursive)
     set_output_path(page, output_path)
     start_scan(page)
     return wait_manifest_loaded(page, timeout=scan_timeout)

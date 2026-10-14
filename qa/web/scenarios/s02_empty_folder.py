@@ -9,12 +9,19 @@ Qt intent:
   - Confirm the status-bar returns to an idle/empty-state baseline.
 
 Web-observable assertions:
-  An empty folder triggers the ``completed_empty`` SSE event: the scan
-  dialog closes but NO manifest is written or loaded (outputPath stays
-  null), so the app stays in the empty state.
-  1. The scan dialog (``scan-dialog``) auto-closes on completion.
-  2. ``main-empty-state`` is still visible — no manifest was loaded.
-  3. ``count_file_rows(page) == 0`` — no file rows in the result tree.
+  An empty folder triggers the ``completed_empty`` SSE event: NO manifest is
+  written or loaded (outputPath stays null), and — Qt ``_on_completed_empty``
+  parity, #896 — the scan dialog STAYS OPEN with the no-files message and
+  Start Scan enabled, so the user sees why nothing loaded and can retry.
+  0. A fresh source row's "recursive" checkbox is checked by default (#896;
+     Qt ``add_entry(recursive=True)``). The batch resets ``sources.list``
+     before every scenario, so row 0 is the dialog's own blank row.
+  1. ``scan-empty-message`` becomes visible while ``scan-dialog`` stays open.
+  2. ``scan-start-button`` is visible and enabled (retry without closing).
+  3. ``main-empty-state`` is still visible and ``count_file_rows == 0`` —
+     no manifest was loaded.
+  4. Escape closes the dialog; reopening shows no stale no-files message
+     (closing reset the scan, so the settings load re-arms — #661 Bug 2).
 
 Qt divergences:
   - Qt checks that ``scanProgressFrame`` is hidden after an empty scan
@@ -22,6 +29,9 @@ Qt divergences:
     the entire ScanProgress component unmounts, so absence is implicit.
   - Qt asserts the Close button receives focus (#86) — focus management
     is not observable via Playwright in headless mode; omitted.
+  - Qt showed the pipeline's log line in its log box; the web dialog shows
+    one localized ``web.scan.empty_result`` line instead (the log box is
+    part of the running-state panel, which unmounts at the end of a scan).
 """
 from __future__ import annotations
 
@@ -36,7 +46,13 @@ from qa.web._invariants import (
     set_output_path,
     start_scan,
 )
-from qa.web.testid_constants import MAIN_EMPTY_STATE, SCAN_DIALOG
+from qa.web.testid_constants import (
+    MAIN_EMPTY_STATE,
+    SCAN_DIALOG,
+    SCAN_EMPTY_MESSAGE,
+    SCAN_START_BUTTON,
+    scan_source_recursive_testid,
+)
 
 
 def run(*, base_url: str) -> None:
@@ -50,22 +66,41 @@ def run(*, base_url: str) -> None:
                 page.goto("/")
 
                 # Drive the scan manually. An EMPTY folder produces the
-                # `completed_empty` terminal event: the scan dialog closes but
-                # NO manifest is written or loaded (outputPath stays null), so
-                # the app stays in the empty state. run_scan()'s "N groups ·
-                # M files" wait never fires here — assert the empty outcome.
+                # `completed_empty` terminal event: NO manifest is written or
+                # loaded, and the dialog stays open (#896). run_scan()'s
+                # "N groups · M files" wait never fires here — assert the
+                # empty outcome.
                 open_scan_dialog(page)
-                add_scan_source(page, empty_dir, idx=0)
+
+                # 0. #896 — a fresh row includes subfolders by default.
+                default_box = page.get_by_test_id(scan_source_recursive_testid(0))
+                assert default_box.is_checked(), (
+                    "a fresh scan source row's recursive checkbox is unchecked "
+                    "— a folder whose photos sit in subfolders would scan 0 files"
+                )
+
+                # Keep the default scope (recursive) — the user's path.
+                add_scan_source(page, empty_dir, idx=0, recursive=True)
                 set_output_path(page, db_path)
                 start_scan(page)
 
-                # Terminal signal: the scan dialog auto-closes on completion.
-                page.locator(f'[data-testid="{SCAN_DIALOG}"]').wait_for(
-                    state="hidden", timeout=60_000
+                # 1. Terminal signal: the no-files message, in the open dialog.
+                dialog = page.get_by_test_id(SCAN_DIALOG)
+                page.get_by_test_id(SCAN_EMPTY_MESSAGE).wait_for(
+                    state="visible", timeout=60_000
+                )
+                assert dialog.is_visible(), (
+                    "the scan dialog closed after an empty scan — the user is "
+                    "left at 'Ready' with nothing saying the scan found no files"
                 )
 
-                # No manifest loaded → the app remains in the empty state with
-                # zero result rows.
+                # 2. Start Scan is back and enabled, so the user can retry.
+                start_btn = page.get_by_test_id(SCAN_START_BUTTON)
+                assert start_btn.is_visible() and start_btn.is_enabled(), (
+                    "Start Scan is not available after an empty scan"
+                )
+
+                # 3. No manifest loaded → still the empty state, zero rows.
                 page.locator(f'[data-testid="{MAIN_EMPTY_STATE}"]').wait_for(
                     state="visible", timeout=10_000
                 )
@@ -74,6 +109,17 @@ def run(*, base_url: str) -> None:
                     f"Expected 0 file rows after scanning an empty folder, "
                     f"got {file_row_count}"
                 )
+
+                # 4. Escape closes it; a reopen must not show the stale message.
+                page.keyboard.press("Escape")
+                dialog.wait_for(state="hidden", timeout=10_000)
+                open_scan_dialog(page)
+                assert page.get_by_test_id(SCAN_EMPTY_MESSAGE).count() == 0, (
+                    "reopening the scan dialog still shows the previous "
+                    "no-files message — closing did not reset the scan"
+                )
+                page.keyboard.press("Escape")
+                dialog.wait_for(state="hidden", timeout=10_000)
         finally:
             try:
                 os.unlink(db_path)

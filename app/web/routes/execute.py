@@ -1,4 +1,4 @@
-"""File-mutating routes: POST /api/execute, /api/remove, /api/prune, /api/save, /api/reveal.
+"""File-mutating routes: POST /api/execute, /api/remove, /api/restore, /api/prune, /api/save, /api/reveal.
 
 Security model
 --------------
@@ -35,6 +35,8 @@ from app.web.models import (
     PruneResult,
     RemoveRequest,
     RemoveResult,
+    RestoreRequest,
+    RestoreResult,
     RevealRequest,
     RevealResult,
     SaveRequest,
@@ -232,6 +234,44 @@ def _run_remove(
         force_locked=force_locked,
         allowed_roots=allowed_roots,
     )
+
+
+@router.post("/api/restore")
+def post_restore(body: RestoreRequest, request: Request) -> RestoreResult:
+    """Return dismissed rows to review (outcome 'ignored' → '') — #909.
+
+    The Undo behind the toast an immediate Skip raises. Plain ``def`` →
+    FastAPI threadpool, like /api/remove. See #790.
+
+    Returns:
+        200 RestoreResult
+        400 bad path
+        403 path outside allowed roots
+        404 manifest not found
+        422 on unexpected error
+    """
+    roots = _allowed_roots(request)
+    _validate_manifest(body.manifest_path, roots)
+
+    for fp in body.file_paths:
+        validate_under_roots(fp, roots)
+
+    if not Path(body.manifest_path).is_file():
+        raise HTTPException(status_code=404, detail=f"Manifest not found: {body.manifest_path!r}")
+
+    from core.app_service.execute_service import restore_to_review
+    try:
+        result = restore_to_review(
+            manifest_path=body.manifest_path,
+            file_paths=body.file_paths,
+            allowed_roots=[str(r) for r in roots],
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Restore failed: {exc}") from exc
+
+    return RestoreResult(**result)
 
 
 @router.post("/api/prune")

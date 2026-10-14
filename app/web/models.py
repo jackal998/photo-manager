@@ -48,6 +48,13 @@ class RemoveRequest(BaseModel):
     force_locked: bool = False
 
 
+class RestoreRequest(BaseModel):
+    """Body for POST /api/restore (#909 — the Undo of an immediate Skip)."""
+
+    manifest_path: str
+    file_paths: list[str]
+
+
 class PruneRequest(BaseModel):
     """Body for POST /api/prune."""
 
@@ -95,6 +102,13 @@ class RemoveResult(BaseModel):
     """Response for POST /api/remove."""
 
     removed: int
+    groups: list[Any]
+
+
+class RestoreResult(BaseModel):
+    """Response for POST /api/restore."""
+
+    restored: int
     groups: list[Any]
 
 

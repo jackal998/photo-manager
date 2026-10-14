@@ -47,8 +47,9 @@ What this pins, and why a unit test cannot:
      transparent. Read as computed colours — the class-level mapping is in
      DecisionControl.test.tsx and would pass with every token deleted.
 
-  6. **The padlock reads faint → solid** (slice b), and clicking it still
-     locks the row: `aria-pressed` plus the computed colour, before and after.
+  6. **The padlock reads muted → warm** (slice b; unlocked ink per design F1,
+     #922), and clicking it still locks the row: `aria-pressed` plus the
+     computed colour, before and after.
 
   7. **The score mini bar has a real width** (slice b): fill > 0 and ≤ the
      cell. A NaN width is valid-looking markup that CSS silently ignores, and
@@ -170,7 +171,9 @@ _DEC_DELETE_INK = "rgb(255, 255, 255)"  # --color-dec-delete-ink  #ffffff
 _DEC_KEEP_BG = "rgb(231, 243, 236)"  # --color-dec-keep-bg     #e7f3ec
 _DEC_KEEP_INK = "rgb(47, 138, 90)"  # --color-dec-keep-ink    #2f8a5a
 _TRANSPARENT = "rgba(0, 0, 0, 0)"  # dec.undecided bg = transparent
-_INK_FAINT = "rgb(168, 159, 143)"  # --color-ink-faint       #a89f8f
+# Design F1 (#922): the unlocked padlock is a state, so it wears ink-muted —
+# never the hairline #a89f8f, which carries no state anywhere.
+_INK_MUTED = "rgb(107, 99, 88)"  # --color-ink-muted       #6b6358
 _EM_DASH = "—"
 
 # Slice (e) — the surfaces OUTSIDE the result tree (preview, status bar,
@@ -361,7 +364,11 @@ _READ_COLUMN_HEADER = """(testid) => {
     letterSpacing: cs.letterSpacing,
     borderBottomWidth: cs.borderBottomWidth,
     borderBottomColor: cs.borderBottomColor,
-    actionText: action ? (action.textContent || '').trim() : null,
+    // The LABEL, not the cell: since #923 Action is sortable, so the cell also
+    // carries the hover-only ▾ glyph (and, when sorted, the order sub-label).
+    actionText: action
+      ? ((action.querySelector('[data-col-label]') || action).textContent || '').trim()
+      : null,
     classificationHeads:
       head.querySelectorAll('[data-testid="col-header-classification"]').length,
     resizeHitWidth: handle ? handle.getBoundingClientRect().width : null,
@@ -919,7 +926,7 @@ def run(*, base_url: str) -> None:
                 f"{undecided['none']['ink']}, expected {_DEC_KEEP_INK} (#2f8a5a)."
             )
 
-            # ── 6. The padlock reads faint → solid (slice b) ──────────────────
+            # ── 6. The padlock reads muted → warm (slice b, F1) ───────────────
             lock_testid = row_lock_testid(group_id, other_basename)
             lock_before = _read_lock(page, lock_testid)
             print(f"probe_status: s74 lock before click = {lock_before}")
@@ -927,11 +934,12 @@ def run(*, base_url: str) -> None:
                 "#878 — an unlocked row's padlock reports aria-pressed="
                 f"{lock_before['pressed']!r}."
             )
-            assert lock_before["color"] == _INK_FAINT, (
-                "#878 — an unlocked padlock is "
-                f"{lock_before['color']}, expected the faint ink {_INK_FAINT} "
-                "(#a89f8f). Faint-vs-solid is the whole point: it is what lets "
-                "a locked row be spotted without reading every cell."
+            assert lock_before["color"] == _INK_MUTED, (
+                "#922 — an unlocked padlock is "
+                f"{lock_before['color']}, expected the muted ink {_INK_MUTED} "
+                "(#6b6358, design F1). It answers 'is this row protected from "
+                "the delete verb?' — a state, which the hairline #a89f8f "
+                "(2.58:1 on panel) may not carry."
             )
 
             page.get_by_test_id(lock_testid).click()

@@ -3,7 +3,8 @@
 // Renders one header cell per metadata column (COLUMNS registry), aligned to
 // the FileRow body cells by sharing the same per-column widths + the same
 // leading thumbnail spacer and flex gap/padding. Sortable columns (File Name,
-// Size) toggle the sort on click; every column has a right-edge resize handle.
+// Size) toggle the sort on click, and Action (#923) cycles its decision sort;
+// every column has a right-edge resize handle.
 //
 // Kept INSIDE the result-tree scroll container (sticky top-0) so it scrolls
 // horizontally with the body when columns are widened past the viewport while
@@ -23,7 +24,13 @@ import {
 } from "@/lib/resultColumns";
 import { DEFAULT_DENSITY, type Density } from "@/lib/density";
 import { ROW_METRICS } from "@/lib/rowMetrics";
-import { colHeaderTestid, colResizeTestid, RESULT_COL_HEADER_ROW } from "@/testids";
+import {
+  COL_SORT_STALE_DOT,
+  COL_SORT_SUBLABEL,
+  colHeaderTestid,
+  colResizeTestid,
+  RESULT_COL_HEADER_ROW,
+} from "@/testids";
 
 interface ColumnHeaderRowProps {
   columnWidths: Record<ColumnId, number>;
@@ -39,6 +46,9 @@ interface ColumnHeaderRowProps {
   density?: Density;
   sortColumn: ColumnId | null;
   sortDirection: SortDirection;
+  /** #923 — a decision changed under the Action sort and the rows did NOT
+   *  move (F3's deferred re-sort): draw the 4px stale dot on that header. */
+  decisionSortStale?: boolean;
   onToggleSort: (column: ColumnId) => void;
   /** Live-updates the width per move (persist=false) and commits once at the
    *  end of the drag (persist=true) — see ColumnHeaderRow's drag useEffect. */
@@ -57,6 +67,7 @@ export function ColumnHeaderRow({
   density = DEFAULT_DENSITY,
   sortColumn,
   sortDirection,
+  decisionSortStale = false,
   onToggleSort,
   onResize,
   ref,
@@ -159,6 +170,19 @@ export function ColumnHeaderRow({
       {cols.map((col) => {
         const isActive = sortColumn === col.id;
         const label = t(col.labelKey, col.labelFallback);
+        // #923 — ▾/▴ means nothing on a three-value enum, so an active Action
+        // sort SPELLS its order after the field name ("ACTION · KEEP FIRST").
+        const isDecisionSort = col.id === "action" && isActive;
+        const subLabel = !isDecisionSort
+          ? null
+          : sortDirection === "asc"
+            ? t("web.column.sort_keep_first", "Keep first")
+            : t("web.column.sort_delete_first", "Delete first");
+        const staleText = t(
+          "web.column.sort_stale",
+          "Order is out of date — click to re-sort"
+        );
+        const showStale = isDecisionSort && decisionSortStale;
         const isDragging = drag?.column === col.id;
         const width =
           col.id === "score" && scoreCompact
@@ -197,8 +221,25 @@ export function ColumnHeaderRow({
                 : undefined
             }
             onClick={col.sortable ? () => onToggleSort(col.id) : undefined}
+            // The 4px dot is too small to hover reliably, so the whole cell
+            // carries its tooltip while the order is stale.
+            title={showStale ? staleText : undefined}
           >
-            <span className="truncate">{label}</span>
+            {/* F3: «truncate the sub-label, never the field name» — so with a
+                sub-label present the name stops shrinking. `data-col-label`
+                lets a scenario read the name without the glyphs beside it. */}
+            <span
+              data-col-label=""
+              className={subLabel !== null ? "flex-shrink-0" : "truncate"}
+            >
+              {label}
+            </span>
+            {subLabel !== null && (
+              <span data-testid={COL_SORT_SUBLABEL} className="min-w-0 truncate">
+                {"· "}
+                {subLabel}
+              </span>
+            )}
             {/* Sort indicator. Unsorted shows NO glyph at rest (the REPLY is
                 explicit — a permanent ⇅ on every sortable header is noise) and
                 a hairline ▾ on hover; sorted shows ▾/▴ in the accent with the
@@ -217,6 +258,17 @@ export function ColumnHeaderRow({
               >
                 {isActive ? (sortDirection === "asc" ? "▴" : "▾") : "▾"}
               </span>
+            )}
+            {/* #923 — F3's stale dot: 4px, accent, right of the indicator. The
+                only new mark the ruling introduces. */}
+            {showStale && (
+              <span
+                data-testid={COL_SORT_STALE_DOT}
+                role="img"
+                aria-label={staleText}
+                title={staleText}
+                className="h-1 w-1 flex-shrink-0 rounded-full bg-warm"
+              />
             )}
             {/* Resize handle — an 8px grab strip on the column's right edge,
                 invisible at rest. It stays INSIDE the cell (rather than

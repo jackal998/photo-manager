@@ -214,7 +214,7 @@ For each scenario:
 
    If you can't tell which bucket a finding belongs in, it's a
    UX-friction note. Reserve issue-filing for things with measurable
-   wrong behavior. (See [`feedback_qa_explore_ceiling.md`](../../../../../.claude/projects/C--Users-J-repository-photo-manager/memory/feedback_qa_explore_ceiling.md)
+   wrong behavior. (See [`feedback_qa_explore_ceiling.md`](../../../../../.claude/projects/C--Users-<user>-repository-photo-manager/memory/feedback_qa_explore_ceiling.md)
    in memory for the rationale: the 2026-05-06 gap-fill pass filed
    10 issues; only 2 turned out to be real defects, and the other 8
    were defensible UX-judgment calls that should have been one

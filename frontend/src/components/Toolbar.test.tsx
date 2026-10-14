@@ -5,20 +5,27 @@
 
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 
-import { Toolbar } from "./Toolbar";
+import { Toolbar, type ToolbarProps } from "./Toolbar";
 import { useAppStore } from "@/store/useAppStore";
 import { useI18nStore } from "@/i18n/useI18nStore";
 import type { DecisionValue, FileRow, Group } from "@/api/types";
 import {
+  ACTION_MAIN_BUTTON,
   MAIN_BULK_LABEL,
   MAIN_BULK_VERB_DELETE,
   MAIN_BULK_VERB_KEEP,
   MAIN_BULK_VERB_SKIP,
   MAIN_DELETE_CTA,
   MAIN_FILTER_INPUT,
+  MAIN_LANG_TOGGLE,
+  MAIN_OVERFLOW_LANG_ZH,
+  MAIN_OVERFLOW_MENU,
+  MAIN_OVERFLOW_SET_ACTION,
+  MAIN_OVERFLOW_SETTINGS,
   MAIN_SCAN_BUTTON,
+  MAIN_SETTINGS_BUTTON,
 } from "@/testids";
 
 // The two whole-manifest sweeps the strip runs per render, wrapped (not
@@ -106,7 +113,7 @@ function seed(items: FileRow[], selectedPaths: string[] = []) {
   });
 }
 
-function renderToolbar() {
+function renderToolbar(overrides: Partial<ToolbarProps> = {}) {
   return render(
     <Toolbar
       manifestPath={useAppStore.getState().manifest.path}
@@ -119,6 +126,7 @@ function renderToolbar() {
       onSetAction={() => {}}
       onSettings={() => {}}
       onSetLocale={() => {}}
+      {...overrides}
     />
   );
 }
@@ -391,5 +399,68 @@ describe("Toolbar primary", () => {
     const warm = container.querySelectorAll("header button.bg-warm");
     expect(warm).toHaveLength(1);
     expect(warm[0]).toBe(screen.getByTestId(MAIN_SCAN_BUTTON));
+  });
+});
+
+// #918 — the second shed stage. The strip reads its own `clientWidth` on
+// mount (the ResizeObserver stub above never fires), so pinning that getter
+// is the whole of "a 1000px toolbar" here; s76 measures the real overflow.
+describe("Toolbar overflow menu (#918)", () => {
+  let widthSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    useI18nStore.setState({ locale: "en", catalog: {} });
+    seed([mkRow("a.jpg", "delete")]);
+    widthSpy = vi
+      .spyOn(Element.prototype, "clientWidth", "get")
+      .mockReturnValue(1000);
+  });
+
+  afterEach(() => {
+    widthSpy.mockRestore();
+  });
+
+  it("folds Set Action…, the language toggle and Settings into ⋯ when narrow", () => {
+    renderToolbar();
+    expect(screen.queryByTestId(ACTION_MAIN_BUTTON)).toBeNull();
+    expect(screen.queryByTestId(MAIN_LANG_TOGGLE)).toBeNull();
+    expect(screen.queryByTestId(MAIN_SETTINGS_BUTTON)).toBeNull();
+    expect(screen.getByTestId(MAIN_OVERFLOW_MENU)).toHaveAttribute(
+      "aria-label",
+      "More actions"
+    );
+    // What the shed exists to protect stays in the strip.
+    expect(screen.getByTestId(MAIN_DELETE_CTA)).toBeInTheDocument();
+  });
+
+  it("dispatches the same handlers the folded buttons did", async () => {
+    const onSetAction = vi.fn();
+    const onSettings = vi.fn();
+    const onSetLocale = vi.fn();
+    renderToolbar({ onSetAction, onSettings, onSetLocale });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByTestId(MAIN_OVERFLOW_MENU));
+    await user.click(screen.getByTestId(MAIN_OVERFLOW_SETTINGS));
+    expect(onSettings).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTestId(MAIN_OVERFLOW_MENU));
+    await user.click(screen.getByTestId(MAIN_OVERFLOW_LANG_ZH));
+    expect(onSetLocale).toHaveBeenCalledWith("zh_TW");
+
+    await user.click(screen.getByTestId(MAIN_OVERFLOW_MENU));
+    await user.click(screen.getByTestId(MAIN_OVERFLOW_SET_ACTION));
+    expect(onSetAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("gates Set Action… on a loaded manifest, like the button (#673)", async () => {
+    const onSetAction = vi.fn();
+    renderToolbar({ manifestPath: null, onSetAction });
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId(MAIN_OVERFLOW_MENU));
+    const item = screen.getByTestId(MAIN_OVERFLOW_SET_ACTION);
+    expect(item).toHaveAttribute("data-disabled");
+    await user.click(item);
+    expect(onSetAction).not.toHaveBeenCalled();
   });
 });

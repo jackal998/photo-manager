@@ -479,6 +479,9 @@ web:
     execute: "Execute"
     settings: "Settings"
     open: "Open"
+    # #918 — accessible name of the "⋯" overflow trigger that holds Set
+    # Action…, the language choice and Settings on a narrow toolbar.
+    more_aria: "More actions"
     # The toolbar button had been borrowing web.action_dialog.title (copy
     # audit T1); a button wants a shorter label than the dialog's title.
     set_action: "Set Action…"
@@ -531,6 +534,9 @@ web:
     # group — {verb} is interpolated from web.decision.*, the one decision
     # vocabulary the row control and the right-click menu also read.
     bulk_decision: "{count} {fileWord} set to {verb}"
+    # #909 — the immediate Skip (context menu "Skip now", List → Skip Selected
+    # now) finalizes rather than stages, so the sentence says the rows LEFT.
+    skip_now: "{count} {fileWord} dropped from this review"
     file_singular: "file"
     file_plural: "files"
     locked_unchanged_singular: "{count} locked file unchanged"
@@ -595,6 +601,15 @@ web:
     # Accessible name of the inline decision control in each file row (copy
     # audit R5 — it was a hardcoded English aria-label).
     decision: "Decision"
+    # Sort by decision (#923, design F3 + owner ruling 2026-09-29). The Action
+    # header's sub-label spells the order — ▾/▴ means nothing on a three-value
+    # enum — and the View menu's mirror entries reuse the same two words. The
+    # header renders them uppercase: "ACTION · KEEP FIRST".
+    sort_keep_first: "Keep first"
+    sort_delete_first: "Delete first"
+    # Tooltip of the 4px dot that appears when a decision changed under an
+    # Action sort: the rows deliberately did NOT move, so the order is stale.
+    sort_stale: "Order is out of date — click to re-sort"
   # Layout slice R (#878): the score cell gained a label above the number —
   # "without it a bare bar and a number in a 96px cell is an unlabelled
   # quantity, and this number is the one the 'keep best' button acts on".
@@ -714,6 +729,10 @@ web:
     view_language: "Language"
     lang_en: "English"
     lang_zh: "中文 (繁體)"
+    # #923 — the View menu mirror of the Action-header sort (Q1 ruling: here,
+    # not in the toolbar). Entries reuse web.column.sort_keep_first/_delete_first.
+    view_sort: "Sort by action"
+    view_sort_clear: "Clear sort"
     # Scan summary folded into the RIGHT end of the menu bar (#878 slice TB,
     # F3/F4). The source name is appended separately so it can be the one part
     # that truncates — «truncate the source name first; never wrap».
@@ -779,6 +798,9 @@ web:
     color_tooltip: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
     error_prefix: "Error: {error}"
     start_button: "Start Scan"
+    # #896 — shown in the still-open dialog after a scan that found no media
+    # files (Qt's "Done. No media files found — nothing to scan." log line).
+    empty_result: "No media files found — nothing to scan."
     # Running state (ScanProgress) — copy audit SC4. The count line read
     # "1 files found", so it takes the same split singular/plural shape as
     # the status bar.

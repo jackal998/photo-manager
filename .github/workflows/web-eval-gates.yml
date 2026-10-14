@@ -250,9 +250,42 @@ jobs:
           exit 1
 
       # Run all web scenarios (status:done entries run; todo/skip degrade to SKIP).
+      # The output is teed to web-batch.log for the promotion check below.
+      # `shell: bash` runs with `-eo pipefail`, so the batch's own exit code
+      # survives the pipe (tee alone always exits 0); unbuffered stdout keeps
+      # the log complete even if the job is killed at its timeout.
       - name: Run web scenario batch
         if: needs.detect-web-changes.outputs.web == 'true'
-        run: python -m qa.web._batch --base-url http://127.0.0.1:8765
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python -m qa.web._batch --base-url http://127.0.0.1:8765 2>&1 | tee web-batch.log
+
+      # Soft-probe promotion detector (#890 — restores the step that went with
+      # qa-batch.yml in #646). A soft probe inside a scenario prints
+      # `probe_status: XFAIL_KNOWN_BUG_N` while its target bug exists and
+      # `probe_status: PASS …` once the bug is fixed; the scenario passes either
+      # way (soft by design). This step closes the loop: a PASS fails THIS job,
+      # so the bug-fix PR must either promote the probe to a hard
+      # `failures.append(...)` or delete the probe block. The web-side twin of
+      # xfail(strict=True) for the static probes. Case-insensitive, like the
+      # Select-String it replaces. Observation lines (`probe_status: s06 …`)
+      # never match.
+      - name: Detect probes ready for promotion
+        if: always() && needs.detect-web-changes.outputs.web == 'true'
+        shell: bash
+        run: |
+          [ -f web-batch.log ] || exit 0
+          passes=$(grep -aiE 'probe_status:[[:space:]]*PASS' web-batch.log || true)
+          if [ -n "$passes" ]; then
+            echo '::error::A soft probe is now passing — its target bug appears to be fixed.'
+            echo '::error::Promote it to a hard assertion (failures.append) in the scenario, or delete the probe block.'
+            echo '::error::See docs/testing.md "Forcing-function design" and the comment block in the affected scenario.'
+            echo ''
+            echo 'Matching log lines:'
+            printf '%s\n' "$passes" | sed 's/^/  /'
+            exit 1
+          fi
 
   bench-sanity:
     # Advisory: validates the web-port perf-bench harness runs clean on the qa

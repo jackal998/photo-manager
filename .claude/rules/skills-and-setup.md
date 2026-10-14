@@ -132,7 +132,7 @@ home path. To enable the security gates above on a fresh checkout:
 
 1. Copy `.claude/settings.json.example` to `.claude/settings.json`
 2. Replace `<USER_HOME>` with your actual home directory
-   (e.g. `C:/Users/J` on Windows, `/home/you` on Linux, `/Users/you` on macOS)
+   (e.g. `C:/Users/<user>` on Windows, `/home/you` on Linux, `/Users/you` on macOS)
 3. Restart your Claude Code session, then run `/permissions` to confirm the
    `ask` rules are loaded
 

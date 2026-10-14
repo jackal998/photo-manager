@@ -43,6 +43,12 @@ function simpleToRegex(op: SimpleOp, text: string): string {
   }
 }
 
+/** The pattern the Simple row writes through. Empty text writes "" for every
+ *  op, so a blank Simple row never mass-matches. */
+function simpleToPattern(op: SimpleOp, text: string): string {
+  return text === "" ? "" : simpleToRegex(op, text);
+}
+
 /** Try to validate a regex string. Returns null if valid, error message if not. */
 function validateRegex(pattern: string): string | null {
   if (pattern === "") return null;
@@ -98,6 +104,28 @@ export function RegexPanel({
     () => reverseParseSimple(pattern)?.text ?? ""
   );
 
+  // Re-sync on every later pattern change the Simple row did not make (#899):
+  // a hand-edited regex, a cheatsheet chip, a Recent pick. Without this the
+  // Simple row kept its mount-time values, and the next op flip silently
+  // replaced the edited regex with them. Mirrors Qt's _reverse_parse_to_simple
+  // (select_dialog.py:1368): re-derive when the new pattern is
+  // Simple-representable, otherwise leave the row as it is. A change that
+  // already matches what the row writes (its own write-through — including
+  // "" from a blank row, whatever the op) leaves the op alone. Adjusted
+  // during render, React's pattern for state that follows a prop.
+  const [syncedPattern, setSyncedPattern] = useState(pattern);
+  if (pattern !== syncedPattern) {
+    setSyncedPattern(pattern);
+    const parsed =
+      simpleToPattern(simpleOp, simpleText) === pattern
+        ? null
+        : reverseParseSimple(pattern);
+    if (parsed !== null) {
+      setSimpleOp(parsed.op);
+      setSimpleText(parsed.text);
+    }
+  }
+
   const regexError = validateRegex(pattern);
   const isValid = pattern === "" || regexError === null;
 
@@ -109,7 +137,7 @@ export function RegexPanel({
     (op: SimpleOp, text: string) => {
       setSimpleOp(op);
       setSimpleText(text);
-      onPatternChange(text === "" ? "" : simpleToRegex(op, text));
+      onPatternChange(simpleToPattern(op, text));
     },
     [onPatternChange]
   );

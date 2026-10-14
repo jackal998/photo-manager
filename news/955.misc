@@ -1,0 +1,1 @@
+Redirect the test suite's delete-audit CSVs to a pytest temp dir, so local runs stop burying the real `%LOCALAPPDATA%\PhotoManager\delete_logs` audit trail (#948).

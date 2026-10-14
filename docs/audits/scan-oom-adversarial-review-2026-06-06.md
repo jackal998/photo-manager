@@ -22,7 +22,7 @@ User report: "記憶體滿了閃退" (memory filled → hard crash) on a 3-sourc
 Machine: 12 logical CPUs, 31.8 GB RAM.
 
 - Sources: `D:\Takeout-0508` (HDD, 1 reader), `H:\Photos\MobileBackup` + `J:\圖片`
-  (both NAS `\\LINXIAOYUN`, 8 readers, ramping). `hash_pool=auto→thread`,
+  (both NAS `\\NAS-HOST`, 8 readers, ramping). `hash_pool=auto→thread`,
   `autotune_read_knee=ON`, `exif_workers=2` (→ exif_queue cap 2000).
 - `app_20260606.log`: died at **~1,000 / 39,721 files (~2.7%)**, mid-HASH. Rate
   collapsed 14 files/s → 0.48 files/s around file 700–800 (700→800 took 209 s).

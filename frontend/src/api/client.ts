@@ -18,6 +18,8 @@ import type {
   PruneResult,
   RemoveRequest,
   RemoveResult,
+  RestoreRequest,
+  RestoreResult,
   RevealRequest,
   RevealResult,
   SaveRequest,
@@ -306,6 +308,12 @@ export async function postExecute(req: ExecuteRequest): Promise<ExecuteResult> {
 
 export async function postRemove(req: RemoveRequest): Promise<RemoveResult> {
   return postJsonOrConflict<RemoveResult>("/api/remove", req);
+}
+
+// POST /api/restore (#909)
+
+export async function postRestore(req: RestoreRequest): Promise<RestoreResult> {
+  return postJson<RestoreResult>("/api/restore", req);
 }
 
 // POST /api/prune

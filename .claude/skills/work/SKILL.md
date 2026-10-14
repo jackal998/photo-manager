@@ -51,7 +51,7 @@ as the prompt:
 ```
 Agent(
   subagent_type="researcher-agent",
-  model="opus",
+  model="haiku",
   prompt="""
   Task spec:
   <paste resolved trigger here — issue body / intent / diff stat>
@@ -135,7 +135,7 @@ Execute the approved workflow. Route based on complexity score:
    ```
    Agent(
      subagent_type="developer-agent",
-     model="opus",
+     model="haiku",
      isolation="worktree",
      prompt="""
      RESEARCH BRIEF:

@@ -14,11 +14,14 @@ from pathlib import Path
 import pytest
 
 from core.app_service.execute_service import (
+    classify_singletons,
     execute_decisions,
     prune_singletons,
     remove_from_review,
+    restore_to_review,
     save_manifest,
 )
+from core.app_service.review_service import load_review
 from infrastructure.manifest_repository import ManifestRepository
 from scanner.manifest import _DDL as _MANIFEST_DDL
 
@@ -307,6 +310,94 @@ class TestExecuteDecisions:
         assert f2.exists()   # not in scope
         assert f3.exists()   # not in scope
 
+    def test_unscoped_execute_skips_actioned_singleton_hidden_from_review(self, tmp_path):
+        """#941: a partial execute leaves g1's other delete row as a kept
+        actioned singleton. The review drops it (orphan-skip), so no tree,
+        count or #733 confirm can show it — and an unscoped Execute must not
+        delete it ("visible = committed"). It keeps its pending decision."""
+        a, b, c, d = _make_real_files(tmp_path, 4)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(a), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "delete", "file_size_bytes": 64},
+            {"source_path": str(b), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "", "user_decision": "delete",
+             "file_size_bytes": 64},
+            {"source_path": str(c), "action": "", "group_id": "g2",
+             "outcome": "", "user_decision": "", "file_size_bytes": 64},
+            {"source_path": str(d), "action": "REVIEW_DUPLICATE", "group_id": "g2",
+             "hamming_distance": 2, "outcome": "", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+
+        # "Execute selected" on b alone; the user keeps the actioned singleton.
+        execute_decisions(str(manifest), scope_paths=[str(b)], recycle=False)
+        assert classify_singletons(str(manifest))["actioned"] == [str(a)]
+        visible = {
+            item["file_path"]
+            for group in load_review(str(manifest))["groups"]
+            for item in group["items"]
+        }
+        assert visible == {str(c), str(d)}
+
+        # Plain "Execute": the dialog lists only d.
+        result = execute_decisions(str(manifest), recycle=False)
+
+        assert result["success_paths"] == [str(d)]
+        assert not d.exists()
+        assert a.exists(), "hidden singleton a was deleted by an unscoped Execute"
+        assert _read_col(manifest, str(a), "outcome") == ""
+        assert _read_col(manifest, str(a), "user_decision") == "delete"
+
+
+# ---------------------------------------------------------------------------
+# execute_decisions — audit CSV stays out of the user's profile (#948)
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteAuditCsvIsolation:
+    """Guard for ``tests/conftest.py::_isolate_delete_log_dir`` (#948).
+
+    ``execute_decisions`` calls ``write_delete_log`` with no ``log_dir``, so the
+    CSV goes to ``%LOCALAPPDATA%\\PhotoManager\\delete_logs`` — the audit trail a
+    user reads to recover what a real Execute deleted. Before #948 every local
+    suite run buried that trail under thousands of pytest CSVs.
+
+    ``LOCALAPPDATA`` is pointed at a temp dir here, so if the conftest redirect
+    ever goes inert the stray CSV lands in that temp dir and fails this test —
+    never in the real profile.
+    """
+
+    def test_audit_csv_lands_in_pytest_temp_not_localappdata(
+        self, tmp_path, tmp_path_factory, monkeypatch
+    ):
+        fake_localappdata = tmp_path / "LOCALAPPDATA"
+        fake_localappdata.mkdir()
+        monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
+
+        (victim,) = _make_real_files(tmp_path, 1)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(victim),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        result = execute_decisions(str(manifest), recycle=False)
+
+        log_path = result["log_path"]
+        assert log_path is not None, "execute wrote no audit CSV at all"
+        assert not (fake_localappdata / "PhotoManager").exists(), (
+            f"audit CSV escaped into %LOCALAPPDATA%\\PhotoManager: {log_path}"
+        )
+        assert tmp_path_factory.getbasetemp() in Path(log_path).parents, (
+            f"audit CSV is not under pytest's temp root: {log_path}"
+        )
+        assert str(victim) in Path(log_path).read_text(encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # remove_from_review
@@ -379,6 +470,75 @@ class TestRemoveFromReview:
     def test_missing_manifest_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             remove_from_review(str(tmp_path / "no.sqlite"), ["x"])
+
+
+# ---------------------------------------------------------------------------
+# restore_to_review — the Undo of an immediate Skip (#909)
+# ---------------------------------------------------------------------------
+
+
+class TestRestoreToReview:
+    def _three_row_group(self, tmp_path: Path) -> tuple[Path, list[Path]]:
+        files = _make_real_files(tmp_path, 3)
+        rows = [
+            {
+                "source_path": str(f),
+                "action": "" if i == 0 else "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": None if i == 0 else 2,
+                "outcome": "",
+                # A staged decision the skip must not cost the user.
+                "user_decision": "delete" if i == 1 else "",
+                "file_size_bytes": 64,
+            }
+            for i, f in enumerate(files)
+        ]
+        return _make_manifest(tmp_path, rows), files
+
+    def test_undoes_a_skip_and_the_rows_come_back_as_they_were(self, tmp_path):
+        manifest, (f0, f1, f2) = self._three_row_group(tmp_path)
+        remove_from_review(str(manifest), [str(f0), str(f1)])
+
+        result = restore_to_review(str(manifest), [str(f0), str(f1)])
+
+        assert result["restored"] == 2
+        for f in (f0, f1):
+            assert _read_col(manifest, str(f), "outcome") == ""
+            assert _read_col(manifest, str(f), "executed") == 0
+        # The staged decision survives the skip + undo round-trip.
+        assert _read_col(manifest, str(f1), "user_decision") == "delete"
+        # And the response the frontend renders has the whole group again.
+        [group] = result["groups"]
+        assert {item["file_path"] for item in group["items"]} == {
+            str(f0), str(f1), str(f2)
+        }
+
+    def test_never_returns_a_deleted_row_to_review(self, tmp_path):
+        # A 'deleted' row's file is in the Recycle Bin; putting it back in
+        # review would offer to delete a file that is no longer there.
+        manifest, (f0, _f1, _f2) = self._three_row_group(tmp_path)
+        ManifestRepository().finalize_outcome(str(manifest), [str(f0)], "deleted")
+
+        result = restore_to_review(str(manifest), [str(f0)])
+
+        assert result["restored"] == 0
+        assert _read_col(manifest, str(f0), "outcome") == "deleted"
+        assert _read_col(manifest, str(f0), "executed") == 1
+
+    def test_out_of_root_path_is_not_restored(self, tmp_path):
+        manifest, (f0, _f1, _f2) = self._three_row_group(tmp_path)
+        remove_from_review(str(manifest), [str(f0)])
+
+        result = restore_to_review(
+            str(manifest), [str(f0)], allowed_roots=[str(tmp_path / "elsewhere")]
+        )
+
+        assert result["restored"] == 0
+        assert _read_col(manifest, str(f0), "outcome") == "ignored"
+
+    def test_missing_manifest_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            restore_to_review(str(tmp_path / "no.sqlite"), ["x"])
 
 
 # ---------------------------------------------------------------------------
@@ -894,9 +1054,11 @@ class TestExecuteDecisionsOutOfRoot:
 
     def test_no_allowed_roots_skips_safety_check(self, tmp_path):
         """When allowed_roots is None, the safety check is skipped (legacy behavior)."""
-        files = _make_real_files(tmp_path, 1)
-        f = files[0]
+        files = _make_real_files(tmp_path, 2)
+        f, partner = files
 
+        # The undecided partner keeps g1 a group the review shows — a lone row
+        # would be a hidden singleton, which execute never acts on (#941).
         manifest = _make_manifest(tmp_path, [
             {
                 "source_path": str(f),
@@ -904,6 +1066,15 @@ class TestExecuteDecisionsOutOfRoot:
                 "group_id": "g1",
                 "outcome": "",
                 "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(partner),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "",
                 "file_size_bytes": 64,
             },
         ])

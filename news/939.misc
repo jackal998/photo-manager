@@ -1,0 +1,1 @@
+Let qa scenarios running in zh_TW wait for a loaded manifest: `wait_manifest_loaded` matches the status summary's shape instead of the English nouns (#910).

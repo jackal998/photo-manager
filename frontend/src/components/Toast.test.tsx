@@ -35,13 +35,19 @@ function seedToast(overrides: Partial<UndoToast> = {}) {
 
 describe("Toast", () => {
   let undoMock: ReturnType<typeof vi.fn>;
+  let undoSkipMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     useI18nStore.setState({ locale: "en", catalog: {} });
     undoMock = vi.fn().mockResolvedValue(undefined);
+    undoSkipMock = vi.fn().mockResolvedValue(undefined);
     act(() => {
-      useAppStore.setState({ toast: null, undoKeepBest: undoMock } as never);
+      useAppStore.setState({
+        toast: null,
+        undoKeepBest: undoMock,
+        undoSkipNow: undoSkipMock,
+      } as never);
     });
   });
 
@@ -115,6 +121,40 @@ describe("Toast", () => {
     render(<Toast />);
     fireEvent.click(screen.getByTestId(MAIN_TOAST_UNDO));
     expect(undoMock).toHaveBeenCalledTimes(1);
+    expect(undoSkipMock).not.toHaveBeenCalled();
+  });
+
+  // #909 — the immediate Skip finalizes `outcome`; a decision PATCH (what
+  // undoKeepBest sends) cannot bring the rows back, so its Undo must route to
+  // the restore action, and its sentence must say the rows LEFT, with a count.
+  it("an immediate Skip says how many files left the review, in both locales", () => {
+    seedToast({ kind: "skip-now", groupNumber: null, affectedCount: 3 });
+    const { unmount } = render(<Toast />);
+    expect(screen.getByTestId(MAIN_TOAST)).toHaveTextContent(
+      "3 files dropped from this review"
+    );
+    unmount();
+
+    useI18nStore.setState({
+      locale: "zh_TW",
+      catalog: {
+        "web.toast.skip_now": "已從本次檢閱中移除 {count} 個{fileWord}",
+        "web.toast.file_plural": "檔案",
+        "web.toast.undo": "復原",
+      },
+    });
+    render(<Toast />);
+    const toast = screen.getByTestId(MAIN_TOAST);
+    expect(toast).toHaveTextContent("已從本次檢閱中移除 3 個檔案");
+    expect(toast).toHaveTextContent("復原");
+  });
+
+  it("Undo on an immediate Skip dispatches undoSkipNow, not undoKeepBest", () => {
+    seedToast({ kind: "skip-now", groupNumber: null, affectedCount: 1 });
+    render(<Toast />);
+    fireEvent.click(screen.getByTestId(MAIN_TOAST_UNDO));
+    expect(undoSkipMock).toHaveBeenCalledTimes(1);
+    expect(undoMock).not.toHaveBeenCalled();
   });
 
   it("disables Undo while one is in flight, so it cannot fire twice", () => {

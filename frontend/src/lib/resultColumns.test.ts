@@ -32,9 +32,9 @@ describe("resultColumns registry", () => {
     }
   });
 
-  it("marks exactly File Name and Size sortable (s45 scope)", () => {
+  it("marks exactly File Name, Size (s45) and Action (#923) sortable", () => {
     const sortable = COLUMNS.filter((c) => c.sortable).map((c) => c.id);
-    expect(sortable.sort()).toEqual(["name", "size"]);
+    expect(sortable.sort()).toEqual(["action", "name", "size"]);
   });
 
   it("heads the decision column 'Action' and registers no classification column (Q1)", () => {

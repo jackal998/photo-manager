@@ -192,6 +192,15 @@ UPDATE migration_manifest
  WHERE id = ? AND outcome = ''
 """
 
+# #909 — the Undo of an immediate Skip. Guarded on ``outcome = 'ignored'``:
+# only a dismissal is reversible. A 'deleted' row's file is in the Recycle
+# Bin, so returning it to review would offer a delete of a file that is gone.
+_RESTORE_TO_REVIEW_SQL = """
+UPDATE migration_manifest
+   SET outcome = '', executed = 0
+ WHERE source_path = ? AND outcome = 'ignored'
+"""
+
 
 def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
     """#433 — drop the legacy ``dest_path`` column and migrate
@@ -899,3 +908,25 @@ class ManifestRepository:
         reclaim and a VACUUM call would be a no-op at the cost of a full DB rewrite.
         """
         self.finalize_outcome(manifest_path, file_paths, "ignored")
+
+    def restore_to_review(self, manifest_path: str, file_paths: list[str]) -> int:
+        """Return dismissed rows to review (outcome 'ignored' → '') — #909.
+
+        The inverse of :meth:`remove_from_review`, which is what makes an
+        immediate Skip undoable: that write touches only ``outcome`` (and the
+        redundant ``executed``, already 0 for 'ignored'), so resetting both
+        restores the row exactly. Rows in any other state — still in review,
+        or 'deleted' — are left alone. Returns the number of rows changed.
+        """
+        if not file_paths:
+            return 0
+        self.ensure_schema(manifest_path)
+        conn = _connect(manifest_path)
+        try:
+            cursor = conn.executemany(
+                _RESTORE_TO_REVIEW_SQL, [(p,) for p in file_paths]
+            )
+            conn.commit()
+            return cursor.rowcount
+        finally:
+            conn.close()

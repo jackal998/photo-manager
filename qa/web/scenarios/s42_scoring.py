@@ -270,8 +270,9 @@ def run(*, base_url: str) -> None:
             page.wait_for_load_state("networkidle", timeout=10_000)
 
             # recursive=True is REQUIRED here: the fixture's path-penalty
-            # variant lives in a Downloads/ subdirectory, and the ScanDialog's
-            # per-row recursive checkbox defaults to UNCHECKED. Without it the
+            # variant lives in a Downloads/ subdirectory, and run_scan UNTICKS
+            # the per-row recursive checkbox unless told otherwise (the dialog
+            # itself defaults it to checked since #896). Without it the
             # subdirectory is never walked, Downloads/scoring_clean.jpg never
             # reaches the manifest, and the path-penalty comparison below
             # silently compares nothing (found while adding the #680
