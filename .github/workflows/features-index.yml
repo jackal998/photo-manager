@@ -44,3 +44,8 @@ jobs:
 
       - name: rules register is well formed and its pins resolve
         run: python scripts/check_rules_register.py
+
+      # Same job and trigger: the design rulings register (docs/design/rulings.md)
+      # is checked for unique IDs, the five fields, Status and supersession links.
+      - name: design rulings register is well formed
+        run: python scripts/check_rulings_register.py
