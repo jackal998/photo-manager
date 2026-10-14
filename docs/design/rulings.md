@@ -64,10 +64,10 @@ The repo copy is authoritative for WHAT WAS DECIDED.
 - **Implemented by:** `frontend/src/components/dialogs/DeleteConfirmDialog.tsx::DeleteConfirmDialog`, `frontend/src/lib/deleteConfirmRows.ts`
 
 ### Q7 — Keyboard cursor is a stroke, not a tint
-- **Decision:** The keyboard cursor is a stroke, an inset accent ring with a ▸ gutter caret, composed over the selection and hover tints. The ring width of 2px is superseded by F2, which sets it to 1px. The caret stands.
+- **Decision:** The keyboard cursor is a stroke, an inset accent ring with a ▸ gutter caret, composed over the selection and hover tints, shown on `:focus-visible` only. F2 changed the ring width from the 2px proposed here to 1px; the stroke, the caret and the layering stand.
 - **Date:** 2026-09-14
-- **Source:** REPLY - review screen open questions.md (archived design project)
-- **Status:** superseded by F2
+- **Source:** REPLY - review screen open questions.md (archived design project); width changed by REPLY - review screen post-implementation.md (F2)
+- **Status:** implemented
 - **Implemented by:** `frontend/src/components/ResultTree.tsx::ResultTree`
 
 ### Q8 — Palette contrast: adjusted accent and ink tiers
@@ -145,11 +145,11 @@ The repo copy is authoritative for WHAT WAS DECIDED.
 - **Implemented by:** `frontend/src/components/ResultTree.tsx::ResultTree`, `frontend/src/index.css`
 
 ### F3 — Sort by decision: the header is canonical, re-sort is deferred
-- **Decision:** The order (none, keep, delete), the sub-labels and the menu placement are superseded by OWN-923, and tie order by OWN-743. Still in force: the Action header is the canonical control, there is one sort state, lock is not a sort key, the sort is not persisted, and a decision change never moves a row. A stale sort shows a 4px dot and re-sorts only on an explicit action.
+- **Decision:** Built as ruled: the Action header is the canonical control, there is one sort state, lock is not a sort key, the sort is not persisted, a decision change never moves a row, and a stale sort shows a 4px dot and re-sorts only on an explicit action. Modified by OWN-923 (order, sub-labels and menu placement) and OWN-743 (tie order).
 - **Date:** 2026-09-20
-- **Source:** REPLY - review screen post-implementation.md (archived design project)
-- **Status:** superseded by OWN-923
-- **Implemented by:** `frontend/src/components/result/ColumnHeaderRow.tsx::ColumnHeaderRow`, `frontend/src/lib/decisionSort.ts`
+- **Source:** REPLY - review screen post-implementation.md (archived design project); FEEDBACK - F1 F3 implementation deviations.md item 2 ("everything else in F3 is built as ruled")
+- **Status:** implemented
+- **Implemented by:** `frontend/src/components/result/ColumnHeaderRow.tsx::ColumnHeaderRow`, `frontend/src/lib/decisionSort.ts`, `frontend/src/components/result/useResortAnimation.ts`
 
 ### F4 — No user override for column shedding
 - **Decision:** Column shedding stays automatic, and the question is closed with no build. If it is reopened, the recorded shape is a toolbar Columns menu with per-browser persistence.
@@ -167,31 +167,24 @@ The repo copy is authoritative for WHAT WAS DECIDED.
 - **Status:** superseded by OWN-923
 - **Implemented by:** —
 
-### DEV-2 — F3 feedback item Q3 (clear returns to score-descending) is retracted
-- **Decision:** Modifies F3. The engineering item "clear returns to score-descending" matched the shipped default and needed no ruling. The owner retracted it, so the shipped default order (score-descending within a group) stands. This is not the review-screen Q3 above.
-- **Date:** 2026-09-30
-- **Source:** FEEDBACK - F1 F3 implementation deviations.md (archived design project), item 2 Q3
-- **Status:** retracted
-- **Implemented by:** —
-
 ### OWN-922 — The unlocked padlock uses the standard lock-open glyph
 - **Decision:** Modifies F1. The unlocked padlock uses the icon library's standard lock-open glyph (LockOpen), not the shackle "offset right" that F1 described. Locked and unlocked stay distinguishable by glyph shape.
 - **Date:** 2026-09-30
-- **Source:** FEEDBACK - F1 F3 implementation deviations.md (archived design project), item 1; owner ruling #922
+- **Source:** FEEDBACK - F1 F3 implementation deviations.md (archived design project), item 1; orchestrator decision, not objected to by the owner
 - **Status:** implemented
 - **Implemented by:** `frontend/src/components/result/LockToggle.tsx::LockToggle`
 
 ### OWN-923 — Sort by decision: View-menu mirror, Keep → Skip → Delete
 - **Decision:** Modifies F3 and DEV-1. The sort mirror lives in the menu bar's View menu, not the toolbar. Ascending runs Keep, Skip, Delete, and descending reverses it. The sub-labels are "ACTION · KEEP FIRST" and "ACTION · DELETE FIRST" (zh_TW 「動作 · 保留優先」 and 「動作 · 刪除優先」).
-- **Date:** 2026-09-29
-- **Source:** FEEDBACK - F1 F3 implementation deviations.md (archived design project), item 2; owner ruling #923
+- **Date:** 2026-09-30
+- **Source:** FEEDBACK - F1 F3 implementation deviations.md (archived design project), item 2; owner answer to AskUserQuestion, 2026-09-30. Conflict: the code comment in MenuBar.tsx cites a 2026-09-29 ruling and docs/testing.md:207 says "2026-09-29 rulings"; the ledger's 2026-09-30 date is used here.
 - **Status:** implemented
 - **Implemented by:** `frontend/src/components/MenuBar.tsx::MenuBar`, `frontend/src/components/result/ColumnHeaderRow.tsx::ColumnHeaderRow`, `frontend/src/lib/decisionSort.ts`
 
 ### OWN-933 — Set Action folds into the overflow menu below 1100px
 - **Decision:** Below 1100px the toolbar's Set Action… moves into the ⋯ overflow menu. This replaces the earlier #916 pin, which kept it visible.
-- **Date:** unknown — the ruling date is not in the sources
-- **Source:** owner ruling #933, recorded in the orchestrator ledger
+- **Date:** 2026-09-30
+- **Source:** owner approval, 2026-09-30, recorded in the orchestrator ledger
 - **Status:** implemented
 - **Implemented by:** `frontend/src/components/Toolbar.tsx::Toolbar`, `frontend/src/lib/toolbarShed.ts` (`TOOLBAR_MANIFEST_SHED_WIDTH = 1100`)
 
@@ -205,6 +198,6 @@ The repo copy is authoritative for WHAT WAS DECIDED.
 ### OWN-743 — Within-group ties keep the server order
 - **Decision:** Modifies F3. Rows that tie on decision keep the order the server sent, which is score-descending by default or the user's sorting default. No separate score key is applied.
 - **Date:** unknown — the ruling date is not in the sources
-- **Source:** owner ruling #743, recorded in the orchestrator ledger
+- **Source:** orchestrator decision, not objected to by the owner (orchestrator ledger)
 - **Status:** implemented
 - **Implemented by:** `frontend/src/lib/decisionSort.ts`

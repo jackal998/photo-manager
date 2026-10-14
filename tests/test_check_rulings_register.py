@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import scripts.check_rulings_register as crl
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -21,13 +23,15 @@ def _block(
     implemented_by: str = "`frontend/src/x.tsx::X`",
     date: str = "2026-09-14",
     title: str = "A ruling",
+    decision: str = "Something was decided.",
+    source: str = "REPLY - review screen open questions.md",
 ) -> str:
     return (
         f"### {rid} — {title}\n"
         "\n"
-        "- **Decision:** Something was decided.\n"
+        f"- **Decision:** {decision}\n"
         f"- **Date:** {date}\n"
-        "- **Source:** REPLY - review screen open questions.md\n"
+        f"- **Source:** {source}\n"
         f"- **Status:** {status}\n"
         f"- **Implemented by:** {implemented_by}\n"
         "\n"
@@ -117,6 +121,46 @@ def test_cli_exit_codes(tmp_path: Path) -> None:
     )
     assert dup.returncode == 1
     assert good.returncode == 0
+
+
+@pytest.mark.parametrize("field", ["decision", "source"])
+def test_blank_text_field_fails(tmp_path: Path, field: str) -> None:
+    problems = _problems(tmp_path, _block("Q1", **{field: ""}))
+    assert any("Q1" in p and field.capitalize() in p for p in problems)
+
+
+def test_blank_date_fails(tmp_path: Path) -> None:
+    problems = _problems(tmp_path, _block("Q1", date=""))
+    assert any("Q1" in p and "Date" in p for p in problems)
+
+
+@pytest.mark.parametrize("date", ["unknown", "unknown —", "unknown — "])
+def test_unknown_date_without_reason_fails(tmp_path: Path, date: str) -> None:
+    problems = _problems(tmp_path, _block("OWN-896", date=date))
+    assert any("OWN-896" in p and "Date" in p for p in problems)
+
+
+def test_self_supersession_fails(tmp_path: Path) -> None:
+    problems = _problems(tmp_path, _block("Q7", status="superseded by Q7", implemented_by="—"))
+    assert any("Q7" in p and "itself" in p for p in problems)
+
+
+def test_supersession_cycle_fails(tmp_path: Path) -> None:
+    problems = _problems(
+        tmp_path,
+        _block("Q1", status="superseded by Q2", implemented_by="—"),
+        _block("Q2", status="superseded by Q1", implemented_by="—"),
+    )
+    assert any("cycle" in p for p in problems)
+
+
+def test_zero_rulings_parsed_fails(tmp_path: Path) -> None:
+    register = tmp_path / "docs" / "design" / "rulings.md"
+    register.parent.mkdir(parents=True)
+    register.write_bytes(b"# Rulings\n\n#### Q1 \xe2\x80\x94 wrong heading level\n\n- **Status:** implemented\n")
+    problems, rulings, _superseded = crl.check(tmp_path)
+    assert rulings == 0
+    assert any("no rulings" in p for p in problems)
 
 
 def test_crlf_copy_of_real_register_passes(tmp_path: Path) -> None:
