@@ -1,0 +1,30 @@
+name: features-index
+
+# Guards the generated index of docs/features.md (scripts/gen_features_index.py).
+# Its own workflow, not a step in tests.yml: tests.yml skips pytest on
+# docs-only diffs, and pr-gates.yml is PR-only while its gates need PR context,
+# so a push-to-master trigger there would run them on master pushes.
+# No paths filter: docs-only PRs are exactly what this check exists for.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  features-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # stdlib only, so no pip step. Exit 1 = index stale, exit 2 = structural error.
+      - name: features index is up to date
+        run: python scripts/gen_features_index.py --check

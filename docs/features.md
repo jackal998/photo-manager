@@ -28,23 +28,25 @@ update here whenever user-visible behaviour changes — see
 
 ## Index
 
+<!-- features-index:start -->
 | Feature | Area |
 |---|---|
 | [Bulk regex — remove from list (deferred decision)](#bulk-regex--remove-from-list-deferred-decision) | Bulk operations |
 | [Context menu — Lock / Unlock](#context-menu--lock--unlock) | Context menu |
 | [Context menu — Open Folder](#context-menu--open-folder) | Context menu |
 | [Context menu — Set Action (per-file)](#context-menu--set-action-per-file) | Context menu |
+| [Developer tool — memory probe](#developer-tool--memory-probe) | Scan |
 | [Empty area context menu](#empty-area-context-menu) | Context menu |
 | [Empty-state action buttons](#empty-state-action-buttons) | Main window |
 | [Execute Action — base flow](#execute-action--base-flow) | Execute Action |
 | [Execute Action — complete-group delete confirm](#execute-action--complete-group-delete-confirm) | Execute Action |
 | [Execute Action — complete-group warning banner with jump-to](#execute-action--complete-group-warning-banner-with-jump-to) | Execute Action |
 | [Execute Action — dialog geometry persistence](#execute-action--dialog-geometry-persistence) | Execute Action |
+| [Execute Action — filter by action type (#502)](#execute-action--filter-by-action-type-502) | Execute Action |
 | [Execute Action — lock-confirm dialog](#execute-action--lock-confirm-dialog) | Execute Action |
-| [Execute Action — filter by action type](#execute-action--filter-by-action-type-502) | Execute Action |
 | [Execute Action — partial execution via "Execute selected"](#execute-action--partial-execution-via-execute-selected) | Execute Action |
 | [Execute Action — preview pane](#execute-action--preview-pane) | Execute Action |
-| [Execute Action — scope to selected groups](#execute-action--scope-to-selected-groups-only-selected-entry-410-430-429) | Execute Action |
+| [Execute Action — scope to selected groups (only-selected entry, #410, #430, #429)](#execute-action--scope-to-selected-groups-only-selected-entry-410-430-429) | Execute Action |
 | [Exit dirty-flag prompt](#exit-dirty-flag-prompt) | Main window |
 | [Keep-worthiness scoring](#keep-worthiness-scoring) | Review |
 | [Language switch](#language-switch) | i18n |
@@ -59,6 +61,10 @@ update here whenever user-visible behaviour changes — see
 | [Main window — sort persistence within session](#main-window--sort-persistence-within-session) | Main window |
 | [Main window — status bar baseline](#main-window--status-bar-baseline) | Main window |
 | [Open Manifest — base flow](#open-manifest--base-flow) | File operations |
+| [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
+| [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
+| [Preview pane — no-autoplay video default](#preview-pane--no-autoplay-video-default) | Preview pane |
+| [Preview pane — per-device request coordinator + 1-ahead prefetch](#preview-pane--per-device-request-coordinator--1-ahead-prefetch) | Preview pane |
 | [Save Manifest Decisions — base flow](#save-manifest-decisions--base-flow) | File operations |
 | [Scan dialog — auto-select after scan](#scan-dialog--auto-select-after-scan) | Scan |
 | [Scan dialog — auto-select aggressive ("delete all others")](#scan-dialog--auto-select-aggressive-delete-all-others) | Scan |
@@ -69,6 +75,7 @@ update here whenever user-visible behaviour changes — see
 | [Scan dialog — hash workers (NAS-aware auto, no UI control)](#scan-dialog--hash-workers-nas-aware-auto-no-ui-control) | Scan |
 | [Scan dialog — multi-source scan](#scan-dialog--multi-source-scan) | Scan |
 | [Scan dialog — read-knee autotune opt-out](#scan-dialog--read-knee-autotune-opt-out) | Scan |
+| [Scan dialog — stage / throughput / ETA progress (#424)](#scan-dialog--stage--throughput--eta-progress-424) | Scan |
 | [Scan flow — manifest summary in progress log](#scan-flow--manifest-summary-in-progress-log) | Scan |
 | [Scan flow — rescan confirm](#scan-flow--rescan-confirm) | Scan |
 | [Scan flow — visual selection of KEEP rows after scan](#scan-flow--visual-selection-of-keep-rows-after-scan) | Scan |
@@ -76,39 +83,44 @@ update here whenever user-visible behaviour changes — see
 | [Scan walk — recycle-bin / system folders are never walked](#scan-walk--recycle-bin--system-folders-are-never-walked) | Scan |
 | [Scan walk — skip-on-error traversal](#scan-walk--skip-on-error-traversal) | Scan |
 | [Set Action dialog — dual-section Simple + Regex view](#set-action-dialog--dual-section-simple--regex-view) | Set Action dialog |
+| [Set Action dialog — geometry persistence](#set-action-dialog--geometry-persistence) | Set Action dialog |
 | [Set Action dialog — live preview + validation](#set-action-dialog--live-preview--validation) | Set Action dialog |
 | [Set Action dialog — numeric comparison panel](#set-action-dialog--numeric-comparison-panel) | Set Action dialog |
 | [Set Action dialog — Score / Lock / Resolution fields](#set-action-dialog--score--lock--resolution-fields) | Set Action dialog |
-| [Set Action dialog — geometry persistence](#set-action-dialog--geometry-persistence) | Set Action dialog |
-| [Web — Action dialog (Set Action by Field)](#web--action-dialog-set-action-by-field) | Web UI |
-| [Web — main result tree multi-selection](#web--main-result-tree-multi-selection) | Web UI |
-| [Web — Context menu: Apply best-copy decisions to this group](#web--context-menu-apply-best-copy-decisions-to-this-group) | Web UI |
-| [Web — Context menu: stays inside the window (#897)](#web--context-menu-stays-inside-the-window-897) | Web UI |
-| [Web — Execute (only selected)](#web--execute-only-selected) | Web UI |
-| [Web — ScanDialog source/output persistence](#web--scandialog-sourceoutput-persistence) | Web UI |
-| [Web — scan dialog: subfolders by default, empty result stays open](#web--scan-dialog-subfolders-by-default-empty-result-stays-open) | Web UI |
-| [Web — result-tree column sort and resize persistence](#web--result-tree-column-sort-and-resize-persistence) | Web UI |
-| [Web — manifest decision persistence](#web--manifest-decision-persistence) | Web UI |
-| [Web — scan dialog invalid source path](#web--scan-dialog-invalid-source-path) | Web UI |
-| [Web — scan progress, skips and errors in the app log](#web--scan-progress-skips-and-errors-in-the-app-log) | Web UI |
-| [Web — desktop shell (pywebview launcher)](#web--desktop-shell-pywebview-launcher) | Web UI |
-| [Web — settings dialog](#web--settings-dialog) | Web UI |
-| [Web — filesystem browse dialog](#web--filesystem-browse-dialog) | Web UI |
-| [Web — Daylight theme and results-tree framing](#web--daylight-theme-and-results-tree-framing) | Web UI |
 | [Similarity column](#similarity-column) | Review |
-| [Preview pane — byte-budget LRU cache](#preview-pane--byte-budget-lru-cache) | Preview pane |
-| [Preview pane — full-resolution viewer](#preview-pane--full-resolution-viewer) | Preview pane |
-| [Preview pane — no-autoplay video default](#preview-pane--no-autoplay-video-default) | Preview pane |
-| [Preview pane — per-device request coordinator + 1-ahead prefetch](#preview-pane--per-device-request-coordinator--1-ahead-prefetch) | Preview pane |
-| [Web preview pane — video playback (V1 streaming)](#web-preview-pane--video-playback-v1-streaming) | Web UI |
-| [Web preview pane — video transcode fallback (V2 H.264)](#web-preview-pane--video-transcode-fallback-v2-h264) | Web UI |
+| [Singleton-prune offer after destructive ops (#426)](#singleton-prune-offer-after-destructive-ops-426) | Execute Action |
 | [Web preview pane — group grid view (multi-tile)](#web-preview-pane--group-grid-view-multi-tile) | Web UI |
 | [Web preview pane — group sync controller (GroupMediaController)](#web-preview-pane--group-sync-controller-groupmediacontroller) | Web UI |
 | [Web preview pane — title, image frame, metadata table, decision block](#web-preview-pane--title-image-frame-metadata-table-decision-block) | Web UI |
+| [Web preview pane — video playback (V1 streaming)](#web-preview-pane--video-playback-v1-streaming) | Web UI |
+| [Web preview pane — video transcode fallback (V2 H.264)](#web-preview-pane--video-transcode-fallback-v2-h264) | Web UI |
+| [Web — Action dialog (Set Action by Field)](#web--action-dialog-set-action-by-field) | Web UI |
+| [Web — app shell never scrolls; the tree does (#894)](#web--app-shell-never-scrolls-the-tree-does-894) | Web UI |
+| [Web — Context menu: Apply best-copy decisions to this group](#web--context-menu-apply-best-copy-decisions-to-this-group) | Web UI |
+| [Web — Context menu: stays inside the window (#897)](#web--context-menu-stays-inside-the-window-897) | Web UI |
+| [Web — Daylight theme and results-tree framing](#web--daylight-theme-and-results-tree-framing) | Web UI |
+| [Web — desktop shell (pywebview launcher)](#web--desktop-shell-pywebview-launcher) | Web UI |
+| [Web — Execute (only selected)](#web--execute-only-selected) | Web UI |
+| [Web — filesystem browse dialog](#web--filesystem-browse-dialog) | Web UI |
+| [Web — main result tree multi-selection](#web--main-result-tree-multi-selection) | Web UI |
+| [Web — manifest decision persistence](#web--manifest-decision-persistence) | Web UI |
+| [Web — overlay window geometry (movable / resizable / persisted)](#web--overlay-window-geometry-movable--resizable--persisted) | Web UI |
+| [Web — preview panel resizable + persistence](#web--preview-panel-resizable--persistence) | Web UI |
+| [Web — result-tree column sort and resize persistence](#web--result-tree-column-sort-and-resize-persistence) | Web UI |
+| [Web — scan dialog invalid source path](#web--scan-dialog-invalid-source-path) | Web UI |
+| [Web — scan dialog: subfolders by default, empty result stays open](#web--scan-dialog-subfolders-by-default-empty-result-stays-open) | Web UI |
+| [Web — scan progress throughput / ETA / localized stages (#740)](#web--scan-progress-throughput--eta--localized-stages-740) | Web UI |
+| [Web — scan progress, skips and errors in the app log](#web--scan-progress-skips-and-errors-in-the-app-log) | Web UI |
+| [Web — scan SSE connection-drop watchdog (#661)](#web--scan-sse-connection-drop-watchdog-661) | Web UI |
+| [Web — ScanDialog source/output persistence](#web--scandialog-sourceoutput-persistence) | Web UI |
+| [Web — settings dialog](#web--settings-dialog) | Web UI |
+| [Web — sort by decision (Action header)](#web--sort-by-decision-action-header) | Web UI |
+<!-- features-index:end -->
 
 ---
 
 ### Bulk regex — remove from list (deferred decision)
+- **Area:** Bulk operations
 
 - **Entry point:** The Set Action dialog's action combo (`action-action-combo`, [frontend/src/components/action/ActionDialog.tsx](../frontend/src/components/action/ActionDialog.tsx)) — its **Skip** option (catalog key `web.decision.remove_from_list`, wire value `__ignore__`). The dialog opens from the toolbar's **Set Action…**, the menu bar's **Action → Set Action by Field…**, or a row's right-click **Set Action by Field…** — see [Web — Action dialog (Set Action by Field)](#web--action-dialog-set-action-by-field).
 - **Trigger:** Build a match (field + pattern), pick **Skip** as the action, click **Apply**.
@@ -123,6 +135,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Context menu — Lock / Unlock
+- **Area:** Context menu
 
 - **Entry point:** The file-row right-click menu of the main result tree ([frontend/src/components/ContextMenu.tsx](../frontend/src/components/ContextMenu.tsx)) shows **Lock** (`ctx-lock`) or **Unlock** (`ctx-unlock`) according to the right-clicked row's current state. The same flag is reachable from each row's padlock in the Lock column (`row-lock-{group}-{name}`, [frontend/src/components/result/LockToggle.tsx](../frontend/src/components/result/LockToggle.tsx)), from the Execute dialog's row menu ([frontend/src/components/execute/ExecuteContextMenu.tsx](../frontend/src/components/execute/ExecuteContextMenu.tsx)), and from the Set Action dialog's **Lock** / **Unlock** actions (wire values `__lock__` / `__unlock__`).
 - **Trigger:** Right-click a file row (single, or part of a multi-selection) and pick **Lock** or **Unlock**.
@@ -134,6 +147,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Context menu — Open Folder
+- **Area:** Context menu
 
 - **Entry point:** The file-row right-click menu of the main result tree — **Open folder** (`ctx-open-folder`, [frontend/src/components/ContextMenu.tsx](../frontend/src/components/ContextMenu.tsx)). It is not on the group-header menu or on the Execute dialog's row menu.
 - **Trigger:** Right-click a file row and pick **Open folder**.
@@ -145,6 +159,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Context menu — Set Action (per-file)
+- **Area:** Context menu
 
 - **Entry point:** The file-row right-click menu of the main result tree (`context-menu`, [frontend/src/components/ContextMenu.tsx](../frontend/src/components/ContextMenu.tsx)) — three decision items at its top. The Execute dialog's row menu ([frontend/src/components/execute/ExecuteContextMenu.tsx](../frontend/src/components/execute/ExecuteContextMenu.tsx)) carries the same three.
 - **Trigger:** Right-click a file row (single, or part of a multi-selection) and pick **Keep this file**, **Delete — move to Recycle Bin**, or **Skip now — drop from this review**.
@@ -156,6 +171,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Empty area context menu
+- **Area:** Context menu
 
 - **Entry point:** None as a feature. The app's own context menu (`context-menu`, [frontend/src/components/ContextMenu.tsx](../frontend/src/components/ContextMenu.tsx)) opens only from a right-click on a **file row** ([frontend/src/components/result/FileRow.tsx](../frontend/src/components/result/FileRow.tsx)) or a **group header** ([frontend/src/components/result/GroupRow.tsx](../frontend/src/components/result/GroupRow.tsx)); the tree's scroll container ([frontend/src/components/ResultTree.tsx](../frontend/src/components/ResultTree.tsx)), its column header and the menu bar carry no context-menu handler.
 - **Trigger:** The user right-clicks a non-row surface — the empty area below the last row, or the empty gap of the menu bar.
@@ -167,6 +183,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Empty-state action buttons
+- **Area:** Main window
 
 - **Entry point:** The main area's empty state (`main-empty-state`, rendered by [frontend/src/App.tsx](../frontend/src/App.tsx) in place of the result tree) — the primary **Scan…** (`main-empty-scan`) and the secondary **Open Manifest…** (`main-empty-open`).
 - **Trigger:** No manifest is loaded and none is loading — every fresh page load until a scan finishes or a manifest is opened.
@@ -178,6 +195,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — base flow
+- **Area:** Execute Action
 
 - **Entry point:** Menu bar **Action → Execute Action…** (`menu-action-execute`, [frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)) and the toolbar **Execute** button (`main-execute-button`, [frontend/src/components/Toolbar.tsx](../frontend/src/components/Toolbar.tsx)) — both disabled until a manifest is loaded — plus the toolbar's danger button **"⊗ Delete N files…"** (`main-delete-cta`, disabled while N is 0). All three call `store.openExecuteDialog()` ([frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts)) with no scope. The dialog is [frontend/src/components/execute/ExecuteDialog.tsx](../frontend/src/components/execute/ExecuteDialog.tsx), mounted once in [frontend/src/App.tsx](../frontend/src/App.tsx). The selection-scoped variant is [Web — Execute (only selected)](#web--execute-only-selected).
 - **Trigger:** User picks any of the three entry points.
@@ -217,6 +235,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — complete-group delete confirm
+- **Area:** Execute Action
 
 - **Entry point:** `DeleteConfirmDialog` ([frontend/src/components/dialogs/DeleteConfirmDialog.tsx](../frontend/src/components/dialogs/DeleteConfirmDialog.tsx), `execute-all-delete-confirm`). The Execute dialog's **Execute** and **Execute selected** handlers open it when `completeDeleteGroupIds(groups, scopePaths)` ([frontend/src/components/execute/ExecuteDialog.tsx](../frontend/src/components/execute/ExecuteDialog.tsx)) returns at least one group.
 - **Trigger:** User clicks **Execute** or **Execute selected** while at least one group would have every in-scope member deleted. The check runs in the browser before any request is sent.
@@ -246,6 +265,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — complete-group warning banner with jump-to
+- **Area:** Execute Action
 
 - **Entry point:** `AllDeleteBanner` ([frontend/src/components/execute/AllDeleteBanner.tsx](../frontend/src/components/execute/AllDeleteBanner.tsx), `execute-all-delete-banner`) above the Execute dialog's tree. `findAllDeleteGroupIds` in [frontend/src/components/execute/ExecuteDialog.tsx](../frontend/src/components/execute/ExecuteDialog.tsx) supplies the groups.
 - **Trigger:** Shown whenever at least one group in the dialog's scope is all-Delete under the active filter. It is recomputed on every decision, filter or scope change.
@@ -268,6 +288,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — dialog geometry persistence
+- **Area:** Execute Action
 
 - **Entry point:** The Execute dialog's header (`execute-title-bar`) doubles as a drag bar, and a bottom-right grip (`execute-resize-handle`) resizes it. Both come from `useOverlayGeometry("execute", …)` in [frontend/src/components/execute/ExecuteDialog.tsx](../frontend/src/components/execute/ExecuteDialog.tsx) — the shared mechanism documented in [Web — overlay window geometry (movable / resizable / persisted)](#web--overlay-window-geometry-movable--resizable--persisted).
 - **Trigger:** User drags the header or the grip. The saved geometry is applied every time the dialog opens, including after a page reload.
@@ -284,6 +305,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — lock-confirm dialog
+- **Area:** Execute Action
 
 - **Entry point:** `LockConfirmDialog` ([frontend/src/components/dialogs/LockConfirmDialog.tsx](../frontend/src/components/dialogs/LockConfirmDialog.tsx), `lock-confirm-dialog`), mounted once in [frontend/src/App.tsx](../frontend/src/App.tsx) and driven by `store.execute.lockConflict` (`{paths, op, originalPaths}`). It opens when a mutating request answers **409 `{"code": "locked_paths", "locked_paths": [...]}`**:
 
@@ -335,6 +357,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — preview pane
+- **Area:** Execute Action
 
 - **Entry point:** The `execute-preview-pane` panel to the right of the Execute dialog's tree ([frontend/src/components/execute/ExecuteDialog.tsx](../frontend/src/components/execute/ExecuteDialog.tsx)).
 - **Trigger:** Always shown while the dialog is open. Clicking a row makes it the preview target.
@@ -346,6 +369,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — partial execution via "Execute selected"
+- **Area:** Execute Action
 
 - **Entry point:** The **Execute selected** button (`execute-btn-execute-selected`) in the Execute dialog's footer, between Cancel and Execute (`handleExecuteSelected` in [frontend/src/components/execute/ExecuteDialog.tsx](../frontend/src/components/execute/ExecuteDialog.tsx)).
 - **Trigger:** User selects one or more rows in the dialog's tree and clicks the button.
@@ -368,6 +392,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — filter by action type (#502)
+- **Area:** Execute Action
 
 - **Entry point:** The **Show:** select (`execute-type-filter`, [frontend/src/components/execute/TypeFilter.tsx](../frontend/src/components/execute/TypeFilter.tsx)) in the Execute dialog's toolbar row. It has three options — **All decided** (default), **Delete only** and **Skip only** — whose wire values are `all` / `delete` / `ignore`. The labels are translated and use the Keep / Delete / Skip wording (copy audit E1).
 - **Trigger:** User changes the selection.
@@ -389,6 +414,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Execute Action — scope to selected groups (only-selected entry, #410, #430, #429)
+- **Area:** Execute Action
 
 - **Entry point:** Menu bar **Action → Execute Action (only selected)…** (`menu-action-execute-selected`), and the item with the same label in a file row's context menu (`ctx-execute-selected`, [#735](https://github.com/jackal998/photo-manager/issues/735), the web counterpart of [#429](https://github.com/jackal998/photo-manager/issues/429)). Full description: [Web — Execute (only selected)](#web--execute-only-selected).
 - **Trigger:** At least one row selected in the main result tree, with a manifest loaded. The menu-bar item is disabled otherwise.
@@ -402,6 +428,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Exit dirty-flag prompt
+- **Area:** Main window
 
 - **Entry point:** None — removed with the desktop client in #646.
 - **Trigger:** None on the web.
@@ -413,6 +440,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Singleton-prune offer after destructive ops (#426)
+- **Area:** Execute Action
 
 - **Entry point:** `store.maybeOfferPrune` ([frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts)). It runs at the end of every successful `executeDecisions` (Execute / Execute selected) and every finalizing `removeFromList`: **Skip** from the Execute dialog's row menu, the main-tree context menu, or **List → Skip Selected now**.
   - **Dialogs.** `PruneConfirmDialog` ([frontend/src/components/dialogs/PruneConfirmDialog.tsx](../frontend/src/components/dialogs/PruneConfirmDialog.tsx), `prune-confirm-dialog`) and, for locked singletons, the [lock-confirm dialog](#execute-action--lock-confirm-dialog) with `op="prune"`.
@@ -450,6 +478,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Keep-worthiness scoring
+- **Area:** Review
 
 - **Entry point:** The **Score** column of the main result tree — the fourth column, after File Name / Similarity / Action ([frontend/src/lib/resultColumns.ts](../frontend/src/lib/resultColumns.ts)). [frontend/src/components/result/FileRow.tsx](../frontend/src/components/result/FileRow.tsx) renders the score to two decimals (`—` when it is null) under a small "keep" label, over a mini bar. `GET /api/manifest` returns every group's rows score-descending, so with no column sort active the best copy is at the top of every group.
 - **Trigger:** Automatic — every scanned file is scored at scan time and the score is stored in the manifest; no user action. `ManifestRepository.rescore(manifest_path, weights)` recomputes the scores from the cached raw signals without re-scanning (no file I/O); it is a repository method with no web UI or API entry point.
@@ -462,6 +491,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Language switch
+- **Area:** i18n
 
 - **Entry point:** Three controls that all call `setLocale` in the i18n store ([frontend/src/i18n/useI18nStore.ts](../frontend/src/i18n/useI18nStore.ts)): the toolbar toggle `main-lang-toggle` ([frontend/src/components/Toolbar.tsx](../frontend/src/components/Toolbar.tsx)), labelled `EN` when English is active and `中` when 繁體中文 is; below 1100px of toolbar width, where that toggle folds away, the toolbar **⋯** menu's **Language** items `main-overflow-lang-en` / `main-overflow-lang-zh` ([#918](https://github.com/jackal998/photo-manager/issues/918)); and the menu bar's **View > Language** items `menu-view-lang-en` ("English") and `menu-view-lang-zh` ("中文 (繁體)") ([frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)).
 - **Trigger:** A click on the toggle (it cycles `en` ↔ `zh_TW`), or picking a locale under View > Language.
@@ -480,6 +510,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### List menu — Remove from List
+- **Area:** Menus
 
 - **Entry point:** Menu bar **List > Skip Selected now** ([frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)), handled by `handleRemoveFromListSelected` in [frontend/src/App.tsx](../frontend/src/App.tsx).
 - **Trigger:** User selects one or more file rows in the result tree and picks **List > Skip Selected now**.
@@ -493,6 +524,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Log menu
+- **Area:** Menus
 
 - **Entry point:** None — removed with the desktop client in #646. The web menu bar has File / Action / List / View only ([frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)), and the web API has no log endpoint.
 - **Trigger:** None.
@@ -504,6 +536,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Main window — close-during-scan confirm
+- **Area:** Main window
 
 - **Entry point:** `useBeforeUnloadGuard` ([frontend/src/hooks/useBeforeUnloadGuard.ts](../frontend/src/hooks/useBeforeUnloadGuard.ts)), mounted once in `App`; the backend's cooperative cancel `POST /api/scan/{id}/cancel` ([app/web/routes/scan.py](../app/web/routes/scan.py)) and the app's shutdown lifespan ([app/web/main.py](../app/web/main.py)).
 - **Trigger:** The user reloads, navigates away from or closes the page while `scan.status === "running"`; or closes the desktop-shell window while a scan runs.
@@ -515,6 +548,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Main window — column order/width persistence
+- **Area:** Main window
 
 - **Entry point:** The resize handle on the right edge of each result-tree column header ([frontend/src/components/result/ColumnHeaderRow.tsx](../frontend/src/components/result/ColumnHeaderRow.tsx)), persisted by [frontend/src/lib/columnWidths.ts](../frontend/src/lib/columnWidths.ts).
 - **Trigger:** User drags a column's resize handle, or double-clicks it.
@@ -526,6 +560,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Main window — geometry + splitter persistence
+- **Area:** Main window
 
 - **Entry point:** The drag handle between the result tree and the preview pane (`preview-resize-handle`, [frontend/src/App.tsx](../frontend/src/App.tsx)) and the title bars / corner grips of the full-res viewer, Execute dialog and Set Action dialog. The desktop-shell window itself is created by [launcher.py](../launcher.py).
 - **Trigger:** User drags the tree/preview boundary, or moves / resizes one of those overlays.
@@ -537,6 +572,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — preview panel resizable + persistence
+- **Area:** Web UI
 
 - **Entry point:** Drag handle (`data-testid="preview-resize-handle"`) between the result tree and the preview pane in [`frontend/src/App.tsx`](../frontend/src/App.tsx), wired to `store.setPreviewWidth` in [`frontend/src/store/useAppStore.ts`](../frontend/src/store/useAppStore.ts) and the persistence helpers in [`frontend/src/lib/panelWidths.ts`](../frontend/src/lib/panelWidths.ts).
 - **Trigger:** User drags the thin vertical grabber between the result tree and the preview pane. Restores the persisted width on every page load.
@@ -549,6 +585,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — overlay window geometry (movable / resizable / persisted)
+- **Area:** Web UI
 
 - **Entry point:** one shared mechanism — the drag/resize/clamp hook [`frontend/src/hooks/useOverlayGeometry.ts`](../frontend/src/hooks/useOverlayGeometry.ts), the persistence helpers [`frontend/src/lib/overlayGeometry.ts`](../frontend/src/lib/overlayGeometry.ts), and the corner grip [`frontend/src/components/ui/overlay-resize-handle.tsx`](../frontend/src/components/ui/overlay-resize-handle.tsx). Applied to three surfaces: the full-resolution viewer ([`FullResViewer.tsx`](../frontend/src/components/FullResViewer.tsx), ids `fullres-title-bar` / `fullres-resize-handle`), the Execute Action dialog ([`execute/ExecuteDialog.tsx`](../frontend/src/components/execute/ExecuteDialog.tsx), `execute-title-bar` / `execute-resize-handle`; its title reads **"Execute Actions — Review"** since the 2026-09-14 copy audit (E6) — the dropped "— Review" half is what names the dialog as a gate before destruction) and the Set Action dialog ([`action/ActionDialog.tsx`](../frontend/src/components/action/ActionDialog.tsx), `action-title-bar` / `action-resize-handle`).
 - **Trigger:** User drags an overlay's title bar to move it, or its bottom-right corner grip to resize it. The geometry is restored every time that overlay is opened, including after a page reload.
@@ -564,6 +601,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Main window — keyboard navigation
+- **Area:** Main window
 
 - **Entry point:** The main result tree's scroll container (`main-result-tree`, `role="tree"`, `tabIndex=0`, [frontend/src/components/ResultTree.tsx](../frontend/src/components/ResultTree.tsx)) for the arrow-key cursor, and a document-level hook ([frontend/src/hooks/useDecisionShortcuts.ts](../frontend/src/hooks/useDecisionShortcuts.ts), mounted once by [frontend/src/App.tsx](../frontend/src/App.tsx)) for the `d` / `k` decision shortcuts.
 - **Trigger:** With the tree focused, press ArrowDown / ArrowUp. Outside a text field and with no dialog or menu open, press bare `d` or `k`.
@@ -578,6 +616,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Main window — results tree double-click
+- **Area:** Main window
 
 - **Entry point:** File rows and group-header rows of the main result tree — `onDoubleClick` on [frontend/src/components/result/FileRow.tsx](../frontend/src/components/result/FileRow.tsx) and `onClick` on [frontend/src/components/result/GroupRow.tsx](../frontend/src/components/result/GroupRow.tsx), wired in [frontend/src/components/ResultTree.tsx](../frontend/src/components/ResultTree.tsx).
 - **Trigger:** The user double-clicks a file row, or clicks a group-header row.
@@ -589,6 +628,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Main window — row selection (no horizontal auto-scroll)
+- **Area:** Main window
 
 - **Entry point:** None — removed with the desktop client in #646.
 - **Trigger:** None.
@@ -600,6 +640,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Main window — sort persistence within session
+- **Area:** Main window
 
 - **Entry point:** The **File Name**, **Size** and (since [#923](https://github.com/jackal998/photo-manager/issues/923)) **Action** header cells of the result tree ([frontend/src/components/result/ColumnHeaderRow.tsx](../frontend/src/components/result/ColumnHeaderRow.tsx)), which call `store.toggleSort`; the chosen column and direction live in the `resultView` slice of [frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts).
 - **Trigger:** User clicks a sortable column header.
@@ -611,6 +652,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Main window — status bar baseline
+- **Area:** Main window
 
 - **Entry point:** The footer [frontend/src/components/StatusBar.tsx](../frontend/src/components/StatusBar.tsx): the resting message is testid `main-status-bar`, inside the 30 px strip `main-status-strip`; its text (`statusText`) is computed in [frontend/src/App.tsx](../frontend/src/App.tsx) and passed in.
 - **Trigger:** Always present; recomputed on every render from the `manifest` and `scan` store slices.
@@ -622,6 +664,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Open Manifest — base flow
+- **Area:** File operations
 
 - **Entry point:** Menu bar **File > Open Manifest…** (`menu-file-open`) and, while no manifest is loaded, the empty-state **Open Manifest…** button (`main-empty-open`, see [Empty-state action buttons](#empty-state-action-buttons)). Both open the in-page [Web — filesystem browse dialog](#web--filesystem-browse-dialog) (`FsBrowser`, `mode="file"`). A secondary route is the toolbar's manifest-path field (`main-manifest-input`) and its **Open** button (`main-manifest-open-button`) in [frontend/src/components/Toolbar.tsx](../frontend/src/components/Toolbar.tsx). That pair is the first thing the toolbar sheds on a narrow window, since the picker duplicates it.
 - **Trigger:** User confirms a file in the picker, or types a path and clicks **Open** or presses Enter.
@@ -634,6 +677,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Save Manifest Decisions — base flow
+- **Area:** File operations
 
 - **Entry point:** None — removed with the desktop client in #646. The web menu bar deliberately has no **File > Save Manifest Decisions…** item ([frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)).
 - **Trigger:** None.
@@ -645,6 +689,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — auto-select after scan
+- **Area:** Scan
 
 - **Entry point:** **Auto select after scan** checkbox (testid `scan-auto-select`) inside the Scan dialog's **Advanced settings** disclosure — [frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx). Sent as `auto_select_enabled` on `POST /api/scan` (`WebScanRequest`, [app/web/models.py](../app/web/models.py)) and applied by the scan pipeline ([core/app_service/scan_runner.py](../core/app_service/scan_runner.py)) with the helpers in [core/services/auto_select.py](../core/services/auto_select.py).
 - **Trigger:** User expands **Advanced settings**, ticks **Auto select after scan**, and starts the scan. The checkbox defaults **off** and is **not persisted** — it resets to off every time the dialog opens (the autotune checkbox is the only control in that panel that remembers its state).
@@ -656,6 +701,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — auto-select aggressive ("delete all others")
+- **Area:** Scan
 
 - **Entry point:** **Also mark all other files for delete** checkbox (testid `scan-aggressive-delete`), indented beneath **Auto select after scan** in the Scan dialog's **Advanced settings** — [frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx). Sent as `auto_select_aggressive_delete` on `POST /api/scan`; the eligible rows are chosen by `non_keepers_for_aggressive_delete` in [core/services/auto_select.py](../core/services/auto_select.py).
 - **Trigger:** User expands **Advanced settings**, ticks **Auto select after scan**, then ticks the indented sub-option, and starts the scan. Defaults **off**; not persisted (resets to off every time the dialog opens).
@@ -667,6 +713,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — stage / throughput / ETA progress (#424)
+- **Area:** Scan
 
 - **Entry point:** The backend half of scan progress: stage events emitted by the scan pipeline in [core/app_service/scan_runner.py](../core/app_service/scan_runner.py) (`_emit_stage` + `_StageTracker`) and streamed to the browser as SSE `stage` events by `SseScanBus.stage` in [app/web/routes/scan.py](../app/web/routes/scan.py). The panel that renders them inside the Scan dialog is documented under [Web — scan progress throughput / ETA / localized stages (#740)](#web--scan-progress-throughput--eta--localized-stages-740).
 - **Trigger:** Automatic while a scan runs — at every stage boundary and inside the hot loops.
@@ -678,6 +725,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — collapse Advanced Settings
+- **Area:** Scan
 
 - **Entry point:** **Advanced settings** disclosure (a native `<details>` / `<summary>`, testid `scan-advanced`) in the Scan dialog — [frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx).
 - **Trigger:** User clicks **Advanced settings** to expand or collapse the panel.
@@ -690,6 +738,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — folder list (no priority arrows)
+- **Area:** Scan
 
 - **Entry point:** The **Sources** list in the Scan dialog (testid `scan-source-list`) — rows rendered by [frontend/src/components/scan/SourceRow.tsx](../frontend/src/components/scan/SourceRow.tsx), list and ordering in [frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx).
 - **Trigger:** Always — applies to every interaction with the source list.
@@ -701,6 +750,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — exiftool workers (setting-only)
+- **Area:** Scan
 
 - **Entry point:** `scan.exif_workers` key in `settings.json` — read by `WebScanRequest.resolved_with()` ([app/web/models.py](../app/web/models.py)) at the start of every `POST /api/scan` that does not carry its own `exif_workers` (the Scan dialog never sends one), then clamped by `ScanConfig` ([core/app_service/dtos.py](../core/app_service/dtos.py)).
 - **Trigger:** Always — resolved on every scan start.
@@ -712,6 +762,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — read-knee autotune opt-out
+- **Area:** Scan
 
 - **Entry point:** **Auto-tune reader concurrency (experimental)** checkbox (testid `scan-autotune`) in the Scan dialog's **Advanced settings** — [frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx); the same preference is also a checkbox in the Settings dialog ([frontend/src/components/SettingsDialog.tsx](../frontend/src/components/SettingsDialog.tsx)). Sent as `autotune_read_knee` on `POST /api/scan`; the ramp runs in [core/app_service/scan_runner.py](../core/app_service/scan_runner.py), with the measurement logic in [scanner/autotune.py](../scanner/autotune.py).
 - **Trigger:** Autotune runs by **default** on every scan — no action needed. To use the static reader count instead, expand **Advanced settings** and untick the checkbox. The choice persists as `ui.scan_dialog.autotune_read_knee` ([#743](https://github.com/jackal998/photo-manager/issues/743)): read when the dialog opens (on when unset) and written back on **Start Scan**.
@@ -723,6 +774,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — hash pool mode
+- **Area:** Scan
 
 - **Entry point:** `scan.hash_pool` key in `settings.json` (power-user escape hatch, default `"auto"`) — resolved by `WebScanRequest.resolved_with()` ([app/web/models.py](../app/web/models.py)) on every `POST /api/scan` that leaves `hash_pool` unset (the Scan dialog never sets it), and acted on by the HASH stage in [core/app_service/scan_runner.py](../core/app_service/scan_runner.py). There is no user-facing control: calibration is always on ([#560](https://github.com/jackal998/photo-manager/issues/560)).
 - **Trigger:** Always — resolved on every scan start.
@@ -737,6 +789,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — hash workers (NAS-aware auto, no UI control)
+- **Area:** Scan
 
 - **Entry point:** None in the UI — the Scan dialog has no worker-count control. Per-device counts come from [`scanner/workers.py`](../scanner/workers.py) `hash_workers_for_root` and are applied by the HASH stage in [core/app_service/scan_runner.py](../core/app_service/scan_runner.py); device identity comes from `device_key` in [infrastructure/device_key.py](../infrastructure/device_key.py) (re-exported by `scanner/workers.py`).
 - **Trigger:** Computed fresh from the scanned files' devices at the start of every HASH stage; no manual override.
@@ -749,6 +802,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan dialog — multi-source scan
+- **Area:** Scan
 
 - **Entry point:** The **Sources** rows and the **+ Add source** button (testid `scan-add-source-button`) in the Scan dialog — [frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx), rows in [frontend/src/components/scan/SourceRow.tsx](../frontend/src/components/scan/SourceRow.tsx).
 - **Trigger:** User clicks **+ Add source** to append a blank row, then types a **Label** and a **Path** — or clicks that row's **Browse…** to pick a folder in the in-app filesystem picker (`FsBrowser` in directory mode, opened over the still-open Scan dialog; see [Web — filesystem browse dialog](#web--filesystem-browse-dialog)). Repeats for as many sources as needed, and leaves **Recursive** ticked (the default, #896) or unticks it per source.
@@ -760,6 +814,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan flow — manifest summary in progress log
+- **Area:** Scan
 
 - **Entry point:** `print_summary()` in [scanner/manifest.py](../scanner/manifest.py) — called by the scan pipeline ([core/app_service/scan_runner.py](../core/app_service/scan_runner.py)) with its stdout captured; each line goes out as an SSE `log` event and shows in the Scan dialog's running-state log pane (testid `scan-progress-log`, [frontend/src/components/scan/ScanProgress.tsx](../frontend/src/components/scan/ScanProgress.tsx)).
 - **Trigger:** A scan that found files finishes scoring (and auto-select, when on); the summary is emitted just before the manifest WRITE stage.
@@ -771,6 +826,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan walk — skip-on-error traversal
+- **Area:** Scan
 
 - **Entry point:** `_iter_tree` in [scanner/walker.py](../scanner/walker.py) — the directory traversal primitive behind the WALK stage.
 - **Trigger:** Fires automatically during every scan when the walker descends into a source tree that contains an inaccessible entry — typically a broken symlink / junction reparse point (e.g. `node_modules\.bin\acorn`).
@@ -782,6 +838,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan walk — recycle-bin / system folders are never walked
+- **Area:** Scan
 
 - **Entry point:** `has_skip_directory_ancestor` + `SKIP_DIRECTORIES` in [scanner/walker.py](../scanner/walker.py) / [scanner/media.py](../scanner/media.py) — the per-path guard in the WALK stage.
 - **Trigger:** Fires automatically during every scan, for every candidate media file whose path has an ancestor directory named (case-insensitively) `$RECYCLE.BIN`, `System Volume Information`, `.Trashes`, `.Trash`, or `#recycle`.
@@ -793,6 +850,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan flow — rescan confirm
+- **Area:** Scan
 
 - **Entry point:** `RescanConfirmDialog` ([frontend/src/components/dialogs/RescanConfirmDialog.tsx](../frontend/src/components/dialogs/RescanConfirmDialog.tsx)), a nested modal portaled over the still-open Scan dialog ([frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx)). Wrapper testid `scan-rescan-confirm-dialog`.
 - **Trigger:** User clicks **Start Scan** while the loaded manifest has pending decisions. `ScanDialog` counts every loaded-manifest row whose `user_decision` is non-empty (**Delete** or **Skip** — **Keep** is the default `""` and never counts) and gates **Start Scan** behind the dialog only when that count is `> 0`; with zero staged decisions the scan starts immediately, no confirm.
@@ -804,6 +862,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan flow — visual selection of KEEP rows after scan
+- **Area:** Scan
 
 - **Entry point:** The post-scan manifest load in [frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx) → `loadManifest(path, { selectKeepers })` in [frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts) → the one-shot keeper scroll in [frontend/src/components/ResultTree.tsx](../frontend/src/components/ResultTree.tsx).
 - **Trigger:** A scan run with **Auto select after scan** on finishes. The dialog loads the new manifest automatically and closes — there is no separate Close & Load step.
@@ -815,6 +874,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Scan grouping — complementary RAW + lossy pair
+- **Area:** Scan
 
 - **Entry point:** The result tree after a scan — a RAW original and its lossy export now appear as **one review group** instead of two files the tree never shows. Classifier: [scanner/dedup.py](../scanner/dedup.py) `_classify_format_group` / `_complementary_edges`.
 - **Trigger:** A scan finds two or more files with an **identical** pHash where at least one is RAW (`.dng` / `.cr2` / `.cr3` / `.nef` / `.arw` / `.raf` / `.rw2` / `.tif` / `.tiff` — the extensions [scanner/media.py](../scanner/media.py) `get_file_type` maps to `raw`) — i.e. a RAW plus its JPEG/HEIC export, or a CR2 plus its DNG conversion. No user action.
@@ -827,6 +887,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Set Action dialog — dual-section Simple + Regex view
+- **Area:** Set Action dialog
 
 - **Entry point:** The string-field body of the Set Action dialog: [frontend/src/components/action/RegexPanel.tsx](../frontend/src/components/action/RegexPanel.tsx) (Simple row + Regex row), mounted by [frontend/src/components/action/ActionDialog.tsx](../frontend/src/components/action/ActionDialog.tsx) whenever the selected field is not numeric. The rest of the dialog (how to open it, the action combo, Recent, the delete-confirm and lock-confirm flows) is described in [Web — Action dialog (Set Action by Field)](#web--action-dialog-set-action-by-field).
 - **Trigger:** The dialog is open with a string field selected: File Name (the default), Folder, Resolution, Action or Lock. Both rows are always shown together. There is no mode toggle.
@@ -848,6 +909,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Set Action dialog — live preview + validation
+- **Area:** Set Action dialog
 
 - **Entry point:** The match counter, error line and Preview list in [frontend/src/components/action/ActionDialog.tsx](../frontend/src/components/action/ActionDialog.tsx); the regex check in [frontend/src/components/action/RegexPanel.tsx](../frontend/src/components/action/RegexPanel.tsx); the dry run of `POST /api/action/bulk-decide` with `preview: true` ([app/web/routes/action.py](../app/web/routes/action.py) → `bulk_decide` in [core/app_service/action_service.py](../core/app_service/action_service.py)).
 - **Trigger:** Any change of field or pattern: the Simple row, the Regex row, a cheatsheet chip, a Recent pick, or a numeric-panel input. The request fires 300 ms after the last change. Nothing is requested while the pattern is empty. Changing only the action combo does not re-run it.
@@ -865,6 +927,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Set Action dialog — numeric comparison panel
+- **Area:** Set Action dialog
 
 - **Entry point:** [frontend/src/components/action/NumericPanel.tsx](../frontend/src/components/action/NumericPanel.tsx) (`action-numeric-row`). It replaces the Simple + Regex rows when the field is numeric. The server resolves it with `resolve_matched_paths` → `select_paths_by_threshold` / `select_paths_top_n` in [core/app_service/action_resolve.py](../core/app_service/action_resolve.py).
 - **Trigger:** Picking one of the six numeric fields: Size (Bytes), Group Count, Similarity, Score, Creation Date or Shot Date. One dialog component serves every entry point (toolbar, menu bar, row right-click, Execute dialog row menu), so every route reaches the panel.
@@ -893,6 +956,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Set Action dialog — Score / Lock / Resolution fields
+- **Area:** Set Action dialog
 
 - **Entry point:** The Field combo (`action-field-combo`) in [frontend/src/components/action/ActionDialog.tsx](../frontend/src/components/action/ActionDialog.tsx). The field → record-attribute mapping lives in [core/app_service/action_resolve.py](../core/app_service/action_resolve.py) (`_FIELD_TO_ATTR`, `_get_record_field`, `_numeric_value_for`).
 - **Trigger:** User opens the dialog from any entry point and expands the Field combo.
@@ -908,6 +972,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Set Action dialog — geometry persistence
+- **Area:** Set Action dialog
 
 - **Entry point:** The shared overlay-geometry mechanism: `useOverlayGeometry("action", …)` in [frontend/src/components/action/ActionDialog.tsx](../frontend/src/components/action/ActionDialog.tsx), the persistence helpers in [frontend/src/lib/overlayGeometry.ts](../frontend/src/lib/overlayGeometry.ts), the title bar `action-title-bar` and the corner grip `action-resize-handle`. The full behaviour is described in [Web — overlay window geometry (movable / resizable / persisted)](#web--overlay-window-geometry-movable--resizable--persisted).
 - **Trigger:** User drags the dialog's title bar (move) or its bottom-right grip (resize).
@@ -919,6 +984,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — Action dialog (Set Action by Field)
+- **Area:** Web UI
 
 - **Entry point:** Toolbar `main-action-button` ("Set Action…", key `web.toolbar.set_action` — it used to borrow the dialog's own title key, whose value is the longer "Set Action by Field"; copy audit T1) — disabled when `manifest.path === null`; enabled once a scan result is loaded. `onClick` dispatches `store.openActionDialog()`. **Also reachable from the row right-click (#735):** the result-tree file-row context menu's `ctx-set-action-by-field` item (and the group-row reduced menu's item of the same testid) call `store.openActionDialog(initialField?)` — see [Web — main result tree multi-selection](#web--main-result-tree-multi-selection) for the menu itself.
 - **Trigger:** User clicks the toolbar "Set Action…" button, picks menu bar **Action → "Set Action by Field…"** (the menu entry used to read "Set Action by Regex", disagreeing with this dialog's own title and with the right-click entry — regex is one of its three modes; copy audit M1), or right-clicks a file/group row and picks "Set Action by Field…". The `action-dialog` (`<dialog>` / Radix `DialogContent`) mounts when `store.action.actionDialogOpen === true`.
@@ -946,6 +1012,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — main result tree multi-selection
+- **Area:** Web UI
 
 - **Entry point:** File rows in the main result tree (`main-result-tree` → `FileRow`, [frontend/src/components/result/FileRow.tsx](../frontend/src/components/result/FileRow.tsx)) and the row right-click context menu (`context-menu` → [frontend/src/components/ContextMenu.tsx](../frontend/src/components/ContextMenu.tsx)). Selection state lives in the store's `selection` slice ([frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts)).
 - **Trigger:** The user left-clicks rows (plain / Ctrl·Cmd / Shift) to build a selection, then right-clicks one to act on it.
@@ -962,6 +1029,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — Context menu: Apply best-copy decisions to this group
+- **Area:** Web UI
 
 - **Entry point:** TWO surfaces over one store action (`useAppStore.applyBestCopy`) — (1) the `ctx-apply-best-copy` menu item in BOTH the file-row and group-row context menus ([frontend/src/components/ContextMenu.tsx](../frontend/src/components/ContextMenu.tsx)), and (2) since layout slice G, a visible **"Keep best · delete rest"** button at the right end of every group header (`group-keep-best-{group}` — deliberately NOT prefixed `row-group-`, which the qa helpers count and traverse the tree by, [frontend/src/components/result/GroupRow.tsx](../frontend/src/components/result/GroupRow.tsx)). Both reach `POST /api/action/apply-best-copy` ([app/web/routes/action.py](../app/web/routes/action.py)) → `core.app_service.action_service.apply_best_copy` ([core/app_service/action_service.py](../core/app_service/action_service.py)).
 - **Trigger:** User right-clicks a file row OR a group-header row and picks "Apply best-copy decisions to this group", or clicks the group header's **Keep best · delete rest** button. Acts on the right-clicked row/group's OWN `group_number`, independent of the current multi-selection (`targetPaths`) and independent of file-vs-group variant. **Both surfaces are disabled while the toolbar filter is active** (layout slice TB), with the tooltip "Clear the filter to use Keep best" / 「清除篩選後才能使用保留最佳」 (`web.tree.keep_best_filtered`): the write is server-side and scoped by `group_number`, so under a filter it would mark rows the user cannot see while the group header shows the FILTERED count right beside the button. Disabled rather than re-scoped to the visible rows — picking a "best" copy from a subset is a different decision, and a silently wrong one. Open questions Q5 promoted the action onto the header because it is the fast path through the entire screen and «a right-click action is invisible to the users who most need it».
@@ -974,6 +1042,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — Context menu: stays inside the window (#897)
+- **Area:** Web UI
 
 - **Entry point:** The result-tree row context menu, both variants — [frontend/src/components/ContextMenu.tsx](../frontend/src/components/ContextMenu.tsx) (`context-menu`) — and the Execute dialog's row menu ([frontend/src/components/execute/ExecuteContextMenu.tsx](../frontend/src/components/execute/ExecuteContextMenu.tsx)). Both measure through [frontend/src/hooks/useMenuPlacement.ts](../frontend/src/hooks/useMenuPlacement.ts) and are placed by the pure [frontend/src/lib/menuPlacement.ts](../frontend/src/lib/menuPlacement.ts) `placeMenu`.
 - **Trigger:** Right-clicking a file row or group header anywhere in the window, including near its bottom or right edge, or in a short window.
@@ -985,6 +1054,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — Execute (only selected)
+- **Area:** Web UI
 
 - **Entry point:** Menu bar **Action → "Execute Action (only selected)…"** (`menu-action-execute-selected` → [frontend/src/components/MenuBar.tsx](../frontend/src/components/MenuBar.tsx)) — the label uses the full "Execute Action…" form, which the right-click entry already used (copy audit M2), wired from [frontend/src/App.tsx](../frontend/src/App.tsx) to the store's `openExecuteDialog(scopePaths)` ([frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts)). **Second entry point (#735):** the result-tree file-row context menu's `ctx-execute-selected` item ("Execute Action (only selected)…") invokes the identical handler — a *distinct DOM element* from the menu-bar entry, both calling the same `handleExecuteSelectedOnly` in `App.tsx`. Absent from the group-row reduced menu (group-only right-clicks stay on the menu-bar path).
 - **Trigger:** From the menu bar, the entry requires ≥1 row already selected (cluster-D1 multi-selection) and is **disabled** otherwise. From a file row's context menu the entry has no separate gate — right-clicking a file row always establishes at least that one row as the selection first (the target-resolution rule, see [Web — main result tree multi-selection](#web--main-result-tree-multi-selection)), so a non-empty selection is guaranteed by the time the item is clickable.
@@ -1000,6 +1070,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — ScanDialog source/output persistence
+- **Area:** Web UI
 
 - **Entry point:** The Scan dialog ([frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx)) reads/writes the allowlisted `sources.list` / `sources.output` keys via `GET` / `PATCH /api/settings` ([app/web/routes/settings.py](../app/web/routes/settings.py)).
 - **Trigger:** Automatic — the source list + output path are loaded when the dialog opens and saved when the user clicks **Start Scan**.
@@ -1015,6 +1086,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — scan dialog: subfolders by default, empty result stays open
+- **Area:** Web UI
 
 - **Entry point:** [frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx) — `blankSource()` / `sourcesFromSettings()` (the per-row **Recursive** checkbox) and the scan-finished effect + `scan-empty-message` line.
 - **Trigger:** Opening the Scan dialog or adding a source row; a scan that ends with the `completed_empty` SSE event (the walk found no media files).
@@ -1028,6 +1100,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — app shell never scrolls; the tree does (#894)
+- **Area:** Web UI
 
 - **Entry point:** The root element of the app shell ([frontend/src/App.tsx](../frontend/src/App.tsx)) — `h-screen overflow-hidden flex flex-col` wrapping MenuBar, the header toolbar, `<main>` and the footer status bar.
 - **Trigger:** Browsing a loaded manifest — selecting a row, scrolling the result list, resizing the window.
@@ -1039,6 +1112,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — result-tree column sort and resize persistence
+- **Area:** Web UI
 
 - **Entry point:** The main result tree ([frontend/src/components/ResultTree.tsx](../frontend/src/components/ResultTree.tsx)) gained a sticky column-header row ([frontend/src/components/result/ColumnHeaderRow.tsx](../frontend/src/components/result/ColumnHeaderRow.tsx)) with clickable **File Name** / **Size** sort cells and a right-edge resize handle on every metadata column. The column registry + sort comparators live in [frontend/src/lib/resultColumns.ts](../frontend/src/lib/resultColumns.ts).
 - **Trigger:** User clicks a sortable column header (sort) or drags a column's right-edge resize handle (width).
@@ -1053,6 +1127,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — sort by decision (Action header)
+- **Area:** Web UI
 
 - **Entry point:** The **Action** column header in the result tree ([ColumnHeaderRow.tsx](../frontend/src/components/result/ColumnHeaderRow.tsx)) is the canonical control. **View → Sort by action** in the menu bar ([MenuBar.tsx](../frontend/src/components/MenuBar.tsx)) mirrors it with **Keep first**, **Delete first** and **Clear sort**. The order and its rules live in [lib/decisionSort.ts](../frontend/src/lib/decisionSort.ts); the state lives in the `resultView` store slice.
 - **Trigger:** The user clicks the Action header, or picks an entry in View → Sort by action.
@@ -1078,6 +1153,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — manifest decision persistence
+- **Area:** Web UI
 
 - **Entry point:** Any per-row decision in the main result tree — the `DecisionControl` button row (three direct-click buttons **Keep / Delete / Skip** — 保留 / 刪除 / 略過 — for the wire values `""` / `"delete"` / `"ignore"`; one click stages the decision with no menu to open, #744; each segment carries the long form in its tooltip) ([frontend/src/components/result/DecisionControl.tsx](../frontend/src/components/result/DecisionControl.tsx)) or the right-click **Set Action** items — calls `store.setDecision` → `PATCH /api/decision` → `ManifestRepository.batch_update_decisions` ([infrastructure/manifest_repository.py](../infrastructure/manifest_repository.py)).
 - **Trigger:** Automatic — every staged keep/delete/ignore decision is persisted the instant it is made.
@@ -1089,6 +1165,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — scan dialog invalid source path
+- **Area:** Web UI
 
 - **Entry point:** The scan dialog's source-path field ([frontend/src/components/scan/SourceRow.tsx](../frontend/src/components/scan/SourceRow.tsx)) + **Start Scan** ([frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx)).
 - **Trigger:** Starting a scan whose source path does not exist. (A path that exists but is a **file** is not caught here: the walker only checks existence, the directory listing of a file fails, is logged as an unreadable directory and skipped, so that source contributes no files.)
@@ -1100,6 +1177,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — scan progress throughput / ETA / localized stages (#740)
+- **Area:** Web UI
 
 - **Entry point:** The running-state panel inside the scan dialog ([frontend/src/components/scan/ScanProgress.tsx](../frontend/src/components/scan/ScanProgress.tsx)), fed by the SSE `stage` event's `files_per_sec` field (already captured in `ScanState.filesPerSec`, [frontend/src/store/useAppStore.ts](../frontend/src/store/useAppStore.ts)) and a receiver-computed ETA ([frontend/src/components/ScanDialog.tsx](../frontend/src/components/ScanDialog.tsx)). The backend half (stage emission and the throughput window) is under [Scan dialog — stage / throughput / ETA progress (#424)](#scan-dialog--stage--throughput--eta-progress-424).
 - **Trigger:** Automatic while a scan is running — every SSE `stage` event re-renders the panel.
@@ -1115,6 +1193,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — scan SSE connection-drop watchdog (#661)
+- **Area:** Web UI
 
 - **Entry point:** `useScanSSE` ([frontend/src/hooks/useScanSSE.ts](../frontend/src/hooks/useScanSSE.ts)), mounted once in `App` for the active scan's `taskId`.
 - **Behaviour:** While a scan streams, a client-side watchdog (90s) surfaces a `failed`-status error — *"Lost connection to the scanner. The scan may still be running on the server — reopen Scan to check the result."* — if the SSE stream goes fully silent, so a dead server no longer leaves the scan dialog frozen with no feedback (the error renders via the same `failed`-status surface as a real scan failure; the dialog stays open). The watchdog is reset by ANY incoming event, including a new **named `ping` keepalive** the backend emits every ~30s on an idle stream ([app/web/routes/scan.py](../app/web/routes/scan.py) `_KEEPALIVE_TIMEOUT_S`). This replaces the previous keepalive *comment*: SSE comments keep the socket warm but fire NO JS handler, so the client could not distinguish "healthy but quiet" (a slow NAS or a big file — legitimately many seconds between progress events) from "server dead". The `ping` yields from the async event loop, decoupled from the scan thread, so it keeps flowing while the server lives regardless of scan speed; it carries no `id`, leaving Last-Event-ID resume untouched. `onerror` is still left to native auto-reconnect (a transient blip recovers via Last-Event-ID replay — see [#687 web parity](#execute-action--partial-execution-via-execute-selected)); only a drop that outlasts the watchdog surfaces the error. The message says the scan *may still be running* because the backend scan runs on a server thread independent of the browser's connection (`disconnect ≠ cancel`).
@@ -1124,6 +1203,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — scan progress, skips and errors in the app log
+- **Area:** Web UI
 
 - **Entry point:** `SseScanBus.log` and the scan-thread body `_run_scan` in [app/web/routes/scan.py](../app/web/routes/scan.py); the rotating file sink is `init_logging` in [infrastructure/logging.py](../infrastructure/logging.py) (`<home>\AppData\Local\PhotoManager\logs\app_<YYYYMMDD>.log`, 10 MB rotation, 10-day retention), set up by [launcher.py](../launcher.py).
 - **Trigger:** Automatic during every web scan.
@@ -1135,6 +1215,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — desktop shell (pywebview launcher)
+- **Area:** Web UI
 
 - **Entry point:** [launcher.py](../launcher.py) (repo root) — the only entry point; `run.bat` and the packaged exe both call it.
 - **Trigger:** Any launch. Since #646 there is no second client to dispatch to, so the web shell boots unconditionally; `PHOTO_MANAGER_WEB` is accepted and ignored so an existing shell profile keeps working.
@@ -1146,6 +1227,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — settings dialog
+- **Area:** Web UI
 
 - **Entry point:** Toolbar `main-settings-button` ("Settings") — [frontend/src/App.tsx:374](../frontend/src/App.tsx#L374) — `onClick` calls `setSettingsOpen(true)`, mounting `SettingsDialog` ([frontend/src/components/SettingsDialog.tsx](../frontend/src/components/SettingsDialog.tsx)). Backed by `GET`/`PATCH /api/settings` ([app/web/routes/settings.py](../app/web/routes/settings.py)).
 - **Trigger:** User clicks the toolbar Settings button (always enabled, no manifest-loaded gate — unlike Execute/Set Action). Opening the dialog fires `loadSettings()`, which re-fetches current values every time (no stale cache across opens).
@@ -1162,6 +1244,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — filesystem browse dialog
+- **Area:** Web UI
 
 - **Entry point:** `FsBrowser` ([frontend/src/components/FsBrowser.tsx](../frontend/src/components/FsBrowser.tsx)), backed by `GET /api/fs/browse` ([app/web/routes/fs.py:12](../app/web/routes/fs.py#L12) → `core/app_service/fs_browse.py` `browse()`). The web's only filesystem picker — there is no native OS file dialog on the web port.
 - **Trigger:** Three flows mount it in three different `mode`s:
@@ -1176,6 +1259,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web — Daylight theme and results-tree framing
+- **Area:** Web UI
 
 - **Entry point:** [`frontend/src/index.css`](../frontend/src/index.css) — one `@theme` block holding every Daylight colour token; consumed as ordinary Tailwind utilities (`bg-app`, `border-hairline`, `text-ink`, `bg-group-band`, `bg-delete-row`, the `sim-*` badge trios) by [`App.tsx`](../frontend/src/App.tsx), [`MenuBar.tsx`](../frontend/src/components/MenuBar.tsx), [`ResultTree.tsx`](../frontend/src/components/ResultTree.tsx), the `components/result/` rows, and — since slice (e) — every remaining surface: the preview pane, both context menus, every dialog, and the shared `components/ui/*` primitives (`button`, `checkbox`, `dialog`, `select`, `progress`).
 - **Trigger:** Always on — there is no theme picker. The light "Daylight" palette is the web client's only theme.
@@ -1199,6 +1283,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Similarity column
+- **Area:** Review
 
 - **Entry point:** The **Similarity** column of the main result tree, right of File Name (header key `web.column.similarity`; the column order lives in [frontend/src/lib/resultColumns.ts](../frontend/src/lib/resultColumns.ts)), rendered per file row by [frontend/src/components/result/FileRow.tsx](../frontend/src/components/result/FileRow.tsx) from the `similarity` object that `GET /api/manifest` serializes for every row ([core/app_service/review_view.py](../core/app_service/review_view.py)). The preview pane repeats the same badge for the selected file, and a legend pinned to the bottom of the pane ([frontend/src/components/SimilarityLegend.tsx](../frontend/src/components/SimilarityLegend.tsx)) names the five states.
 - **Trigger:** Populated automatically when a manifest loads; no user action.
@@ -1218,6 +1303,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Preview pane — byte-budget LRU cache
+- **Area:** Preview pane
 
 - **Entry point:** `infrastructure/image_service.py`: `ImageService.__init__` and `_ByteBudgetLRUCache`. The web server creates one `ImageService` at start-up (`app/web/main.py` lifespan) and `GET /api/image` ([app/web/routes/image.py](../app/web/routes/image.py)) uses it.
 - **Trigger:** Every `GET /api/image` the web client makes. Result-tree row thumbnails, grid tiles, the preview-pane image and Execute-dialog thumbnails ask for `size=512`. The full-resolution viewer asks for `size=0`.
@@ -1241,6 +1327,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Preview pane — per-device request coordinator + 1-ahead prefetch
+- **Area:** Preview pane
 
 - **Entry point:** None — removed with the desktop client in #646. [#887](https://github.com/jackal998/photo-manager/issues/887) tracks measuring whether the web client needs one, and porting it if the NAS numbers say so.
 - **Trigger:** The desktop coordinator ran on every single-view preview and grid-thumbnail request.
@@ -1256,6 +1343,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Preview pane — full-resolution viewer
+- **Area:** Preview pane
 
 - **Entry point:** [frontend/src/components/FullResViewer.tsx](../frontend/src/components/FullResViewer.tsx). A single overlay is mounted in `App.tsx` and is open while `store.preview.fullResPath` is set (`store.openFullRes(path)` / `closeFullRes()`). The image comes from `GET /api/image?path=…&size=0` (`fullResUrl` in `frontend/src/api/client.ts`).
 - **Trigger:** Double-click on the preview pane's image (`preview-single-image`), on an image tile in the group grid, or on a file row in the result tree. Double-clicking a video in the preview pane or a video grid tile does nothing; double-clicking a video file ROW opens the overlay with a video player.
@@ -1275,6 +1363,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Preview pane — no-autoplay video default
+- **Area:** Preview pane
 
 - **Entry point:** [frontend/src/components/PreviewPane.tsx](../frontend/src/components/PreviewPane.tsx) (single-file `<video>`), [frontend/src/components/FullResViewer.tsx](../frontend/src/components/FullResViewer.tsx) (viewer `<video>`), [frontend/src/components/VideoTile.tsx](../frontend/src/components/VideoTile.tsx) (grid tiles).
 - **Trigger:** Selecting a video file row (single view), double-clicking a video file row (viewer), or selecting a group row that contains videos (grid view).
@@ -1289,6 +1378,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web preview pane — video transcode fallback (V2 H.264)
+- **Area:** Web UI
 
 - **Entry point:** `infrastructure/transcode_service.py` (`TranscodeService`, `_resolve_media_tool`, `_select_h264_encoder`); `.github/workflows/release.yml` + `pyinstaller.spec` (the bundled ffmpeg, #854); `app/web/routes/media.py` (`GET /api/media?transcode=h264`); `frontend/src/components/PreviewPane.tsx`; `frontend/src/components/FullResViewer.tsx`; `frontend/src/components/VideoTile.tsx`; `frontend/src/lib/videoCapabilities.ts` (#787 capability pre-check).
 - **Trigger:** The browser's `<video>` element fires an `error` event when the native codec cannot decode the source (e.g. HEVC on a browser without the OS H.265 codec pack). Since #787 a second, earlier trigger exists: the transcode `src` is chosen **up front**, with no failed attempt at all, when the capability pre-check has already established that this engine cannot decode HEVC.
@@ -1300,6 +1390,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web preview pane — video playback (V1 streaming)
+- **Area:** Web UI
 
 - **Entry point:** `app/web/routes/media.py` (`GET /api/media`); `frontend/src/components/PreviewPane.tsx`; `frontend/src/components/FullResViewer.tsx`.
 - **Trigger:** Selecting a file row whose `media_type === "video"` in the web result tree.
@@ -1311,6 +1402,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web preview pane — group grid view (multi-tile)
+- **Area:** Web UI
 
 - **Entry point:** `frontend/src/components/GroupGrid.tsx`; `frontend/src/components/VideoTile.tsx`; `frontend/src/components/ImageTile.tsx`; `frontend/src/store/` (`PreviewState.selectedGroupId`); `ResultTree.tsx` group-row click handler (`setSelectedGroup` + `toggleGroup`).
 - **Trigger:** Clicking a GROUP header row in the main result tree (the collapse-toggle button, `data-testid="row-group-{N}"`). A group-row click calls both `toggleGroup(groupNumber)` (expand/collapse) AND `setSelectedGroup(groupNumber)` (switches the PreviewPane to grid mode via `PreviewState.selectedGroupId`). Clicking a FILE row within the group switches back to single-file preview mode (`setSelectedGroup(null)` + `setSelectedFile(path)`).
@@ -1322,6 +1414,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web preview pane — title, image frame, metadata table, decision block
+- **Area:** Web UI
 
 - **Entry point:** [`frontend/src/components/PreviewPane.tsx`](../frontend/src/components/PreviewPane.tsx) — the whole single-file pane (`data-testid="preview-pane"`), with `preview-title`, `preview-info`, `preview-decision` (+ `-none` / `-delete` / `-ignore`) and `preview-keep-worthiness` inside it.
 - **Trigger:** Selecting a file row. With nothing selected the pane shows the same frame wearing the warm diagonal hatch plus "Select a file to preview" / 「選擇檔案以預覽」.
@@ -1334,6 +1427,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Web preview pane — group sync controller (GroupMediaController)
+- **Area:** Web UI
 
 - **Entry point:** `frontend/src/components/GroupMediaController.tsx`; `frontend/src/components/VideoTile.tsx` (register/unregister callbacks). Rendered by `GroupGrid.tsx` below the tile grid when `hasVideo` is true.
 - **Trigger:** Mounted automatically when the GroupGrid renders and at least one VideoTile is present. Each VideoTile registers itself with the controller when its `<video>` element is mounted (click-to-play) and unregisters on unmount.
@@ -1356,6 +1450,7 @@ update here whenever user-visible behaviour changes — see
 ---
 
 ### Developer tool — memory probe
+- **Area:** Scan
 
 - **Entry point:** `scripts/memory_probe.py` (`snapshot()`, `track_qt_alloc()`), gated by `PHOTO_MANAGER_MEMORY_PROBE=1`. **No call site remains in the shipped app.** The five measurement points, and the `--manifest` / `PHOTO_MANAGER_PROBE_MANIFEST` / `PHOTO_MANAGER_PROBE_RELOAD_COUNT` auto-load handling, lived in desktop-client modules deleted in #646.
 - **Trigger:** An explicit `snapshot(label, point)` call made while `PHOTO_MANAGER_MEMORY_PROBE=1`. Setting the variable before launching the web app records nothing, because nothing in `app/`, `core/`, `infrastructure/`, `scanner/` or `launcher.py` calls the probe.
@@ -1410,6 +1505,7 @@ Each feature is one section using this template:
 ```markdown
 ### <Feature name>
 
+- **Area:** <one value from AREA_VOCABULARY in scripts/gen_features_index.py>
 - **Entry point:** <UI location> — `<file:line>`
 - **Trigger:** <user action that activates it>
 - **Behaviour:** <1-3 sentences on expected UX>
@@ -1418,4 +1514,4 @@ Each feature is one section using this template:
 - **Last verified:** <PR # or YYYY-MM-DD>
 ```
 
-Keep the index table at the top alphabetised by feature name.
+The index table at the top is generated, not hand-edited: it lists every entry heading (case-insensitively sorted by feature name) with the entry's `Area` line. After adding or changing an entry, run `python scripts/gen_features_index.py`; `python scripts/gen_features_index.py --check` (CI job `features-index`) fails when the committed index is stale. The `Area` value must be one of the names in `AREA_VOCABULARY` in that script.
