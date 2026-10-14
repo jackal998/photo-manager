@@ -175,6 +175,9 @@ def test_missing_line_fails_and_lists_the_three_forms() -> None:
     rc, msg = _run("## What\n\nno declaration here")
     assert rc == 1
     assert "no `Docs impact:` line in the PR body" in msg
+    assert "a) a comma-separated list" in msg
+    assert "b) none — <reason>" in msg
+    assert "c) restructure — <reason>" in msg
 
 
 def test_empty_value_fails() -> None:
