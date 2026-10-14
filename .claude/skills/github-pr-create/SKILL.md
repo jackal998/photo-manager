@@ -111,6 +111,8 @@ exists to prevent.
   - c) `restructure — <reason>`, for a PR that moves or splits many entries:
     `Docs impact: restructure — split the Scan entries into two pages`.
   Separator `—`, `--` or `-`; the reason must be real, not `<reason>`.
+  A renamed entry must name both its old and its new heading (the old one
+  is deleted, the new one added).
 - **Issue link (from Step 1):** add a **`Closes #N` line** (one per issue
   the PR fully resolves) on its own line in the body so the issue
   auto-closes when the PR merges. `Closes` / `Fixes` / `Resolves` all

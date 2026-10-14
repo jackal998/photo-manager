@@ -85,25 +85,25 @@ def test_heading_text_containing_a_comma_is_one_entry() -> None:
 def test_named_entry_not_touched_fails_and_names_it() -> None:
     rc, msg = _run("Docs impact: Alpha feature", head=_touch_beta())
     assert rc == 1
-    assert "Alpha feature" in msg
+    assert "named but not touched by the diff: Alpha feature" in msg
 
 
 def test_touched_entry_not_named_fails_and_names_it() -> None:
     rc, msg = _run("Docs impact: Alpha feature", head=_touch_beta())
     assert rc == 1
-    assert "Beta feature, with comma" in msg
+    assert "touched but not named: Beta feature, with comma" in msg
 
 
 def test_unknown_entry_fails_and_names_it() -> None:
     rc, msg = _run("Docs impact: Gamma feature", head=_touch_alpha())
     assert rc == 1
-    assert "Gamma feature" in msg
+    assert "unknown entry: Gamma feature" in msg
 
 
 def test_template_placeholder_left_in_list_fails() -> None:
     rc, msg = _run("Docs impact: <entry heading or #slug>", head=_touch_alpha())
     assert rc == 1
-    assert "placeholder" in msg
+    assert "still holds a template placeholder" in msg
 
 
 def test_pure_deletion_inside_entry_counts_as_touch() -> None:
@@ -130,19 +130,20 @@ def test_none_accepts_each_separator(sep: str) -> None:
 def test_none_with_an_entry_touched_fails_and_names_it() -> None:
     rc, msg = _run("Docs impact: none — tidy wording", head=_touch_alpha())
     assert rc == 1
-    assert "Alpha feature" in msg
+    assert "`none` but the diff touches these docs/features.md entries:" in msg
+    assert "    Alpha feature" in msg
 
 
 def test_none_with_blank_reason_fails() -> None:
     rc, msg = _run("Docs impact: none —")
     assert rc == 1
-    assert "reason" in msg
+    assert "`none` has a blank reason" in msg
 
 
 def test_none_with_placeholder_reason_fails() -> None:
     rc, msg = _run("Docs impact: none — <reason>")
     assert rc == 1
-    assert "placeholder" in msg
+    assert "still holds a template placeholder" in msg
 
 
 def test_restructure_passes_with_many_entries_touched() -> None:
@@ -159,6 +160,7 @@ def test_restructure_passes_with_many_entries_touched() -> None:
 def test_restructure_with_blank_reason_fails() -> None:
     rc, msg = _run("Docs impact: restructure —", head=_touch_alpha())
     assert rc == 1
+    assert "`restructure` has a blank reason" in msg
 
 
 def test_index_only_edit_touches_no_entry() -> None:
@@ -172,18 +174,29 @@ def test_index_only_edit_touches_no_entry() -> None:
 def test_missing_line_fails_and_lists_the_three_forms() -> None:
     rc, msg = _run("## What\n\nno declaration here")
     assert rc == 1
-    assert "Docs impact:" in msg
-    assert "restructure" in msg
+    assert "no `Docs impact:` line in the PR body" in msg
 
 
 def test_empty_value_fails() -> None:
     rc, msg = _run("Docs impact:   ")
     assert rc == 1
+    assert "`Docs impact:` has no value" in msg
 
 
 def test_two_declaration_lines_fail() -> None:
     rc, msg = _run("Docs impact: none — tooling\nDocs impact: Alpha feature")
     assert rc == 1
+    assert "more than one `Docs impact:` line" in msg
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["**Docs impact:** none — CI gate only", "**Docs impact**: none — CI gate only"],
+)
+def test_bold_key_is_accepted(line: str) -> None:
+    rc, msg = _run(f"## What\n\n{line}\n")
+    assert rc == 0, msg
+    assert "none — CI gate only" in msg
 
 
 def test_crlf_body_parses() -> None:

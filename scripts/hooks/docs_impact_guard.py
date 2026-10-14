@@ -47,7 +47,10 @@ from scripts.gen_features_index import EntrySection, entry_sections
 
 DOC_PATH = "docs/features.md"
 
-_KEY_LINE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?docs impact[ \t]*:(.*)$", re.IGNORECASE)
+_KEY_LINE = re.compile(
+    r"^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?docs impact(?::\*\*|\*\*[ \t]*:|[ \t]*:)(.*)$",
+    re.IGNORECASE,
+)
 _KEYWORD_FORM = re.compile(r"(none|restructure)[ \t]*(?:—|--|-)[ \t]*(.*)", re.IGNORECASE)
 # An angle-bracketed token is a template placeholder: `<reason>`, `<entry>`.
 _PLACEHOLDER = re.compile(r"<[^<>]*>")
@@ -58,7 +61,7 @@ FORMS_HINT = (
     "  The PR body needs ONE line `Docs impact: <value>`. <value> is one of:",
     "    a) a comma-separated list of docs/features.md entries, each the exact",
     "       `###` heading text or `#<slug>`:",
-    "         Docs impact: Alpha feature, #beta-feature",
+    "         Docs impact: Example entry, #example-slug",
     "    b) none — <reason>   (only when the diff touches NO entry section)",
     "         Docs impact: none — CI gate and tooling only",
     "    c) restructure — <reason>   (for PRs that move or split many entries)",
