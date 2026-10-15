@@ -915,15 +915,18 @@ class ManifestRepository:
         finally:
             conn.close()
 
-    def remove_from_review(self, manifest_path: str, file_paths: list[str]) -> None:
+    def remove_from_review(
+        self, manifest_path: str, file_paths: list[str], *, clear_lock: bool = False
+    ) -> None:
         """Mark rows as dismissed from review (outcome='ignored').
 
         Ignored rows are excluded from future load() calls so they do not
         reappear when the manifest is reopened.  VACUUM is intentionally omitted:
         rows are marked (UPDATE), not deleted, so SQLite has no freed pages to
         reclaim and a VACUUM call would be a no-op at the cost of a full DB rewrite.
+        ``clear_lock=True`` unlocks the rows in the same write (#985).
         """
-        self.finalize_outcome(manifest_path, file_paths, "ignored")
+        self.finalize_outcome(manifest_path, file_paths, "ignored", clear_lock=clear_lock)
 
     def restore_to_review(self, manifest_path: str, file_paths: list[str]) -> int:
         """Return dismissed rows to review (outcome 'ignored' → '') — #909.

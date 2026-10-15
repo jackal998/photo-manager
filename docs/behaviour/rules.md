@@ -52,10 +52,10 @@ code decides it, and which test or scenario pins it.
 
 ### R-LOCK-5 — Skip now with force_locked unlocks the locked rows and removes them
 
-- **Rule:** Skip now with `force_locked` set clears the lock of each locked row it is given and then sets the rows it accepts to outcome `ignored`; rows outside the allowed roots are not accepted.
-- **Owning code:** `core/app_service/execute_service.py::remove_from_review`
-- **Pins:** none
-- **Status:** unpinned
+- **Rule:** Skip now with `force_locked` set accepts only the rows inside the allowed roots; a locked row outside them is not accepted and keeps its lock. Each accepted locked row is unlocked in the same write that sets it outcome `ignored`, so a row whose write fails keeps its lock.
+- **Owning code:** `core/app_service/execute_service.py::remove_from_review`, `infrastructure/manifest_repository.py::ManifestRepository.remove_from_review`
+- **Pins:** `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_out_of_root_row_keeps_lock_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_in_root_row_is_ignored_and_unlocked_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_failed_ignore_write_keeps_locked_row_locked`, `tests/test_web_execute_service.py::TestExecuteRecycleLockedRow::test_recycle_success_clears_lock_with_deleted_outcome`
+- **Status:** pinned
 
 ## DIALOG
 

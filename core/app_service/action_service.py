@@ -228,8 +228,8 @@ def bulk_decide(
         repo.batch_update_lock_state(manifest_path, {p: lock_value for p in safe})
     elif locked:
         # force_locked path — Unlock & Apply All: the Qt verdict UNLOCKS the
-        # locked rows in the same write as the decision (#733; execute_service's
-        # force path does the same via batch_update_lock_state). One commit.
+        # locked rows in the same write as the decision (#733). Execute's force
+        # path clears each lock in the same write as its outcome (#985). One commit.
         repo.batch_update_decisions_and_lock(
             manifest_path,
             {p: decision_value for p in safe},

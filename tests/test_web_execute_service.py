@@ -1380,3 +1380,126 @@ class TestExecuteDecisionsOutOfRoot:
         result = execute_decisions(str(manifest), recycle=False, allowed_roots=None)
         assert str(f) in result["success_paths"]
         assert not f.exists()
+
+
+class TestExecuteRecycleLockedRow:
+    """#985: the recycle-success path also clears the lock in the outcome write."""
+
+    def test_recycle_success_clears_lock_with_deleted_outcome(self, tmp_path):
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f1),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "delete",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(f2),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        def _trash(path):
+            # Stand in for the Recycle Bin: the file leaves its place on disk.
+            os.unlink(path)
+
+        with patch("infrastructure.delete_service.send2trash", side_effect=_trash):
+            result = execute_decisions(str(manifest), recycle=True, force_locked=True)
+
+        assert str(f1) in result["success_paths"]
+        assert not f1.exists()
+        assert _read_col(manifest, str(f1), "outcome") == "deleted"
+        assert _read_col(manifest, str(f1), "is_locked") == 0
+
+
+class TestRemoveFromReviewLockedRows:
+    """#985: Skip now clears a locked row's lock only in the write that sets it ignored."""
+
+    def test_locked_out_of_root_row_keeps_lock_under_force(self, tmp_path):
+        manifest_dir = tmp_path / "allowed"
+        manifest_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "kept.bin"
+        outside_file.write_bytes(b"\xBB" * 64)
+        manifest = _make_manifest(manifest_dir, [
+            {
+                "source_path": str(outside_file),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "ignore",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+        ])
+
+        result = remove_from_review(
+            str(manifest), [str(outside_file)],
+            force_locked=True, allowed_roots=[str(manifest_dir)],
+        )
+
+        assert result["removed"] == 0
+        assert _read_col(manifest, str(outside_file), "is_locked") == 1
+        assert _read_col(manifest, str(outside_file), "outcome") == ""
+        assert outside_file.exists()
+
+    def test_locked_in_root_row_is_ignored_and_unlocked_under_force(self, tmp_path):
+        (f,) = _make_real_files(tmp_path, 1)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "ignore",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+        ])
+
+        result = remove_from_review(
+            str(manifest), [str(f)], force_locked=True, allowed_roots=[str(tmp_path)],
+        )
+
+        assert result["removed"] == 1
+        assert _read_col(manifest, str(f), "outcome") == "ignored"
+        assert _read_col(manifest, str(f), "is_locked") == 0
+        assert f.exists()
+
+    def test_failed_ignore_write_keeps_locked_row_locked(self, tmp_path):
+        (f,) = _make_real_files(tmp_path, 1)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "ignore",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+        ])
+
+        with patch.object(
+            ManifestRepository,
+            "finalize_outcome",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ):
+            with pytest.raises(sqlite3.OperationalError):
+                remove_from_review(
+                    str(manifest), [str(f)],
+                    force_locked=True, allowed_roots=[str(tmp_path)],
+                )
+
+        assert _read_col(manifest, str(f), "is_locked") == 1
+        assert _read_col(manifest, str(f), "outcome") == ""

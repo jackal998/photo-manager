@@ -152,9 +152,11 @@ def execute_decisions(
         scope_paths: Optional subset of paths to execute (None = every
             decided row the review shows; see _load_decided_rows).
         recycle: True = send2trash; False = os.unlink.
-        force_locked: If True, unlock-then-execute locked rows decided
-            delete or ignore (#972).  If False and any such rows exist, raises
-            ValueError with the locked paths, and nothing is written.
+        force_locked: If True, execute locked rows decided delete or ignore
+            (#972).  Each is unlocked in the same write as its outcome, so a
+            row whose action does not apply keeps its lock (#985).  If False
+            and any such rows exist, raises ValueError with the locked paths,
+            and nothing is written.
         allowed_roots: Trusted root directories.  Every candidate source_path
             is checked against this list before any deletion or ignore.  Rows
             whose resolved path escapes all roots are collected into the
@@ -325,8 +327,9 @@ def remove_from_review(
     Args:
         manifest_path: Absolute path to the manifest sqlite.
         file_paths: Paths to mark as ignored.
-        force_locked: If True, remove locked rows anyway. If False and any
-            rows are locked, raises ValueError with the locked paths.
+        force_locked: If True, remove locked rows anyway; each is unlocked in
+            the same write as its ignored outcome (#985). If False and any
+            in-root rows are locked, raises ValueError with the locked paths.
         allowed_roots: Trusted root directories.  Out-of-root rows in
             ``file_paths`` are silently skipped (not marked ignored).
 
@@ -349,26 +352,22 @@ def remove_from_review(
     finally:
         conn.close()
 
-    locked_paths = [p for p, locked in rows if locked]
+    # --- Path-safety filter (#985: BEFORE the lock gate) -----------------
+    # An out-of-root locked row is not gated, not unlocked, and keeps its lock.
+    if allowed_roots:
+        safe_paths, _ = _split_by_roots(file_paths, allowed_roots, "remove_from_review")
+    else:
+        safe_paths = file_paths
+
+    safe_set = set(safe_paths)
+    locked_paths = [p for p, locked in rows if locked and p in safe_set]
 
     if locked_paths and not force_locked:
         raise ValueError("locked_paths", locked_paths)
 
-    if locked_paths and force_locked:
-        repo.batch_update_lock_state(manifest_path, {p: False for p in locked_paths})
-
-    # --- Path-safety filter ------------------------------------------------
-    if allowed_roots:
-        safe_paths = [p for p in file_paths if is_under_roots(p, allowed_roots)]
-        for p in file_paths:
-            if not is_under_roots(p, allowed_roots):
-                logger.warning(
-                    "Refusing remove_from_review of out-of-root source_path: {}", p
-                )
-    else:
-        safe_paths = file_paths
-
-    repo.remove_from_review(manifest_path, safe_paths)
+    # #985: nothing is unlocked up front. Locked rows keep their lock until the
+    # ignored write clears it in the same statement (clear_lock=True).
+    repo.remove_from_review(manifest_path, safe_paths, clear_lock=True)
 
     from core.app_service.review_service import load_review
     try:
