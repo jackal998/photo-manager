@@ -67,6 +67,8 @@ from typing import Optional
 
 from loguru import logger
 
+from infrastructure.app_data import app_data_root
+
 # Bump to invalidate the on-disk cache namespace.
 TRANSCODE_RECIPE_VERSION = "1"
 
@@ -319,9 +321,7 @@ class TranscodeService:
             ImageService reads ``thumbnail_disk_cache_dir``.  May be
             ``None`` (e.g. in tests) — the default platform path is used.
         """
-        default_dir = str(
-            Path.home() / "AppData" / "Local" / "PhotoManager" / "transcodes"
-        )
+        default_dir = str(app_data_root() / "transcodes")
         if settings is not None:
             raw = settings.get("video_transcode_cache_dir", default_dir)
             if isinstance(raw, str):

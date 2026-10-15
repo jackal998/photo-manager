@@ -422,6 +422,8 @@ class TestLifespanSettings:
         """A fresh install (no settings.json) must keep today's defaults."""
         home = tmp_path / "home-without-settings"
         home.mkdir()
+        # Assert the unset-override fallback; the autouse #968 fixture sets it.
+        monkeypatch.delenv("PHOTO_MANAGER_DATA_DIR", raising=False)
         monkeypatch.setenv("PHOTO_MANAGER_HOME", str(home))
 
         app = create_app(frontend_dist=tmp_path / "no-dist")
