@@ -1433,7 +1433,6 @@ Each feature is one section using this template:
 - **Behaviour:** <1-3 sentences on expected UX>
 - **Conditions / variants:** <state that changes the behaviour>
 - **Related:** PR #<N>, issue #<N>, qa scenario `sNN_<name>.py`
-- **Last verified:** <PR # or YYYY-MM-DD>
 ```
 
 The index table at the top is generated, not hand-edited: it lists every entry heading (case-insensitively sorted by feature name) with the entry's `Area` line. After adding or changing an entry, run `python scripts/gen_features_index.py`; `python scripts/gen_features_index.py --check` (CI job `features-index`) fails when the committed index is stale. The `Area` value must be one of the names in `AREA_VOCABULARY` in that script.
