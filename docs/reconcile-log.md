@@ -20,3 +20,10 @@ Append new entries at the end. Never edit an entry that is already recorded.
 - Reviewer: orchestrator
 - Result: baseline — register seeded by #971
 - Unresolved: none
+
+## 2026-10-16 — after #973–#980
+
+- SHA: e28f963d108173c3c4136c2049d764d8b2e4453b
+- Reviewer: orchestrator (fresh opus reviewer per rule and per behaviour-bearing PR)
+- Result: rules 7 HOLDS / 1 FALSE (R-LOCK-2: an Execute clears the lock in its own write before it deletes or skips; register corrected, Execute unlock pin added) / 0 UNCLEAR; stale entries 2 (Execute Action — filter by action type; Execute Action — lock-confirm dialog, s34 bullet), both fixed; Docs impact mismatches 1 (#979 did not name "Execute Action — filter by action type (#502)"); issues filed: none; fix PR: #PRNUM
+- Unresolved: none (the code still unlocks before it applies; that order is tracked as #985)

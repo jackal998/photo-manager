@@ -31,9 +31,9 @@ code decides it, and which test or scenario pins it.
 
 ### R-LOCK-2 — Force-locked re-send of a decision write or Execute unlocks its rows
 
-- **Rule:** Re-sending a refused decision write (PATCH /api/decision or bulk decide) or an Execute with `force_locked` set applies it to the locked rows and clears their lock in the same write; apply best copy is not covered by this rule.
+- **Rule:** Re-sending a refused decision write (PATCH /api/decision or bulk decide) or an Execute with `force_locked` set applies it to the locked rows and clears their lock. A decision write clears the lock in the same write as the decision. An Execute clears it in its own write before it deletes or skips the rows, so a row whose delete then fails stays in review, unlocked. Apply best copy is not covered by this rule.
 - **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/execute_service.py::execute_decisions`
-- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_force_locked_applies_decision_and_unlocks`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_with_force_true_applies_decision`, `qa/web/scenarios/s36_lock_confirm_destructive_execute.py`
+- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_force_locked_applies_decision_and_unlocks`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_with_force_true_applies_decision`, `qa/web/scenarios/s36_lock_confirm_destructive_execute.py`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_force_locked_unlocks_and_deletes`
 - **Status:** pinned
 
 ### R-LOCK-3 — The lock toggle shows the padlock in warm ink when locked and muted ink when unlocked
