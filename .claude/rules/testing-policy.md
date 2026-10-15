@@ -118,7 +118,7 @@ the per-module table in [`docs/testing.md`](../../docs/testing.md). The doc
 is the canonical answer to "what's covered, what's not, what's the
 residual risk" — keep it honest.
 
-The canonical feature inventory lives at [`docs/features.md`](../../docs/features.md).
+The canonical feature inventory lives at [`docs/features.md`](../../docs/features.md) (the index); each entry lives in its Area file under `docs/features/`.
 Update it whenever user-visible behaviour changes (button label,
 conditional dialog, action scope, new shortcut/menu, post-action
 state change, new gating condition) — see the `update-docs` skill's

@@ -77,7 +77,7 @@ jobs:
         run: python scripts/hooks/qa_scenario_guard.py --ci
 
       # Checks the body's `Docs impact:` line against the diff of
-      # docs/features.md (#958). Run as a module from the repo root so
+      # docs/features.md and docs/features/*.md (#958). Run as a module from the repo root so
       # `scripts.gen_features_index` resolves; reads PR_BODY and DIFF_BASE
       # from the job env above.
       # `if: always()`: a red docs_guard must not hide this gate's verdict.

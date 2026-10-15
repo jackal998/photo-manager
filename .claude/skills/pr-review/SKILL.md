@@ -67,8 +67,9 @@ The skill reads:
      calls have no dependencies on each other. Fire all of them in a
      single message with multiple tool calls and synthesise after
      all return — don't serialise.
-2. **`docs/features.md`** at the working tree's HEAD — the canonical
-   feature inventory used by `docs-features-drift/`.
+2. **`docs/features/<area>.md`** at the working tree's HEAD — the canonical
+   feature entries used by `docs-features-drift/` (one file per Area;
+   `docs/features.md` is the index that names them).
 3. **`qa/web/scenarios/sNN_*.py`** files named in features.md entries —
    used by `qa-scenario-drift/`.
 4. **`README.md § Usage — GUI § Step 1-4`** ONLY if the diff touches

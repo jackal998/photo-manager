@@ -136,6 +136,10 @@ _DOC_BEHAVIOURAL_MODIFY_PATTERN = re.compile(
     r"|frontend/src/components/(?!.*\.test\.).*\.tsx?)$"
 )
 _BEHAVIOURAL_FEATURES_DOC = "docs/features.md"
+# The landing and its per-Area entry files (#958 split). An entry edit in
+# docs/features/<area>.md satisfies the behavioural trigger. Single source of the
+# layout: scripts/gen_features_index.py (FEATURES_SUBDIR, area_file_name).
+_FEATURES_DOC_PATTERN = re.compile(r"^docs/features(?:\.md|/[^/]+\.md)$")
 _BEHAVIOURAL_TRIGGER_DIFF_THRESHOLD = 10
 
 # A declaration line on either side of a ``git diff -U0``. Python ``def``
@@ -463,7 +467,7 @@ def check(pr_text: str) -> tuple[int, str]:
         f for f, _ in relevant
         if _DOC_BEHAVIOURAL_MODIFY_PATTERN.match(f) and f not in added
     ]
-    if behavioural and _BEHAVIOURAL_FEATURES_DOC not in docs:
+    if behavioural and not any(_FEATURES_DOC_PATTERN.match(f) for f in docs):
         msg_lines = ["docs guard fired — blocking `gh pr create`.", ""]
         msg_lines += list(rejected_bypass)
         msg_lines.append(
@@ -478,7 +482,7 @@ def check(pr_text: str) -> tuple[int, str]:
             "  so the canonical feature inventory stays in sync.",
             "",
             "  To unblock:",
-            f"    a) Add or update the corresponding section in {_BEHAVIOURAL_FEATURES_DOC}.",
+            f"    a) Add or update the corresponding entry in docs/features/<area>.md (the index is {_BEHAVIOURAL_FEATURES_DOC}).",
             "    b) Consider running `/pr-review` before opening the PR to catch",
             "       semantic drift between code, features.md, and qa scenarios",
             "       that this file-touch gate cannot see.",

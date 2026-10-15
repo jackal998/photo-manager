@@ -139,11 +139,19 @@ diff --git a/docs/features.md b/docs/features.md
 
 
 def test_touched_entries_maps_the_docs_impact_diff_and_reads_surface_paths():
-    # Fixture diff text: the line-5 hunk lies inside Alpha, so only Alpha is touched.
-    touched, labels, entries = dr.touched_entries(FEATURES_BASE, FEATURES_HEAD, FEATURES_DIFF)
-    assert touched == {"alpha"}
-    assert labels == {"alpha": "Alpha", "beta": "Beta"}
-    assert entries == [("Alpha", "alpha", {"core/x.py"}), ("Beta", "beta", set())]
+    # The entries live in docs/features/scan.md (#958). The line-5 hunk lies inside
+    # Alpha, so only Alpha is touched; its key carries the file it sits in.
+    area = "docs/features/scan.md"
+    diff = FEATURES_DIFF.replace("docs/features.md", area)
+    touched, labels, entries = dr.touched_entries(
+        {area: FEATURES_BASE}, {area: FEATURES_HEAD}, diff
+    )
+    assert touched == {f"{area}#alpha"}
+    assert labels == {f"{area}#alpha": "Alpha", f"{area}#beta": "Beta"}
+    assert entries == [
+        ("Alpha", f"{area}#alpha", {"core/x.py"}),
+        ("Beta", f"{area}#beta", set()),
+    ]
 
 
 def test_surface_paths_keeps_source_links_and_drops_tests_scenarios_and_docs():

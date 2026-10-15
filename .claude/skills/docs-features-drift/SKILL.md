@@ -33,8 +33,9 @@ classifies any of the following in the diff:
 ## How to apply
 
 For each behaviour-bearing source file in the diff, search the
-**current working-tree `docs/features.md`** for entries that
-reference it. Two ways to match:
+**current working-tree feature entries** (`docs/features/<area>.md`,
+one file per Area; `docs/features.md` is the index that names them)
+for entries that reference it. Two ways to match:
 
 - **File path match.** The entry's `Entry point:` or `Related:`
   line names the file path (with or without line number).
@@ -92,7 +93,8 @@ Emit findings under the `## docs/features.md coverage` section in
 - `pr-review/SKILL.md` — the manager that invokes this skill.
 - `qa-scenario-drift/SKILL.md` — chains after this skill; uses
   the `Related:` field of entries matched here to find scenarios.
-- `docs/features.md` — the canonical inventory this skill reads.
+- `docs/features.md` and `docs/features/<area>.md` — the canonical
+  inventory this skill reads (the landing index, then the entries).
 - `update-docs/SKILL.md` — the write-side companion that fixes
   drift after the fact (not invoked from pr-review; user runs
   it separately).

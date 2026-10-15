@@ -42,7 +42,6 @@ from scripts.hooks import docs_impact_guard as dig  # noqa: E402
 
 LOG_PATH = "docs/reconcile-log.md"
 REGISTER_PATH = "docs/behaviour/rules.md"
-FEATURES_PATH = "docs/features.md"
 PR_SUFFIX_RE = re.compile(r"\(#(\d+)\)\s*$")
 LOG_SHA_RE = re.compile(r"^- SHA: ([0-9a-f]{7,40})\s*$", re.M)
 # Source paths an entry cites: markdown links (relative to docs/) and backticked repo paths.
@@ -217,24 +216,33 @@ def _units(since: str, until: str) -> list[Unit]:
 
 
 def touched_entries(
-    base_text: str, head_text: str, diff: str
+    base_texts: dict[str, str], head_texts: dict[str, str], diff: str
 ) -> tuple[set[str], dict[str, str], list[tuple[str, str, set[str]]]]:
-    """Entry slugs touched by a features.md diff (docs_impact_guard's hunk mapping), their labels,
-    and every head-side entry with the source paths its text cites. Pure: texts in, data out."""
-    state = dig._diff_state(dig.Inputs(base_text=base_text, head_text=head_text, diff=diff))
-    head_lines = head_text.replace("\r\n", "\n").split("\n")
-    entries = [
-        (sec.label, sec.slug, surface_paths(head_lines[sec.start - 1 : sec.end]))
-        for sec in entry_sections(head_text)
-    ]
+    """Entry keys ("<path>#<slug>") touched by the feature-inventory diff (docs_impact_guard's
+    hunk mapping), their labels, and every head-side entry with the source paths its text cites.
+    ``base_texts``/``head_texts`` map each features file to its text. Pure: texts in, data out."""
+    state = dig._diff_state(dig.Inputs(base_texts=base_texts, head_texts=head_texts, diff=diff))
+    entries = []
+    for path in sorted(head_texts):
+        text = head_texts[path]
+        head_lines = text.replace("\r\n", "\n").split("\n")
+        for sec in entry_sections(text):
+            cited = surface_paths(head_lines[sec.start - 1 : sec.end])
+            entries.append((sec.label, f"{path}#{sec.slug}", cited))
     return state.touched, state.labels, entries
+
+
+def _features_paths(rev: str) -> list[str]:
+    """The feature-inventory files at a revision: the landing and every docs/features/<area>.md."""
+    listing = _git("ls-tree", "-r", "--name-only", rev, "--", dig.DOC_PATH, dig.DOC_DIR)
+    return [path for path in listing.splitlines() if dig.is_features_path(path)]
 
 
 def _features_touched(since: str, until: str) -> tuple[set[str], dict[str, str], list[tuple[str, str, set[str]]]]:
     return touched_entries(
-        _show(since, FEATURES_PATH),
-        _show(until, FEATURES_PATH),
-        _git("diff", "--unified=0", since, until, "--", FEATURES_PATH),
+        {p: _show(since, p) for p in _features_paths(since)},
+        {p: _show(until, p) for p in _features_paths(until)},
+        _git("diff", "--unified=0", since, until, "--", dig.DOC_PATH, dig.DOC_DIR),
     )
 
 

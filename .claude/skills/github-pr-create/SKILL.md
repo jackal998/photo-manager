@@ -28,8 +28,8 @@ source of truth for *doing the steps that make them pass*.
 | Requirement | Enforced by | What this skill does |
 |---|---|---|
 | On a feature branch, not `master` | `branch-guard` hook (commit-time) | Pre-flight check before any commit/create |
-| `docs/features.md` updated when user-visible behaviour changed | `docs_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: update features.md (via `/update-docs`) **or** put `[docs-not-needed: <reason>]` in the PR body |
-| `Docs impact:` line in the PR body, checked against the `docs/features.md` entries the diff touches | `docs_impact_guard.py` — `pr-gates.yml` `gates` job (server-only; re-runs on body edit) | Write one line: the touched entries as a list, `none — <reason>` (no entry touched), or `restructure — <reason>` |
+| `docs/features.md` or an area file `docs/features/<area>.md` updated when user-visible behaviour changed | `docs_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: update the entry in `docs/features/<area>.md` (via `/update-docs`) **or** put `[docs-not-needed: <reason>]` in the PR body |
+| `Docs impact:` line in the PR body, checked against the feature entries (in `docs/features/<area>.md`) the diff touches | `docs_impact_guard.py` — `pr-gates.yml` `gates` job (server-only; re-runs on body edit) | Write one line: the touched entries as a list, `none — <reason>` (no entry touched), or `restructure — <reason>` |
 | `qa/web/scenarios/sNN_*.py` added/extended for user-facing flows | `qa_scenario_guard.py` — PreToolUse hook **and** `pr-gates.yml` `gates` job | Decide: add a driver **or** put `[qa-not-needed: <reason>]` in the PR body |
 | `news/<PR>.<type>` changelog fragment | `news-gate.yml` `require-news-fragment` → `scripts/hooks/news_guard.py --ci` (server-only — no client hook, because the filename needs the PR number) | Write it **after** create, or put `[skip-news: <reason>]` in the body |
 | Unit + coverage (70% file / 80% global) | `tests.yml` `pytest` | Run locally before push (`/work` Phase 4 already does) |
@@ -101,7 +101,7 @@ exists to prevent.
   Step 1 placed on their own line so the CI grep finds them. Tokens may
   go in the title or body; body is cleaner.
 - **`Docs impact:` line (required, one line, in the body).** Name the
-  `docs/features.md` entries this PR changes. Three forms:
+  feature entries (in `docs/features/<area>.md`) this PR changes. Three forms:
   - a) a list of entries, each the exact `###` heading text or `#<slug>`:
     `Docs impact: Execute Action — base flow, #exit-dirty-flag-prompt`
     (every named entry must be touched by the diff, and every entry the

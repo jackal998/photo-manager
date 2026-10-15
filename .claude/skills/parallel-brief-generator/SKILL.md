@@ -327,7 +327,7 @@ from here; they own their work end-to-end.
 - **Treating `docs_guard` as a single trigger.** The hook has
   two: a coarse new-file trigger (any doc touch satisfies) and a
   strict behavioural-modify trigger on `app/web/routes/` and `frontend/src/components/`
-  MODIFIED files (only `docs/features.md` satisfies). A brief that
+  MODIFIED files (only `docs/features.md` or an entry file `docs/features/<area>.md` satisfies). A brief that
   says "docs_guard fires on the new tests — docs/testing.md update
   satisfies it" for a task editing handler files is wrong on both
   counts: docs_guard fires on the SOURCE file location not the

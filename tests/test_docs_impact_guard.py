@@ -45,16 +45,29 @@ GAMMA = _entry("Gamma feature", "Gamma text.")
 BASE = _doc(ALPHA, BETA)
 
 
-def _diff(base: str, head: str) -> str:
-    return "".join(
+DOC = "docs/features.md"
+AREA = "docs/features/scan.md"
+
+
+def _file_diff(path: str, base: str, head: str) -> str:
+    """One file's ``git diff --unified=0`` section, with its ``diff --git`` header."""
+    body = "".join(
         difflib.unified_diff(
-            base.splitlines(keepends=True), head.splitlines(keepends=True), n=0
+            base.splitlines(keepends=True), head.splitlines(keepends=True),
+            fromfile=f"a/{path}", tofile=f"b/{path}", n=0,
         )
     )
+    return f"diff --git a/{path} b/{path}\n{body}" if body else ""
+
+
+def _run_files(body: str, base_files: dict[str, str], head_files: dict[str, str]) -> tuple[int, str]:
+    paths = sorted(set(base_files) | set(head_files))
+    diff = "".join(_file_diff(p, base_files.get(p, ""), head_files.get(p, "")) for p in paths)
+    return check(body, lambda: Inputs(base_texts=base_files, head_texts=head_files, diff=diff))
 
 
 def _run(body: str, base: str = BASE, head: str = BASE) -> tuple[int, str]:
-    return check(body, lambda: Inputs(base_text=base, head_text=head, diff=_diff(base, head)))
+    return _run_files(body, {DOC: base}, {DOC: head})
 
 
 def _touch_alpha() -> str:
@@ -130,7 +143,7 @@ def test_none_accepts_each_separator(sep: str) -> None:
 def test_none_with_an_entry_touched_fails_and_names_it() -> None:
     rc, msg = _run("Docs impact: none — tidy wording", head=_touch_alpha())
     assert rc == 1
-    assert "`none` but the diff touches these docs/features.md entries:" in msg
+    assert "`none` but the diff touches these docs/features entries:" in msg
     assert "    Alpha feature" in msg
 
 
