@@ -85,7 +85,7 @@ _DOC_RELEVANT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             r"^frontend/src/(components|hooks)/(?!.*\.test\.).*\.(ts|tsx)$"
         ),
-        "docs/features.md (the `### Web —` entry for this surface)",
+        "docs/features/<area>.md (e.g. the `### Web —` entries in docs/features/web-ui.md)",
     ),
     (
         re.compile(

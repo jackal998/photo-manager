@@ -227,8 +227,8 @@ class TestBlock:
         `frontend/src/` at directory granularity, so suggesting the README
         tree for a new component would send the author to an edit with
         nowhere to land — and an unfollowable instruction is a gate
-        everyone bypasses. Components/hooks point at features.md (which
-        carries a `### Web —` entry per surface); store/lib/api/i18n point
+        everyone bypasses. Components/hooks point at the features area files
+        (which carry a `### Web —` entry per surface); store/lib/api/i18n point
         at testing.md's per-module table (which carries a row per module).
         """
         rc = _run(
@@ -238,7 +238,8 @@ class TestBlock:
         )
         assert rc == 2
         err = capsys.readouterr().err
-        assert "docs/features.md" in err
+        # #958 L1: the suggestion names the area file that holds the Web entries.
+        assert "docs/features/<area>.md (e.g. the `### Web —` entries in docs/features/web-ui.md)" in err
         assert "README.md project tree (under frontend/src" not in err
 
         rc = _run(

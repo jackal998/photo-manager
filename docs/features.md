@@ -128,7 +128,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 When user-visible behaviour changes (button label, conditional dialog,
 action scope, new keyboard shortcut, new menu item, post-action state
 change, new condition gating a flow), add or update the corresponding
-section here in the same PR.
+entry in its Area file under [`features/`](features/) in the same PR.
 
 Cross-cutting rules (lock gate, Skip vs Delete, Execute scope and similar) are
 stated once in [`behaviour/rules.md`](behaviour/rules.md). Cite a rule by its ID
@@ -142,9 +142,9 @@ The [`update-docs` skill](../.claude/skills/update-docs/SKILL.md)'s
 at `gh pr create` time, and again in the `pr-gates` CI job. A
 non-trivial change (10 or more changed lines, or a changed declaration)
 to an existing file under `app/web/routes/` or `frontend/src/components/`
-(test files excluded) blocks until this file is updated. A new file
-under `frontend/src/components/` or `frontend/src/hooks/` is pointed
-here too, but any doc touch satisfies that half of the gate.
+(test files excluded) blocks until an entry file under `features/` is updated.
+A new file under `frontend/src/components/` or `frontend/src/hooks/` is pointed
+at the features files too, but any doc touch satisfies that half of the gate.
 
 If a change genuinely doesn't shift user-visible behaviour, the bypass
 token `[docs-not-needed: <reason>]` in the `gh pr create` body still
