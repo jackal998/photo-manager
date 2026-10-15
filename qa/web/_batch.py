@@ -114,12 +114,6 @@ def _run_one(scenario_name: str, entry: dict, base_url: str) -> tuple[str, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # #968: keep this run's app data (thumbs, logs, delete audit CSVs) out of
-    # the owner's real %LOCALAPPDATA%\PhotoManager. Applies to in-process and
-    # child servers; a server launched separately inherits nothing from here.
-    from infrastructure.app_data import ensure_isolated_app_data
-
-    ensure_isolated_app_data()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "scenarios",

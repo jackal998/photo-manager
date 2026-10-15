@@ -69,6 +69,42 @@ def test_ensure_isolated_app_data_respects_explicit_override(tmp_path, monkeypat
     assert os.environ["PHOTO_MANAGER_DATA_DIR"] == explicit
 
 
+def test_default_transcode_cache_lands_under_override(decoy_profile):
+    from infrastructure.transcode_service import TRANSCODE_RECIPE_VERSION, TranscodeService
+
+    home, local, override = decoy_profile
+
+    service = TranscodeService()
+
+    assert service._base_dir == override / "transcodes" / f"v{TRANSCODE_RECIPE_VERSION}"
+    _assert_decoy_untouched(home, local)
+
+
+def _unpatched_logging_module():
+    """Load a private copy of infrastructure/logging.py.
+
+    The #948 conftest fixture replaces ``get_delete_log_directory`` on the live
+    module, so the resolver under test is read from a fresh copy instead.
+    """
+    import importlib.util
+
+    import infrastructure.logging as live
+
+    spec = importlib.util.spec_from_file_location("_logging_unpatched", live.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_delete_log_dir_lands_under_override(decoy_profile):
+    home, local, override = decoy_profile
+
+    resolved = _unpatched_logging_module().get_delete_log_directory()
+
+    assert resolved == str(override / "delete_logs")
+    _assert_decoy_untouched(home, local)
+
+
 def _assert_decoy_untouched(*roots) -> None:
     for root in roots:
         leaked = [p for p in root.rglob("*")]
