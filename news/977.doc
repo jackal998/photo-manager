@@ -1,0 +1,1 @@
+Move history out of feature-inventory entries into docs/audits, so entries describe only current behaviour (#977).
