@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -427,6 +428,214 @@ class TestExecuteLockedSkipRows:
         assert _read_col(manifest, str(f2), "outcome") == "ignored"
         assert f1.exists()
         assert f2.exists()
+
+
+# ---------------------------------------------------------------------------
+# execute_decisions — #985: a locked row's lock clears only when its action applies
+# ---------------------------------------------------------------------------
+
+
+class TestLockedRowUnlockOnlyWhenApplied:
+    """#985: "Unlock & Apply" must do what it says.
+
+    A locked row's lock is cleared in the same write as its outcome. A locked
+    row whose action does not apply (out of root, failed delete, missing file)
+    keeps its lock and stays in review.
+    """
+
+    @pytest.mark.parametrize("force", [False, True], ids=["no_force", "force_locked"])
+    def test_locked_delete_outside_roots_is_not_gated_and_keeps_lock(self, tmp_path, force):
+        manifest_dir = tmp_path / "allowed"
+        manifest_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "sensitive.bin"
+        outside_file.write_bytes(b"\xBB" * 64)
+        inside_file = manifest_dir / "inside.bin"
+        inside_file.write_bytes(b"\xAA" * 64)
+
+        manifest = _make_manifest(manifest_dir, [
+            {
+                "source_path": str(outside_file),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "delete",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(inside_file),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        # No 409 for the out-of-root locked row, with or without force_locked
+        # (the in-root row is unlocked, so the gate has nothing to block).
+        result = execute_decisions(
+            str(manifest), recycle=False, force_locked=force,
+            allowed_roots=[str(manifest_dir)],
+        )
+
+        failed = {p: r for p, r in result["failed"]}
+        assert failed.get(str(outside_file)) == "outside_allowed_roots"
+        assert outside_file.exists()
+        assert _read_col(manifest, str(outside_file), "is_locked") == 1
+        assert _read_col(manifest, str(outside_file), "outcome") == ""
+        assert str(inside_file) in result["success_paths"]
+
+    def test_locked_skip_outside_roots_is_not_gated_and_keeps_lock(self, tmp_path):
+        manifest_dir = tmp_path / "allowed"
+        manifest_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "kept.bin"
+        outside_file.write_bytes(b"\xBB" * 64)
+        inside_file = manifest_dir / "inside.bin"
+        inside_file.write_bytes(b"\xAA" * 64)
+
+        manifest = _make_manifest(manifest_dir, [
+            {
+                "source_path": str(outside_file),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "ignore",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(inside_file),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "ignore",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        result = execute_decisions(
+            str(manifest), recycle=False, force_locked=True,
+            allowed_roots=[str(manifest_dir)],
+        )
+
+        assert result["ignored"] == [str(inside_file)]
+        assert _read_col(manifest, str(outside_file), "is_locked") == 1
+        assert _read_col(manifest, str(outside_file), "outcome") == ""
+        assert _read_col(manifest, str(inside_file), "outcome") == "ignored"
+
+    def test_locked_delete_whose_delete_fails_keeps_lock(self, tmp_path):
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f1),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "delete",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(f2),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        def _trash(path):
+            if str(path).endswith("f0.bin"):
+                raise OSError("file in use")
+
+        with patch("infrastructure.delete_service.send2trash", side_effect=_trash):
+            result = execute_decisions(
+                str(manifest), recycle=True, force_locked=True,
+            )
+
+        failed = {p: r for p, r in result["failed"]}
+        assert str(f1) in failed
+        assert f1.exists()
+        assert _read_col(manifest, str(f1), "is_locked") == 1
+        assert _read_col(manifest, str(f1), "outcome") == ""
+        assert str(f2) in result["success_paths"]
+        assert _read_col(manifest, str(f2), "outcome") == "deleted"
+
+    def test_locked_skip_whose_outcome_write_fails_keeps_lock(self, tmp_path):
+        f_skip, f_other = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f_skip),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "ignore",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(f_other),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "ignore",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        with patch.object(
+            ManifestRepository,
+            "finalize_outcome",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ):
+            result = execute_decisions(str(manifest), recycle=False, force_locked=True)
+
+        failed = {p for p, _ in result["failed"]}
+        assert {str(f_skip), str(f_other)} <= failed
+        assert result["ignored"] == []
+        assert _read_col(manifest, str(f_skip), "is_locked") == 1
+        assert _read_col(manifest, str(f_skip), "outcome") == ""
+
+    def test_locked_delete_of_missing_file_keeps_lock(self, tmp_path):
+        f_ok, f_gone = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f_gone),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "delete",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(f_ok),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+        f_gone.unlink()
+
+        result = execute_decisions(str(manifest), recycle=False, force_locked=True)
+
+        assert str(f_gone) in result["missing"]
+        assert _read_col(manifest, str(f_gone), "is_locked") == 1
+        assert _read_col(manifest, str(f_gone), "outcome") == ""
+        assert _read_col(manifest, str(f_ok), "outcome") == "deleted"
 
 
 # ---------------------------------------------------------------------------
