@@ -15,7 +15,7 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
     - writes an audit CSV `delete_<timestamp>.csv` under `%LOCALAPPDATA%\PhotoManager\delete_logs`. The web path writes `0` in its GroupNumber column.
     - returns the reloaded groups.
 
-    Locked Delete rows stop the run first, as `R-LOCK-4` states — see [Execute Action — lock-confirm dialog](#execute-action--lock-confirm-dialog).
+    Locked Delete and Skip rows stop the run first, as `R-LOCK-4` states — see [Execute Action — lock-confirm dialog](#execute-action--lock-confirm-dialog).
   - The store replaces `manifest.groups` with the response and clears the main-tree selection. It then runs the [singleton-prune offer](#singleton-prune-offer-after-destructive-ops-426). **The dialog stays open after Execute.** Finalized rows drop out of the review, so both trees now show only what is still pending.
   - **Per-file outcome ([#742](https://github.com/jackal998/photo-manager/issues/742)).** `ExecuteResultSummary` ([frontend/src/components/execute/ExecuteResultSummary.tsx](../../frontend/src/components/execute/ExecuteResultSummary.tsx)) shows two sections inside the dialog:
     - **"Files Not Found"** (`execute-result-missing`, caution style) lists `executeResult.missing`: files already gone from disk. These are skipped and not marked deleted.
@@ -121,17 +121,17 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
 
   It also opens with no request at all, for locked singletons before a prune (`prune`, [#686](https://github.com/jackal998/photo-manager/issues/686)).
 - **Trigger:** The server re-reads `is_locked` from SQLite on each such call and never trusts the client. In user terms, any of:
-  - **Execute** / **Execute selected** with a locked Delete row in scope.
+  - **Execute** / **Execute selected** with a locked Delete or Skip row in scope.
   - A finalizing **Skip** that includes a locked row — from the Execute dialog's row menu, the main-tree context menu, or **List → Skip Selected now**.
   - A decision change on a locked row. Right-click Keep/Delete in either tree and the `d`/`k` shortcuts go through `store.setDecisions`. The row's own Keep/Delete/Skip control and the preview pane's decision buttons are disabled on a locked row, so they never reach the gate.
   - **Apply best-copy decisions to this group** (group context menu) on a group with locked rows.
   - A [singleton-prune offer](#singleton-prune-offer-after-destructive-ops-426) that includes locked singletons.
 - **Behaviour:** The dialog lists the locked paths and offers three buttons:
-  - **Unlock & Apply** (`lock-confirm-btn-unlock-apply`) re-runs the same operation over the **same original scope** with `force_locked` (the forced re-send of `R-LOCK-2`; the Skip-now force of `R-LOCK-5`): Execute then deletes them, and a decision write lands with the row unlocked. Apply best copy also unlocks its previously-locked delete-targets. Re-using the original scope is deliberate — re-running unscoped after an "Execute selected" would execute the whole manifest.
+  - **Unlock & Apply** (`lock-confirm-btn-unlock-apply`) re-runs the same operation over the **same original scope** with `force_locked` (the forced re-send of `R-LOCK-2`; the Skip-now force of `R-LOCK-5`): Execute then deletes the locked Delete rows and skips the locked Skip rows (they leave the review), and a decision write lands with the row unlocked. Apply best copy also unlocks its previously-locked delete-targets. Re-using the original scope is deliberate — re-running unscoped after an "Execute selected" would execute the whole manifest.
   - **Unlocked only** (`lock-confirm-btn-unlocked-only`) re-runs over the original scope minus the locked paths (`apply-best-copy` re-runs with `skip_locked`). Locked rows keep their lock and decision.
   - **Cancel** (`lock-confirm-btn-cancel`) clears the conflict; nothing is written.
   - **The wording states the consequence** (the desktop's [#417](https://github.com/jackal998/photo-manager/issues/417) principle). Title and body depend on `op` (`web.lock_confirm.*`):
-    - `execute` — **"Locked files in delete scope"**: "N locked file(s) is/are about to be deleted (sent to the Recycle Bin). Unlock and proceed, or leave the locked files out." An earlier "permanently DELETED" claim was corrected; s34 asserts "permanent" is absent.
+    - `execute` — **"Locked files in delete scope"**: "N locked file(s) is/are about to be deleted (sent to the Recycle Bin). Unlock and proceed, or leave the locked files out." A Skip-only set uses **"Locked files in skip scope"** and reads "N locked file(s) is/are about to be skipped (left on disk, dropped from this review)"; a mixed set states both counts. An earlier "permanently DELETED" claim was corrected; s34 asserts "permanent" is absent.
     - `remove` — **"Locked files in skip scope"**: "…about to be skipped (left on disk, dropped from this review)…"
     - `decision` — **"Locked rows affected"**: "Setting this decision would change M row(s); N is/are locked. **Nothing is deleted yet — this only queues the decision.** Unlock and set all, set only the unlocked rows, or cancel."
     - `apply-best-copy` — **"Locked rows in this group"**: "…Nothing is deleted yet — this only queues keep/delete decisions…"
@@ -140,7 +140,7 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
     **Unlock & Apply** is styled as destructive except for `decision` and `apply-best-copy`, which only queue decisions.
 - **Conditions / variants:**
   - **Lock / Unlock never prompt** — `PATCH /api/lock` is not gated.
-  - **At Execute, only locked Delete rows trip the gate.** A locked row already marked Skip is finalized without a prompt. Changing a locked row's decision is itself gated, so this only happens when the Skip was set before the row was locked.
+  - **At Execute, locked Delete and locked Skip rows both trip the gate** (`R-LOCK-4`).
   - **Not every path uses this dialog.**
     - The toolbar's bulk Keep/Delete/Skip verbs leave locked rows out in the browser, and the group header's Keep-best button sends `skip_locked` so the server leaves them alone. Both report "N locked file(s) unchanged" in their undo toast.
     - The Set Action by Field dialog has its own inline three-button prompt (`action-lock-confirm-dialog`). Its **Apply to Unlocked Only** is disabled when the 409's `matched_total` leaves no unlocked row. Cancelling that prompt keeps the Set Action dialog open with the user's field, regex and action ([#764](https://github.com/jackal998/photo-manager/issues/764), the twin of #721): `ActionDialog.onInteractOutside` always calls `preventDefault`, and Escape is guarded only while the dialog is applying.

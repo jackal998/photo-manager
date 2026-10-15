@@ -64,6 +64,13 @@ Qt divergences:
   - Qt regenerates the fixture per run; the web port copies the committed
     qa/sandbox/near-duplicates/ files into a tmpdir (same clustering guarantee,
     no random generation), and cleans up via shutil.rmtree.
+
+Locked-Skip verdict (#972), second flow in the same run on a fresh page:
+  - Stage Skip ('ignore') on q95 via its row decision control, lock it, Execute.
+  - The lock-confirm (409 locked_paths) must describe a skip: no "deleted", no
+    "Recycle Bin".
+  - Unlock & Apply finalises the row: it leaves the review and its file stays
+    on disk.
 """
 from __future__ import annotations
 
@@ -71,6 +78,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -91,6 +99,8 @@ from qa.web.testid_constants import (
     EXECUTE_ALL_DELETE_CONFIRM_YES,
     LOCK_CONFIRM_DIALOG,
     LOCK_CONFIRM_BTN_CANCEL,
+    LOCK_CONFIRM_BTN_UNLOCK_APPLY,
+    row_decision_option_testid,
     row_file_testid,
 )
 
@@ -331,5 +341,96 @@ def run(*, base_url: str) -> None:
                 f"missing ({len(missing)}): {missing}"
             )
 
+            # ── Locked-Skip verdict (#972) — same run, fresh page + manifest ──
+            _run_locked_skip_unlock_apply(ctx, base_url)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run_locked_skip_unlock_apply(ctx: PWContext, base_url: str) -> None:
+    """A locked row decided Skip (ignore) is gated at Execute like a locked Delete.
+
+    Stage Skip on the q95 row, lock it, Execute. The lock-confirm must describe
+    a skip (never a deletion). Unlock & Apply then finalises the row as ignored:
+    it leaves the review, and its file stays on disk.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="qa_s34_skip_")
+    db_path = os.path.join(tmpdir, "s34_skip_manifest.db")
+    try:
+        copied: dict[str, str] = {}
+        for basename in _ALL_BASENAMES:
+            dst = os.path.join(tmpdir, basename)
+            shutil.copy(str(_NEAR_DUPS_DIR / basename), dst)
+            copied[basename] = dst
+
+        page = ctx.new_page()
+        page.goto("/")
+        run_scan(
+            page,
+            sources=[tmpdir],
+            output_path=db_path,
+            scan_timeout=120_000,
+        )
+
+        manifest = _get_manifest(base_url, db_path)
+        assert manifest.get("total_groups", 0) >= 1, (
+            f"Expected at least one group after scan; total_groups={manifest.get('total_groups')}"
+        )
+        group_id = str(manifest["groups"][0]["group_number"])
+
+        # Stage Skip (ignore) on the q95 row, then lock it.
+        page.get_by_test_id(
+            row_decision_option_testid(group_id, _LOCK_TARGET_BASENAME, "ignore")
+        ).click()
+        right_click_row(page, row_file_testid(group_id, _LOCK_TARGET_BASENAME))
+        click_context_item(page, CTX_LOCK)
+
+        staged = _state_map(_get_manifest(base_url, db_path))
+        assert staged[_LOCK_TARGET_BASENAME] == ("ignore", True), (
+            f"Expected {_LOCK_TARGET_BASENAME!r} staged as ('ignore', True); "
+            f"got {staged.get(_LOCK_TARGET_BASENAME)}"
+        )
+
+        open_execute_dialog(page)
+        page.get_by_test_id(EXECUTE_DIALOG).wait_for(state="visible", timeout=10_000)
+        page.get_by_test_id(EXECUTE_BTN_EXECUTE).click()
+
+        lock_confirm = page.get_by_test_id(LOCK_CONFIRM_DIALOG)
+        lock_confirm.wait_for(state="visible", timeout=20_000)
+
+        # The copy must describe the real fate: a skip, left on disk.
+        dialog_text = lock_confirm.inner_text()
+        assert "skipped" in dialog_text.lower(), (
+            f"Skip-only lock-confirm must say the file is skipped; got: {dialog_text[:200]!r}"
+        )
+        assert "recycle bin" not in dialog_text.lower(), (
+            f"Skip-only lock-confirm must not mention the Recycle Bin; got: {dialog_text[:200]!r}"
+        )
+        assert "deleted" not in dialog_text.lower(), (
+            f"Skip-only lock-confirm must not say deleted; got: {dialog_text[:200]!r}"
+        )
+
+        page.get_by_test_id(LOCK_CONFIRM_BTN_UNLOCK_APPLY).click()
+        lock_confirm.wait_for(state="hidden", timeout=10_000)
+
+        # Finalised ignored: the row leaves the review. Poll the manifest.
+        deadline = time.monotonic() + 15
+        while True:
+            names = [
+                Path(i["file_path"]).name
+                for i in _extract_items(_get_manifest(base_url, db_path))
+            ]
+            if _LOCK_TARGET_BASENAME not in names:
+                break
+            if time.monotonic() > deadline:
+                raise AssertionError(
+                    f"{_LOCK_TARGET_BASENAME!r} still in review after Unlock & Apply"
+                )
+            time.sleep(0.5)
+
+        assert os.path.exists(copied[_LOCK_TARGET_BASENAME]), (
+            "A Skip must leave the file on disk; it is missing after Unlock & Apply"
+        )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

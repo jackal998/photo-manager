@@ -501,6 +501,46 @@ class TestExecuteLockedGate:
         assert not f2.exists()
         assert _read_is_locked(manifest, str(f1)) is False
 
+    def test_locked_skip_row_without_force_returns_409(
+        self, client_with_roots, tmp_path
+    ):
+        """#972: a locked row decided Skip is refused exactly like a locked Delete."""
+        client, root = client_with_roots
+        f1, f2 = _make_real_files(tmp_path, 2)
+
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f1),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "ignore",
+                "is_locked": 1,
+                "file_size_bytes": 128,
+            },
+            {
+                "source_path": str(f2),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 4,
+                "outcome": "",
+                "user_decision": "ignore",
+                "file_size_bytes": 128,
+            },
+        ])
+
+        resp = client.post("/api/execute", json={
+            "manifest_path": str(manifest),
+            "recycle": False,
+            "force_locked": False,
+        })
+        assert resp.status_code == 409, resp.text
+        body = resp.json()
+        assert body["detail"]["code"] == "locked_paths"
+        assert body["detail"]["locked_paths"] == [str(f1)]
+        assert _read_outcome(manifest, str(f1)) == ""
+        assert _read_is_locked(manifest, str(f1)) is True
+
 
 # ---------------------------------------------------------------------------
 # POST /api/execute — mutex
