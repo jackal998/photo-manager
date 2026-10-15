@@ -328,7 +328,7 @@ Rule IDs such as `R-LOCK-1` refer to [docs/behaviour/rules.md](behaviour/rules.m
     **Unlock & Apply** is styled as destructive except for `decision` and `apply-best-copy`, which only queue decisions.
 - **Conditions / variants:**
   - **Lock / Unlock never prompt** — `PATCH /api/lock` is not gated.
-  - **At Execute, only locked Delete rows trip the gate.** A locked row already marked Skip is finalized without a prompt. Changing a locked row's decision is itself gated, so this only happens when the Skip was set before the row was locked.
+  - **At Execute, locked Delete and locked Skip rows both trip the gate** (`R-LOCK-4`).
   - **Not every path uses this dialog.**
     - The toolbar's bulk Keep/Delete/Skip verbs leave locked rows out in the browser, and the group header's Keep-best button sends `skip_locked` so the server leaves them alone. Both report "N locked file(s) unchanged" in their undo toast.
     - The Set Action by Field dialog has its own inline three-button prompt (`action-lock-confirm-dialog`). Its **Apply to Unlocked Only** is disabled when the 409's `matched_total` leaves no unlocked row. Cancelling that prompt keeps the Set Action dialog open with the user's field, regex and action ([#764](https://github.com/jackal998/photo-manager/issues/764), the twin of #721): `ActionDialog.onInteractOutside` always calls `preventDefault`, and Escape is guarded only while the dialog is applying.

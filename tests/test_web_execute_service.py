@@ -349,6 +349,86 @@ class TestExecuteDecisions:
         assert _read_col(manifest, str(a), "user_decision") == "delete"
 
 
+class TestExecuteLockedSkipRows:
+    """#972: a locked row decided Skip ('ignore') follows the same lock gate as Delete."""
+
+    def _locked_skip_and_free_skip(self, tmp_path: Path) -> tuple[Path, Path, Path]:
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f1),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "ignore",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(f2),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "ignore",
+                "file_size_bytes": 64,
+            },
+        ])
+        return manifest, f1, f2
+
+    @pytest.mark.parametrize("scope", [None, "both"], ids=["all_scope", "selected_scope"])
+    def test_locked_skip_row_raises_without_force(self, tmp_path, scope):
+        """Locked Skip row → 409-equivalent ValueError; DB untouched (no finalise)."""
+        manifest, f1, f2 = self._locked_skip_and_free_skip(tmp_path)
+        scope_paths = None if scope is None else [str(f1), str(f2)]
+
+        with pytest.raises(ValueError) as exc_info:
+            execute_decisions(str(manifest), scope_paths=scope_paths, recycle=False)
+
+        args = exc_info.value.args
+        assert args[0] == "locked_paths"
+        assert args[1] == [str(f1)]
+        assert _read_col(manifest, str(f1), "outcome") == ""
+        assert _read_col(manifest, str(f1), "is_locked") == 1
+        assert _read_col(manifest, str(f2), "outcome") == ""
+        assert f1.exists()
+        assert f2.exists()
+
+    def test_locked_skip_row_left_out_of_scope_is_not_finalised(self, tmp_path):
+        """skip_locked equivalent: the client narrows scope to unlocked rows.
+
+        The locked Skip row stays in review, still locked; the unlocked one is
+        finalised. No lock gate fires because the locked row is out of scope.
+        """
+        manifest, f1, f2 = self._locked_skip_and_free_skip(tmp_path)
+
+        result = execute_decisions(
+            str(manifest), scope_paths=[str(f2)], recycle=False
+        )
+
+        assert result["ignored"] == [str(f2)]
+        assert _read_col(manifest, str(f2), "outcome") == "ignored"
+        assert _read_col(manifest, str(f1), "outcome") == ""
+        assert _read_col(manifest, str(f1), "is_locked") == 1
+
+    @pytest.mark.parametrize("scope", [None, "both"], ids=["all_scope", "selected_scope"])
+    def test_force_locked_skip_row_unlocks_and_finalises_ignored(self, tmp_path, scope):
+        """force_locked → the locked Skip row is unlocked and finalised ignored."""
+        manifest, f1, f2 = self._locked_skip_and_free_skip(tmp_path)
+        scope_paths = None if scope is None else [str(f1), str(f2)]
+
+        result = execute_decisions(
+            str(manifest), scope_paths=scope_paths, recycle=False, force_locked=True
+        )
+
+        assert set(result["ignored"]) == {str(f1), str(f2)}
+        assert _read_col(manifest, str(f1), "outcome") == "ignored"
+        assert _read_col(manifest, str(f1), "is_locked") == 0
+        assert _read_col(manifest, str(f2), "outcome") == "ignored"
+        assert f1.exists()
+        assert f2.exists()
+
+
 # ---------------------------------------------------------------------------
 # execute_decisions — audit CSV stays out of the user's profile (#948)
 # ---------------------------------------------------------------------------

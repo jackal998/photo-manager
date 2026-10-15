@@ -100,7 +100,7 @@ async def post_execute(body: ExecuteRequest, request: Request) -> ExecuteResult:
         400 bad path
         403 path outside allowed roots
         404 manifest not found
-        409 locked_paths (when locked delete rows exist and force_locked=False)
+        409 locked_paths (when locked rows decided delete or skip exist and force_locked=False)
         409 execute_already_running (concurrent execute in progress)
         422 on unexpected error
     """

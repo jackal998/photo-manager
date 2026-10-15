@@ -24,9 +24,9 @@ code decides it, and which test or scenario pins it.
 
 ### R-LOCK-1 — A decision write or Skip now on a locked row is refused with 409
 
-- **Rule:** A decision write (PATCH /api/decision or bulk decide), an apply best copy, or a Skip now that targets a locked row is refused with HTTP 409 code `locked_paths` and writes nothing unless `force_locked` is set (a decision write and apply best copy also accept `skip_locked`), and the web client answers that 409 by opening the lock-confirm dialog.
-- **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/action_service.py::apply_best_copy`, `core/app_service/execute_service.py::remove_from_review`, `frontend/src/store/useAppStore.ts::lockConflict`
-- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_locked_row_without_flags_returns_409`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_without_force_returns_409`, `tests/test_web_action_routes.py::TestApplyBestCopy::test_locked_peer_without_override_returns_409`, `tests/test_web_execute_service.py::TestRemoveFromReview::test_locked_row_raises_without_force`, `qa/web/scenarios/s32_lock_confirm_bulk_regex.py`
+- **Rule:** A decision write (PATCH /api/decision or bulk decide), an apply best copy, a Skip now, or an Execute (of a locked row decided Skip as well as Delete, `R-LOCK-4`) that targets a locked row is refused with HTTP 409 code `locked_paths` and writes nothing unless `force_locked` is set (a decision write and apply best copy also accept `skip_locked`), and the web client answers that 409 by opening the lock-confirm dialog. Every action on a locked row follows this same flow (#972).
+- **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/action_service.py::apply_best_copy`, `core/app_service/execute_service.py::remove_from_review`, `core/app_service/execute_service.py::execute_decisions`, `frontend/src/store/useAppStore.ts::lockConflict`
+- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_locked_row_without_flags_returns_409`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_without_force_returns_409`, `tests/test_web_action_routes.py::TestApplyBestCopy::test_locked_peer_without_override_returns_409`, `tests/test_web_execute_service.py::TestRemoveFromReview::test_locked_row_raises_without_force`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_skip_row_without_force_returns_409`, `qa/web/scenarios/s32_lock_confirm_bulk_regex.py`
 - **Status:** pinned
 
 ### R-LOCK-2 — Force-locked re-send of a decision write or Execute unlocks its rows
@@ -43,11 +43,11 @@ code decides it, and which test or scenario pins it.
 - **Pins:** `qa/web/scenarios/s74_daylight_theme.py`, `frontend/src/components/result/LockToggle.test.tsx::"renders the unlocked padlock in ink-muted, not the hairline"`, `frontend/src/components/result/LockToggle.test.tsx::"renders the warm accent when locked"`
 - **Status:** pinned
 
-### R-LOCK-4 — An Execute that would delete a locked row is refused with 409
+### R-LOCK-4 — An Execute that would delete or skip a locked row is refused with 409
 
-- **Rule:** An Execute whose scope includes a locked row decided `delete` answers HTTP 409 code `locked_paths` and deletes nothing unless `force_locked` is set.
+- **Rule:** An Execute whose scope includes a locked row decided `delete` or `ignore` (Skip) answers HTTP 409 code `locked_paths` and writes nothing unless `force_locked` is set; with `force_locked` the locked rows are unlocked and then deleted or set to outcome `ignored`. An Execute whose scope leaves the locked rows out executes the unlocked rows and leaves the locked rows in review, still locked.
 - **Owning code:** `core/app_service/execute_service.py::execute_decisions`
-- **Pins:** `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_delete_row_without_force_returns_409`, `tests/test_web_execute_service.py::TestExecuteDecisions::test_locked_rows_raise_without_force`, `qa/web/scenarios/s34_lock_confirm_at_execute.py`
+- **Pins:** `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_delete_row_without_force_returns_409`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_skip_row_without_force_returns_409`, `tests/test_web_execute_service.py::TestExecuteDecisions::test_locked_rows_raise_without_force`, `tests/test_web_execute_service.py::TestExecuteLockedSkipRows::test_locked_skip_row_raises_without_force`, `tests/test_web_execute_service.py::TestExecuteLockedSkipRows::test_force_locked_skip_row_unlocks_and_finalises_ignored`, `qa/web/scenarios/s34_lock_confirm_at_execute.py`
 - **Status:** pinned
 
 ### R-LOCK-5 — Skip now with force_locked unlocks the locked rows and removes them

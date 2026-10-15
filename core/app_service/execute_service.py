@@ -41,8 +41,8 @@ def _require_manifest(manifest_path: str) -> None:
 def _load_decided_rows(
     manifest_path: str,
     scope_paths: list[str] | None,
-) -> tuple[list[str], list[str], list[str]]:
-    """Return (delete_paths, ignore_paths, locked_delete_paths) from the manifest.
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Return (delete_paths, ignore_paths, locked_delete_paths, locked_ignore_paths).
 
     Reads user_decision and is_locked directly from SQLite — the service
     never trusts client-supplied lock state.  Only rows with outcome=''
@@ -62,10 +62,12 @@ def _load_decided_rows(
             None means all decided rows.
 
     Returns:
-        Three lists:
+        Four lists:
         - delete_paths: paths decided 'delete' (unlocked)
-        - ignore_paths: paths decided 'ignore'
+        - ignore_paths: paths decided 'ignore' (unlocked)
         - locked_delete_paths: paths decided 'delete' that are locked
+        - locked_ignore_paths: paths decided 'ignore' that are locked (#972:
+          a locked Skip is gated exactly like a locked Delete)
     """
     conn = _connect(manifest_path)
     try:
@@ -91,6 +93,7 @@ def _load_decided_rows(
     delete_paths: list[str] = []
     ignore_paths: list[str] = []
     locked_delete_paths: list[str] = []
+    locked_ignore_paths: list[str] = []
 
     for source_path, user_decision, is_locked_val in rows:
         if scope_set is not None and source_path not in scope_set:
@@ -101,9 +104,12 @@ def _load_decided_rows(
             else:
                 delete_paths.append(source_path)
         elif user_decision == "ignore":
-            ignore_paths.append(source_path)
+            if is_locked_val:
+                locked_ignore_paths.append(source_path)
+            else:
+                ignore_paths.append(source_path)
 
-    return delete_paths, ignore_paths, locked_delete_paths
+    return delete_paths, ignore_paths, locked_delete_paths, locked_ignore_paths
 
 
 def _connect(manifest_path: str) -> sqlite3.Connection:
@@ -131,8 +137,9 @@ def execute_decisions(
         scope_paths: Optional subset of paths to execute (None = every
             decided row the review shows; see _load_decided_rows).
         recycle: True = send2trash; False = os.unlink.
-        force_locked: If True, unlock-then-delete locked delete-decided rows.
-            If False and any such rows exist, raises ValueError with locked paths.
+        force_locked: If True, unlock-then-execute locked rows decided
+            delete or ignore (#972).  If False and any such rows exist, raises
+            ValueError with the locked paths, and nothing is written.
         allowed_roots: Trusted root directories.  Every candidate source_path
             is checked against this list before any deletion or ignore.  Rows
             whose resolved path escapes all roots are collected into the
@@ -146,27 +153,34 @@ def execute_decisions(
 
     Raises:
         FileNotFoundError: If manifest_path does not exist.
-        ValueError: If locked_delete_paths is non-empty and force_locked is False.
+        ValueError: If any locked row (decided delete or ignore) is in scope
+            and force_locked is False.
             The exception's args[1] carries the list of locked paths.
     """
     _require_manifest(manifest_path)
     repo = ManifestRepository()
     repo.ensure_schema(manifest_path)
 
-    delete_paths, ignore_paths, locked_delete_paths = _load_decided_rows(
-        manifest_path, scope_paths
-    )
+    (
+        delete_paths,
+        ignore_paths,
+        locked_delete_paths,
+        locked_ignore_paths,
+    ) = _load_decided_rows(manifest_path, scope_paths)
 
-    # Locked gate — RE-READ from DB (never trust client state).
-    if locked_delete_paths and not force_locked:
-        raise ValueError("locked_paths", locked_delete_paths)
+    # Locked gate — RE-READ from DB (never trust client state). #972: a locked
+    # Skip ('ignore') row is gated like a locked Delete, so one 409 covers both.
+    locked_paths = locked_delete_paths + locked_ignore_paths
+    if locked_paths and not force_locked:
+        raise ValueError("locked_paths", locked_paths)
 
-    if locked_delete_paths and force_locked:
+    if locked_paths and force_locked:
         # Unlock the locked rows before proceeding.
         repo.batch_update_lock_state(
-            manifest_path, {p: False for p in locked_delete_paths}
+            manifest_path, {p: False for p in locked_paths}
         )
         delete_paths = delete_paths + locked_delete_paths
+        ignore_paths = ignore_paths + locked_ignore_paths
 
     # --- Path-safety filter ------------------------------------------------
     # Check every candidate source_path against allowed_roots BEFORE any
