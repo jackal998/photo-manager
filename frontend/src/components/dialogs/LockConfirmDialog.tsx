@@ -17,7 +17,9 @@
 //                       (IMMEDIATE danger — deletion is via send2trash, not
 //                       permanent; #wording-audit corrected the earlier
 //                       "permanently DELETED" claim to match
-//                       DeleteConfirmDialog's accurate recycle-bin wording)
+//                       DeleteConfirmDialog's accurate recycle-bin wording).
+//                       Skip-only rows get a "skipped, left on disk" copy and
+//                       a mixed set names both fates (#972).
 //   op === "remove"   → "N locked files will be skipped or force-unlocked"
 //                       (DEFERRED — remove doesn't delete)
 //   op === "prune"    → "N locked singleton groups would be pruned" (#686 D6
@@ -40,6 +42,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import type { Group } from "@/api/types";
 import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import {
@@ -49,8 +52,36 @@ import {
   LOCK_CONFIRM_DIALOG,
 } from "@/testids";
 
+/**
+ * Splits locked rows by what Execute would do to them (#972). A locked path
+ * the dialog cannot find in the groups counts as Delete: that copy is the
+ * stronger warning, so an unknown row is never understated as a Skip.
+ */
+function countExecuteFates(
+  groups: Group[],
+  lockedPaths: string[]
+): { deleteN: number; skipN: number } {
+  const decisionByPath = new Map<string, string>();
+  for (const group of groups) {
+    for (const item of group.items) {
+      decisionByPath.set(item.file_path, item.user_decision);
+    }
+  }
+  let deleteN = 0;
+  let skipN = 0;
+  for (const p of lockedPaths) {
+    if (decisionByPath.get(p) === "ignore") {
+      skipN += 1;
+    } else {
+      deleteN += 1;
+    }
+  }
+  return { deleteN, skipN };
+}
+
 export function LockConfirmDialog() {
   const lockConflict = useAppStore((s) => s.execute.lockConflict);
+  const groups = useAppStore((s) => s.manifest.groups);
   const executeDecisions = useAppStore((s) => s.executeDecisions);
   const removeFromList = useAppStore((s) => s.removeFromList);
   const setDecisions = useAppStore((s) => s.setDecisions);
@@ -179,9 +210,26 @@ export function LockConfirmDialog() {
       ? t("web.lock_confirm.pronoun_singular", "it")
       : t("web.lock_confirm.pronoun_plural", "them");
 
+  // Execute copy depends on what Execute would do to the locked rows (#972):
+  // a locked Skip row leaves the review and stays on disk; a Delete row goes
+  // to the Recycle Bin. Only Delete-only keeps the original delete wording.
+  const fates = op === "execute" ? countExecuteFates(groups, lockedPaths) : null;
+  const executeSkipOnly = fates !== null && fates.skipN > 0 && fates.deleteN === 0;
+  const executeMixed = fates !== null && fates.skipN > 0 && fates.deleteN > 0;
+  const deleteWord =
+    fates?.deleteN === 1
+      ? t("web.lock_confirm.file_singular", "file")
+      : t("web.lock_confirm.file_plural", "files");
+  const skipWord =
+    fates?.skipN === 1
+      ? t("web.lock_confirm.file_singular", "file")
+      : t("web.lock_confirm.file_plural", "files");
+
   const title =
     op === "execute"
-      ? t("web.lock_confirm.title_execute", "Locked files in delete scope")
+      ? executeSkipOnly
+        ? t("web.lock_confirm.title_remove", "Locked files in skip scope")
+        : t("web.lock_confirm.title_execute", "Locked files in delete scope")
       : op === "remove"
         ? t("web.lock_confirm.title_remove", "Locked files in skip scope")
         : op === "decision"
@@ -191,11 +239,23 @@ export function LockConfirmDialog() {
             : t("web.lock_confirm.title_prune", "Locked singleton groups");
   const description =
     op === "execute"
-      ? t(
-          "web.lock_confirm.body_execute",
-          "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or leave the locked files out.",
-          { n, fileWord, isWord }
-        )
+      ? executeMixed
+        ? t(
+            "web.lock_confirm.body_execute_mixed",
+            "{deleteN} locked {deleteWord} will be deleted (sent to the Recycle Bin), and {skipN} locked {skipWord} will be skipped (left on disk, dropped from this review). Unlock and proceed, or leave the locked files out.",
+            { deleteN: fates?.deleteN ?? 0, deleteWord, skipN: fates?.skipN ?? 0, skipWord }
+          )
+        : executeSkipOnly
+          ? t(
+              "web.lock_confirm.body_execute_skip",
+              "{n} locked {fileWord} {isWord} about to be skipped (left on disk, dropped from this review). Unlock and proceed, or leave the locked files out.",
+              { n, fileWord, isWord }
+            )
+          : t(
+              "web.lock_confirm.body_execute",
+              "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or leave the locked files out.",
+              { n, fileWord, isWord }
+            )
       : op === "remove"
         ? t(
             "web.lock_confirm.body_remove",

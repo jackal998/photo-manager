@@ -906,6 +906,8 @@ web:
     title_apply_best_copy: "Locked rows in this group"
     title_prune: "Locked singleton groups"
     body_execute: "{n} locked {fileWord} {isWord} about to be deleted (sent to the Recycle Bin). Unlock and proceed, or leave the locked files out."
+    body_execute_skip: "{n} locked {fileWord} {isWord} about to be skipped (left on disk, dropped from this review). Unlock and proceed, or leave the locked files out."
+    body_execute_mixed: "{deleteN} locked {deleteWord} will be deleted (sent to the Recycle Bin), and {skipN} locked {skipWord} will be skipped (left on disk, dropped from this review). Unlock and proceed, or leave the locked files out."
     body_remove: "{n} locked {fileWord} {isWord} about to be skipped (left on disk, dropped from this review). Unlock and skip, or skip the unlocked files only."
     body_decision: "Setting this decision would change {originalPathsLen} row(s); {n} {isWord} locked. Nothing is deleted yet — this only queues the decision. Unlock and set all, set only the unlocked rows, or cancel."
     body_apply_best_copy: "Applying best-copy to this group would affect rows that include {n} locked {rowWord}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel."

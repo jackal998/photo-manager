@@ -20,7 +20,7 @@
 
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { useAppStore } from "@/store/useAppStore";
 import { LockConfirmDialog } from "./LockConfirmDialog";
@@ -400,5 +400,111 @@ describe("LockConfirmDialog", () => {
     const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
     expect(btn.className).toContain("bg-warm");
     expect(btn.className).not.toContain("bg-danger-warm");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #972 — Execute copy follows the locked rows' own decision: Skip rows leave
+// the review (left on disk), Delete rows go to the Recycle Bin. A mixed set
+// names both fates; an unknown row counts as Delete (never understated).
+// ---------------------------------------------------------------------------
+
+function seedGroupDecisions(decisions: Record<string, "" | "delete" | "ignore">) {
+  const items = Object.entries(decisions).map(([file_path, user_decision]) => ({
+    file_path,
+    user_decision,
+  }));
+  act(() => {
+    useAppStore.setState((s) => ({
+      ...s,
+      manifest: {
+        ...s.manifest,
+        groups: [{ group_number: 1, member_count: items.length, items }],
+      },
+    }) as never);
+  });
+}
+
+function clearGroups() {
+  act(() => {
+    useAppStore.setState((s) => ({
+      ...s,
+      manifest: { ...s.manifest, groups: [] },
+    }) as never);
+  });
+}
+
+describe("LockConfirmDialog — Execute copy by locked-row fate (#972)", () => {
+  afterEach(() => {
+    clearGroups();
+    clearLockConflict();
+  });
+
+  it("Skip-only: title and body say skipped / left on disk, never deleted", () => {
+    seedGroupDecisions({ "/a.jpg": "ignore", "/b.jpg": "ignore" });
+    seedLockConflict("execute", ["/a.jpg", "/b.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(screen.getByText("Locked files in skip scope")).toBeInTheDocument();
+    expect(
+      screen.getByText(/^2 locked files are about to be skipped \(left on disk/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Recycle Bin/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/deleted/i)).not.toBeInTheDocument();
+  });
+
+  it("Skip-only, n=1: singular grammar 'is about to be skipped'", () => {
+    seedGroupDecisions({ "/a.jpg": "ignore" });
+    seedLockConflict("execute", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(
+      screen.getByText(/^1 locked file is about to be skipped/)
+    ).toBeInTheDocument();
+  });
+
+  it("Delete-only keeps the original delete wording and title", () => {
+    seedGroupDecisions({ "/a.jpg": "delete" });
+    seedLockConflict("execute", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(screen.getByText("Locked files in delete scope")).toBeInTheDocument();
+    expect(
+      screen.getByText(/^1 locked file is about to be deleted \(sent to the Recycle Bin\)/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/skipped/i)).not.toBeInTheDocument();
+  });
+
+  it("mixed set names both fates with their own counts", () => {
+    seedGroupDecisions({ "/a.jpg": "ignore", "/b.jpg": "delete", "/c.jpg": "delete" });
+    seedLockConflict("execute", ["/a.jpg", "/b.jpg", "/c.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(screen.getByText("Locked files in delete scope")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /^2 locked files will be deleted \(sent to the Recycle Bin\), and 1 locked file will be skipped \(left on disk/
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("a locked path missing from the groups counts as Delete, not Skip", () => {
+    seedGroupDecisions({ "/a.jpg": "ignore" });
+    seedLockConflict("execute", ["/a.jpg", "/unknown.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(
+      screen.getByText(
+        /^1 locked file will be deleted \(sent to the Recycle Bin\), and 1 locked file will be skipped/
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("Unlock & Apply still re-runs the original scope with forceLocked for Skip-only", async () => {
+    const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
+    seedGroupDecisions({ "/a.jpg": "ignore" });
+    seedLockConflict("execute", ["/a.jpg"], ["/a.jpg", "/z.jpg"]);
+    render(<LockConfirmDialog />);
+    await userEvent.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    expect(executeDecisionsMock).toHaveBeenCalledWith({
+      scopePaths: ["/a.jpg", "/z.jpg"],
+      forceLocked: true,
+    });
   });
 });
