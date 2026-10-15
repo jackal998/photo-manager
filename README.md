@@ -236,13 +236,15 @@ column), then these columns, left to right:
 
 | Column | Meaning |
 |--------|---------|
-| **File Name** | File name. Takes whatever width the other columns leave, with a 160 px floor; sortable. |
+| **File Name** | File name. Takes whatever width the other columns leave, with a 160 px floor. |
 | **Similarity** | A badge saying how this row relates to its group's chosen keeper: **★ Ref** (the keeper), `100%` (exact duplicate), `N%` (near match), **★ N%** in a dashed pill (linked indirectly through another member), or `—` (video / no comparable image). The ★ marks the two states that are not a direct measurement against the keeper — the keeper itself, and a transitive match. Colour, border style and weight all differ, so the badge still reads in grayscale; the scanner's raw classification sits in its tooltip. How groups are formed (and why): [`docs/grouping-topology.md`](docs/grouping-topology.md). |
 | **Action** | Your decision, as a three-segment control: **Keep** / **Delete** / **Skip**. |
 | **Score** | Keep-worthiness ranking in `[0.0, 1.0]` (#187). Within-group rows sort by this descending — best copy at the top. Empty for Live Photo MOV passengers. |
 | **Resolution** | Pixel dimensions (e.g. `4032×3024`) |
-| **Size** | File size, human-readable (e.g. `1.2 MB`); sortable. |
+| **Size** | File size, human-readable (e.g. `1.2 MB`). |
 | **Shot Date** | EXIF `DateTimeOriginal` |
+
+Which columns can be sorted is generated from the code: see [`docs/reference/columns.md`](docs/reference/columns.md).
 
 Drag a header edge to resize a column — widths persist across launches, the
 chosen sort for the rest of the session. On a narrow window the table sheds

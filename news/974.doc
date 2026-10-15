@@ -1,0 +1,1 @@
+Generate the reference tables (columns, routes, settings keys, SSE events, catalogue counts) from the code and check them in CI (#958).
