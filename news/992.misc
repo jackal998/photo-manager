@@ -1,0 +1,1 @@
+Keep tests and local qa runs out of the real %LOCALAPPDATA%\PhotoManager folder: app data resolves through PHOTO_MANAGER_DATA_DIR under pytest and the qa runners (#968).
