@@ -37,7 +37,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from scripts import check_rules_register as crr  # noqa: E402
-from scripts.gen_features_index import entry_sections  # noqa: E402
+from scripts.gen_features_index import EntrySection, entry_sections  # noqa: E402
 from scripts.hooks import docs_impact_guard as dig  # noqa: E402
 
 LOG_PATH = "docs/reconcile-log.md"
@@ -215,21 +215,67 @@ def _units(since: str, until: str) -> list[Unit]:
     return units
 
 
+_LINK_DEST_RE = re.compile(r"\]\(([^)\s]+)\)")
+_RULE_LINE = "---"
+
+
+def _entry_body(lines: list[str]) -> list[str]:
+    """An entry's text for comparison: link destinations masked (a move rewrites them for the
+    new depth, which is not an edit), trailing blank and separator lines dropped (a block's
+    trailing separator depends on what follows it in its file, not on the entry)."""
+    masked = [_LINK_DEST_RE.sub("](LINK)", line) for line in lines]
+    while masked and (not masked[-1].strip() or masked[-1].strip() == _RULE_LINE):
+        masked.pop()
+    return masked
+
+
+def _overlaps(section: EntrySection, ranges: list[tuple[int, int]]) -> bool:
+    return any(section.start <= hi and lo <= section.end for lo, hi in ranges)
+
+
 def touched_entries(
     base_texts: dict[str, str], head_texts: dict[str, str], diff: str
 ) -> tuple[set[str], dict[str, str], list[tuple[str, str, set[str]]]]:
-    """Entry keys ("<path>#<slug>") touched by the feature-inventory diff (docs_impact_guard's
-    hunk mapping), their labels, and every head-side entry with the source paths its text cites.
-    ``base_texts``/``head_texts`` map each features file to its text. Pure: texts in, data out."""
-    state = dig._diff_state(dig.Inputs(base_texts=base_texts, head_texts=head_texts, diff=diff))
-    entries = []
-    for path in sorted(head_texts):
-        text = head_texts[path]
-        head_lines = text.replace("\r\n", "\n").split("\n")
+    """Entry slugs touched by the feature-inventory range, their labels, and every head-side
+    entry with the source paths its text cites. ``base_texts``/``head_texts`` map each features
+    file to its text; ``diff`` is the range's diff over those files. Pure: texts in, data out.
+
+    An entry's identity is its slug (unique across the inventory), so an entry moved between
+    files pairs with itself. It is touched when it is added or deleted, when its text changed
+    (link destinations masked), or when a hunk overlaps it in the same file on both sides."""
+    hunks = dig._hunks_by_path(diff)
+    base = _entry_index(base_texts)
+    head = _entry_index(head_texts)
+    touched: set[str] = set()
+    labels: dict[str, str] = {}
+    for slug in set(base) | set(head):
+        b, h = base.get(slug), head.get(slug)
+        labels[slug] = (h or b)[0]
+        if b is None or h is None:
+            touched.add(slug)
+            continue
+        if _entry_body(b[2]) != _entry_body(h[2]):
+            touched.add(slug)
+        elif b[1] == h[1]:
+            removed, added = hunks.get(h[1], ([], []))
+            if _overlaps(h[3], added) or _overlaps(b[3], removed):
+                touched.add(slug)
+    entries = [
+        (label, slug, surface_paths(lines))
+        for slug, (label, _path, lines, _sec) in head.items()
+    ]
+    return touched, labels, entries
+
+
+def _entry_index(texts: dict[str, str]) -> dict[str, tuple[str, str, list[str], EntrySection]]:
+    """slug -> (label, file, the entry's lines, its section span) across every features file."""
+    index: dict[str, tuple[str, str, list[str], EntrySection]] = {}
+    for path in sorted(texts):
+        text = texts[path]
+        lines = text.replace("\r\n", "\n").split("\n")
         for sec in entry_sections(text):
-            cited = surface_paths(head_lines[sec.start - 1 : sec.end])
-            entries.append((sec.label, f"{path}#{sec.slug}", cited))
-    return state.touched, state.labels, entries
+            index[sec.slug] = (sec.label, path, lines[sec.start - 1 : sec.end], sec)
+    return index
 
 
 def _features_paths(rev: str) -> list[str]:
@@ -325,7 +371,7 @@ def _render_features(since: str, until: str, changed: set[str]) -> list[str]:
         "## (e) Features entries",
         "",
         "Touched in range:",
-        *_list_or_none([labels[slug] for slug in sorted(touched)]),
+        *_list_or_none(sorted({labels[slug] for slug in touched})),
         "",
         "Possibly stale (best effort): an entry whose text did not change, but a non-test",
         "source file it cites (markdown link or backticked path) changed in range. Entries",

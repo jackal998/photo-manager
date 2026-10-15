@@ -146,11 +146,11 @@ def test_touched_entries_maps_the_docs_impact_diff_and_reads_surface_paths():
     touched, labels, entries = dr.touched_entries(
         {area: FEATURES_BASE}, {area: FEATURES_HEAD}, diff
     )
-    assert touched == {f"{area}#alpha"}
-    assert labels == {f"{area}#alpha": "Alpha", f"{area}#beta": "Beta"}
+    assert touched == {"alpha"}
+    assert labels == {"alpha": "Alpha", "beta": "Beta"}
     assert entries == [
-        ("Alpha", f"{area}#alpha", {"core/x.py"}),
-        ("Beta", f"{area}#beta", set()),
+        ("Alpha", "alpha", {"core/x.py"}),
+        ("Beta", "beta", set()),
     ]
 
 
