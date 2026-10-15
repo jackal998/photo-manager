@@ -202,7 +202,7 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
   - **All-delete banner.** It is narrowed to the filter as well — see [the complete-group banner](#execute-action--complete-group-warning-banner-with-jump-to).
 - **Conditions / variants:**
   - **No Keep or Lock option.** Keep (`""`) rows never appear in the Execute tree, and a lock is not a decision.
-  - **With the lock gate:** a Skip-only Execute covers only Skip rows, a filtered Execute covers only the visible type, so locked rows of the hidden type do not raise the lock prompt; a locked row of the visible type, Skip included, does (`R-LOCK-4`).
+  - **With the lock gate:** a filtered Execute covers only the visible type, so locked rows of the hidden type do not raise the [lock prompt](#execute-action--lock-confirm-dialog); a locked row of the visible type, Skip included, does (`R-LOCK-4`).
   - **With the complete-group confirm:** under a filter other than "All decided", the [confirm](#execute-action--complete-group-delete-confirm) checks the visible rows.
   - **With "Execute selected":** the selection **is** intersected with the filter — [Execute selected](#execute-action--partial-execution-via-execute-selected) is scoped as `R-EXEC-1` states (#940, below).
   - The filter lives in the dialog and is not reset when the dialog closes. It stays set across close and reopen and returns to "All decided" only on a page reload. The retired desktop client reset it on every reopen.
