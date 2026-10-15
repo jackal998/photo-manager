@@ -38,6 +38,21 @@ def _require_manifest(manifest_path: str) -> None:
         raise FileNotFoundError(f"Manifest not found: {manifest_path!r}")
 
 
+def _split_by_roots(
+    paths: list[str], allowed_roots: list[str], verb: str
+) -> tuple[list[str], list[str]]:
+    """Split ``paths`` into (inside allowed_roots, outside). Logs each outside path."""
+    inside: list[str] = []
+    outside: list[str] = []
+    for path in paths:
+        if is_under_roots(path, allowed_roots):
+            inside.append(path)
+        else:
+            logger.warning("Refusing {} of out-of-root source_path: {}", verb, path)
+            outside.append(path)
+    return inside, outside
+
+
 def _load_decided_rows(
     manifest_path: str,
     scope_paths: list[str] | None,
@@ -137,9 +152,11 @@ def execute_decisions(
         scope_paths: Optional subset of paths to execute (None = every
             decided row the review shows; see _load_decided_rows).
         recycle: True = send2trash; False = os.unlink.
-        force_locked: If True, unlock-then-execute locked rows decided
-            delete or ignore (#972).  If False and any such rows exist, raises
-            ValueError with the locked paths, and nothing is written.
+        force_locked: If True, execute locked rows decided delete or ignore
+            (#972).  Each is unlocked in the same write as its outcome, so a
+            row whose action does not apply keeps its lock (#985).  If False
+            and any such rows exist, raises ValueError with the locked paths,
+            and nothing is written.
         allowed_roots: Trusted root directories.  Every candidate source_path
             is checked against this list before any deletion or ignore.  Rows
             whose resolved path escapes all roots are collected into the
@@ -168,48 +185,36 @@ def execute_decisions(
         locked_ignore_paths,
     ) = _load_decided_rows(manifest_path, scope_paths)
 
+    # --- Path-safety filter (#985: BEFORE the lock gate) -----------------
+    # Check every candidate source_path against allowed_roots BEFORE the lock
+    # gate and any filesystem operation. This prevents a crafted manifest from
+    # directing the service to delete files outside the trusted root set. A
+    # locked out-of-root row is filtered exactly like an unlocked one: it is
+    # not gated, not offered for unlock, and keeps its lock.
+    refused: list[tuple[str, str]] = []
+    if allowed_roots:
+        delete_paths, out_delete = _split_by_roots(delete_paths, allowed_roots, "delete")
+        locked_delete_paths, out_locked = _split_by_roots(
+            locked_delete_paths, allowed_roots, "delete"
+        )
+        refused = [(p, "outside_allowed_roots") for p in out_delete + out_locked]
+        # Out-of-root ignore rows are silently skipped (not added to refused).
+        ignore_paths, _ = _split_by_roots(ignore_paths, allowed_roots, "ignore")
+        locked_ignore_paths, _ = _split_by_roots(
+            locked_ignore_paths, allowed_roots, "ignore"
+        )
+
     # Locked gate — RE-READ from DB (never trust client state). #972: a locked
     # Skip ('ignore') row is gated like a locked Delete, so one 409 covers both.
     locked_paths = locked_delete_paths + locked_ignore_paths
     if locked_paths and not force_locked:
         raise ValueError("locked_paths", locked_paths)
 
-    if locked_paths and force_locked:
-        # Unlock the locked rows before proceeding.
-        repo.batch_update_lock_state(
-            manifest_path, {p: False for p in locked_paths}
-        )
-        delete_paths = delete_paths + locked_delete_paths
-        ignore_paths = ignore_paths + locked_ignore_paths
-
-    # --- Path-safety filter ------------------------------------------------
-    # Check every candidate source_path against allowed_roots BEFORE any
-    # filesystem operation.  This prevents a crafted manifest from directing
-    # the service to delete files outside the trusted root set.
-    refused: list[tuple[str, str]] = []
-    safe_delete_paths: list[str] = []
-    safe_ignore_paths: list[str] = []
-
-    if allowed_roots:
-        for path in delete_paths:
-            if is_under_roots(path, allowed_roots):
-                safe_delete_paths.append(path)
-            else:
-                logger.warning(
-                    "Refusing delete of out-of-root source_path: {}", path
-                )
-                refused.append((path, "outside_allowed_roots"))
-        for path in ignore_paths:
-            if is_under_roots(path, allowed_roots):
-                safe_ignore_paths.append(path)
-            else:
-                logger.warning(
-                    "Refusing ignore of out-of-root source_path: {}", path
-                )
-                # Out-of-root ignore rows are silently skipped (not added to refused).
-    else:
-        safe_delete_paths = delete_paths
-        safe_ignore_paths = ignore_paths
+    # #985: nothing is unlocked up front. A locked row joins the batch and
+    # keeps its lock until its outcome is written (clear_lock=True below), so
+    # a row whose action does not apply stays locked and in review.
+    safe_delete_paths = delete_paths + locked_delete_paths
+    safe_ignore_paths = ignore_paths + locked_ignore_paths
 
     # --- Per-file delete with D7 consistency ----------------------------
     svc = DeleteService()
@@ -232,7 +237,9 @@ def execute_decisions(
                 success_paths.append(path)
                 # D7: write outcome PER FILE immediately after success.
                 try:
-                    repo.finalize_outcome(manifest_path, [path], "deleted")
+                    repo.finalize_outcome(
+                        manifest_path, [path], "deleted", clear_lock=True
+                    )
                 except Exception as exc:
                     # FIX 5: file IS gone from disk — keep it in success_paths,
                     # record the DB write failure separately.
@@ -247,7 +254,9 @@ def execute_decisions(
                 os.unlink(path)
                 success_paths.append(path)
                 try:
-                    repo.finalize_outcome(manifest_path, [path], "deleted")
+                    repo.finalize_outcome(
+                        manifest_path, [path], "deleted", clear_lock=True
+                    )
                 except Exception as exc:
                     # FIX 5: file IS gone from disk — keep it in success_paths,
                     # record the DB write failure separately.
@@ -257,11 +266,20 @@ def execute_decisions(
                 failed.append((path, str(exc)))
 
     # --- Batch ignore ---------------------------------------------------
+    ignored: list[str] = []
     if safe_ignore_paths:
         try:
-            repo.finalize_outcome(manifest_path, safe_ignore_paths, "ignored")
+            repo.finalize_outcome(
+                manifest_path, safe_ignore_paths, "ignored", clear_lock=True
+            )
+            ignored = safe_ignore_paths
         except Exception as exc:
+            # #985: the rows keep their lock and stay in review; report them
+            # as failed instead of returning them as ignored.
             logger.warning("Failed to write ignored outcomes: {}", exc)
+            failed.extend(
+                (p, f"outcome write failed: {exc}") for p in safe_ignore_paths
+            )
 
     # --- Audit CSV ------------------------------------------------------
     # FIX 5: db_write_failed rows count as success=True (file deleted) with
@@ -290,7 +308,7 @@ def execute_decisions(
     return {
         "success_paths": success_paths,
         "failed": [[p, r] for p, r in failed],
-        "ignored": safe_ignore_paths,
+        "ignored": ignored,
         "missing": missing,
         "log_path": log_path,
         "groups": groups,
@@ -309,8 +327,9 @@ def remove_from_review(
     Args:
         manifest_path: Absolute path to the manifest sqlite.
         file_paths: Paths to mark as ignored.
-        force_locked: If True, remove locked rows anyway. If False and any
-            rows are locked, raises ValueError with the locked paths.
+        force_locked: If True, remove locked rows anyway; each is unlocked in
+            the same write as its ignored outcome (#985). If False and any
+            in-root rows are locked, raises ValueError with the locked paths.
         allowed_roots: Trusted root directories.  Out-of-root rows in
             ``file_paths`` are silently skipped (not marked ignored).
 
@@ -333,26 +352,22 @@ def remove_from_review(
     finally:
         conn.close()
 
-    locked_paths = [p for p, locked in rows if locked]
+    # --- Path-safety filter (#985: BEFORE the lock gate) -----------------
+    # An out-of-root locked row is not gated, not unlocked, and keeps its lock.
+    if allowed_roots:
+        safe_paths, _ = _split_by_roots(file_paths, allowed_roots, "remove_from_review")
+    else:
+        safe_paths = file_paths
+
+    safe_set = set(safe_paths)
+    locked_paths = [p for p, locked in rows if locked and p in safe_set]
 
     if locked_paths and not force_locked:
         raise ValueError("locked_paths", locked_paths)
 
-    if locked_paths and force_locked:
-        repo.batch_update_lock_state(manifest_path, {p: False for p in locked_paths})
-
-    # --- Path-safety filter ------------------------------------------------
-    if allowed_roots:
-        safe_paths = [p for p in file_paths if is_under_roots(p, allowed_roots)]
-        for p in file_paths:
-            if not is_under_roots(p, allowed_roots):
-                logger.warning(
-                    "Refusing remove_from_review of out-of-root source_path: {}", p
-                )
-    else:
-        safe_paths = file_paths
-
-    repo.remove_from_review(manifest_path, safe_paths)
+    # #985: nothing is unlocked up front. Locked rows keep their lock until the
+    # ignored write clears it in the same statement (clear_lock=True).
+    repo.remove_from_review(manifest_path, safe_paths, clear_lock=True)
 
     from core.app_service.review_service import load_review
     try:
