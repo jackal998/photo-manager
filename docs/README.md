@@ -5,5 +5,5 @@
 | Code facts (columns, settings keys, routes, decision values, scenario list) | generated tables (coming) |
 | Cross-cutting behaviour rules (lock gate, Skip vs Delete, Execute scope) | [`behaviour/rules.md`](behaviour/rules.md) |
 | Per-surface behaviour (what each dialog or menu shows and does) | [`features.md`](features.md) |
-| Design rulings | `design/rulings.md` (coming) |
+| Design rulings | [`design/rulings.md`](design/rulings.md) |
 | History and why it changed | git, `news/`, `CHANGELOG.md` |
