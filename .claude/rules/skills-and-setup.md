@@ -14,7 +14,7 @@ Skills live in two homes, split by trust level:
   shared across all contributors. Generic to the codebase: workflow,
   conventions, test scaffolding, QA drivers. Today this includes
   `agentic-engineering/`, `app-security-patterns/`, `conventional-comments/`,
-  `docs-features-drift/`, `github-issue-create/`,
+  `docs-features-drift/`, `docs-reconcile/`, `github-issue-create/`,
   `github-pr-create/`,
   `github-pr-review-fetch/`, `github-pr-review-pending/`,
   `github-pr-review-submitted/`, `impact-map/`,
