@@ -909,7 +909,12 @@ class ManifestRepository:
         """
         self.finalize_outcome(manifest_path, file_paths, "ignored")
 
-    def restore_to_review(self, manifest_path: str, file_paths: list[str]) -> int:
+    def restore_to_review(
+        self,
+        manifest_path: str,
+        file_paths: list[str],
+        unlock_paths: list[str] | tuple[str, ...] = (),
+    ) -> int:
         """Return dismissed rows to review (outcome 'ignored' → '') — #909.
 
         The inverse of :meth:`remove_from_review`, which is what makes an
@@ -917,12 +922,20 @@ class ManifestRepository:
         redundant ``executed``, already 0 for 'ignored'), so resetting both
         restores the row exactly. Rows in any other state — still in review,
         or 'deleted' — are left alone. Returns the number of rows changed.
+
+        ``unlock_paths`` (#981) are cleared in the SAME transaction, so a
+        forced restore of a locked row never lands half-done: either the row
+        is back in review and unlocked, or nothing changed.
         """
         if not file_paths:
             return 0
         self.ensure_schema(manifest_path)
         conn = _connect(manifest_path)
         try:
+            if unlock_paths:
+                conn.executemany(
+                    _UPDATE_LOCK_SQL, [(0, p) for p in unlock_paths]
+                )
             cursor = conn.executemany(
                 _RESTORE_TO_REVIEW_SQL, [(p,) for p in file_paths]
             )

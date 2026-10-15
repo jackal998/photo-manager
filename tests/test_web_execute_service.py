@@ -625,6 +625,63 @@ class TestRestoreToReview:
         assert result["restored"] == 0
         assert _read_col(manifest, str(f0), "outcome") == "ignored"
 
+    def _locked_skipped_manifest(self, tmp_path: Path) -> tuple[Path, list[Path]]:
+        """Two rows that are both dismissed ('ignored') AND locked (#981)."""
+        files = _make_real_files(tmp_path, 2)
+        rows = [
+            {
+                "source_path": str(f),
+                "action": "" if i == 0 else "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": None if i == 0 else 2,
+                "outcome": "ignored",
+                "user_decision": "",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            }
+            for i, f in enumerate(files)
+        ]
+        return _make_manifest(tmp_path, rows), files
+
+    def test_locked_ignored_row_is_refused_and_nothing_is_written(self, tmp_path):
+        manifest, (f0, f1) = self._locked_skipped_manifest(tmp_path)
+
+        with pytest.raises(ValueError) as exc:
+            restore_to_review(str(manifest), [str(f0), str(f1)])
+
+        assert exc.value.args[0] == "locked_paths"
+        assert set(exc.value.args[1]) == {str(f0), str(f1)}
+        for f in (f0, f1):
+            assert _read_col(manifest, str(f), "outcome") == "ignored"
+            assert _read_col(manifest, str(f), "is_locked") == 1
+
+    def test_refusal_is_all_or_nothing_when_only_one_row_is_locked(self, tmp_path):
+        manifest, (f0, f1) = self._locked_skipped_manifest(tmp_path)
+        with sqlite3.connect(str(manifest)) as conn:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 0 WHERE source_path = ?",
+                (str(f1),),
+            )
+
+        with pytest.raises(ValueError):
+            restore_to_review(str(manifest), [str(f0), str(f1)])
+
+        assert _read_col(manifest, str(f0), "outcome") == "ignored"
+        assert _read_col(manifest, str(f1), "outcome") == "ignored"
+
+    def test_force_locked_unlocks_and_restores_in_one_write(self, tmp_path):
+        manifest, (f0, f1) = self._locked_skipped_manifest(tmp_path)
+
+        result = restore_to_review(
+            str(manifest), [str(f0), str(f1)], force_locked=True
+        )
+
+        assert result["restored"] == 2
+        for f in (f0, f1):
+            assert _read_col(manifest, str(f), "outcome") == ""
+            assert _read_col(manifest, str(f), "executed") == 0
+            assert _read_col(manifest, str(f), "is_locked") == 0
+
     def test_missing_manifest_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             restore_to_review(str(tmp_path / "no.sqlite"), ["x"])

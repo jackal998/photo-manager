@@ -53,6 +53,7 @@ class RestoreRequest(BaseModel):
 
     manifest_path: str
     file_paths: list[str]
+    force_locked: bool = False
 
 
 class PruneRequest(BaseModel):

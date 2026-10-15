@@ -843,6 +843,58 @@ class TestPostRestore:
         assert _read_outcome(manifest, str(f1)) == ""
         assert _read_outcome(manifest, str(f2)) == ""
 
+    def _locked_skipped_manifest(self, tmp_path: Path) -> tuple[Path, list[Path]]:
+        """Two rows both dismissed ('ignored') and locked — the #981 shape."""
+        files = _make_real_files(tmp_path, 2)
+        rows = [
+            {
+                "source_path": str(f),
+                "action": "" if i == 0 else "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": None if i == 0 else 2,
+                "outcome": "ignored",
+                "user_decision": "",
+                "is_locked": 1,
+                "file_size_bytes": 128,
+            }
+            for i, f in enumerate(files)
+        ]
+        return _make_manifest(tmp_path, rows), files
+
+    def test_locked_ignored_row_gets_409_and_nothing_changes(self, client_with_roots, tmp_path):
+        client, root = client_with_roots
+        manifest, (f1, f2) = self._locked_skipped_manifest(tmp_path)
+        paths = [str(f1), str(f2)]
+
+        resp = client.post("/api/restore", json={"manifest_path": str(manifest), "file_paths": paths})
+
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "locked_paths"
+        assert set(detail["locked_paths"]) == set(paths)
+        assert _read_outcome(manifest, str(f1)) == "ignored"
+        assert _read_is_locked(manifest, str(f1)) is True
+        assert _read_outcome(manifest, str(f2)) == "ignored"
+        assert _read_is_locked(manifest, str(f2)) is True
+
+    def test_force_locked_unlocks_and_restores(self, client_with_roots, tmp_path):
+        client, root = client_with_roots
+        manifest, (f1, f2) = self._locked_skipped_manifest(tmp_path)
+        paths = [str(f1), str(f2)]
+
+        resp = client.post("/api/restore", json={
+            "manifest_path": str(manifest),
+            "file_paths": paths,
+            "force_locked": True,
+        })
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["restored"] == 2
+        assert _read_outcome(manifest, str(f1)) == ""
+        assert _read_is_locked(manifest, str(f1)) is False
+        assert _read_outcome(manifest, str(f2)) == ""
+        assert _read_is_locked(manifest, str(f2)) is False
+
     def test_missing_manifest_returns_404(self, client_with_roots, tmp_path):
         client, root = client_with_roots
         resp = client.post("/api/restore", json={

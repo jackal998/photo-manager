@@ -36,7 +36,7 @@ import {
 // ---------------------------------------------------------------------------
 
 function seedLockConflict(
-  op: "execute" | "remove" | "decision" | "apply-best-copy" | "prune",
+  op: "execute" | "remove" | "decision" | "apply-best-copy" | "prune" | "restore",
   paths: string[] = ["/photos/a.jpg"],
   originalPaths: string[] | null = null,
   pendingDecision?: "" | "delete" | "ignore",
@@ -506,5 +506,98 @@ describe("LockConfirmDialog — Execute copy by locked-row fate (#972)", () => {
       scopePaths: ["/a.jpg", "/z.jpg"],
       forceLocked: true,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #981 — op="restore" (POST /api/restore 409 locked_paths, the Undo of an
+// immediate Skip). Restore deletes nothing, so the copy must say the rows go
+// back into review and are unlocked, and the confirm is NOT destructive.
+// ---------------------------------------------------------------------------
+
+describe("LockConfirmDialog — op restore (#981)", () => {
+  let restoreMock: ReturnType<typeof vi.fn>;
+  let executeDecisionsMock: ReturnType<typeof vi.fn>;
+  let removeFromListMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    restoreMock = vi.fn().mockResolvedValue(undefined);
+    executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
+    removeFromListMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({
+      restoreToReview: restoreMock,
+      executeDecisions: executeDecisionsMock,
+      removeFromList: removeFromListMock,
+    } as never);
+    clearLockConflict();
+  });
+
+  afterEach(() => {
+    clearLockConflict();
+  });
+
+  it("states that the rows go back into review, unlocked, and nothing is deleted", () => {
+    const paths = ["/photos/locked.jpg"];
+    seedLockConflict("restore", paths);
+    render(<LockConfirmDialog />);
+    expect(
+      screen.getByText("Locked rows going back into review")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /^1 locked file is about to go back into review and be unlocked\. Nothing is deleted: restored files stay on disk\./
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Recycle Bin/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/about to be deleted/i)).not.toBeInTheDocument();
+  });
+
+  it("uses plural grammar for n>1", () => {
+    seedLockConflict("restore", ["/a.jpg", "/b.jpg"]);
+    render(<LockConfirmDialog />);
+    expect(
+      screen.getByText(/^2 locked files are about to go back into review/)
+    ).toBeInTheDocument();
+  });
+
+  it("Unlock & Apply (restore) re-runs restoreToReview over the ORIGINAL list with forceLocked:true", async () => {
+    const user = userEvent.setup();
+    const lockedPaths = ["/photos/locked.jpg"];
+    const originalPaths = ["/photos/ok.jpg", "/photos/locked.jpg"];
+    seedLockConflict("restore", lockedPaths, originalPaths);
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    expect(restoreMock).toHaveBeenCalledWith(originalPaths, { forceLocked: true });
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+    expect(removeFromListMock).not.toHaveBeenCalled();
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+  });
+
+  it("Unlocked Only (restore) restores only the unlocked subset, without force", async () => {
+    const user = userEvent.setup();
+    const lockedPaths = ["/photos/locked.jpg"];
+    const originalPaths = ["/photos/ok.jpg", "/photos/locked.jpg", "/photos/also-ok.jpg"];
+    seedLockConflict("restore", lockedPaths, originalPaths);
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCKED_ONLY));
+    expect(restoreMock).toHaveBeenCalledWith(["/photos/ok.jpg", "/photos/also-ok.jpg"]);
+    expect(executeDecisionsMock).not.toHaveBeenCalled();
+  });
+
+  it("Cancel (restore) clears lockConflict and writes nothing", async () => {
+    const user = userEvent.setup();
+    seedLockConflict("restore", ["/photos/a.jpg"]);
+    render(<LockConfirmDialog />);
+    await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_CANCEL));
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+    expect(restoreMock).not.toHaveBeenCalled();
+  });
+
+  it("Unlock & Apply uses the default (non-destructive) variant for op='restore'", () => {
+    seedLockConflict("restore", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-warm");
+    expect(btn.className).not.toContain("bg-danger-warm");
   });
 });

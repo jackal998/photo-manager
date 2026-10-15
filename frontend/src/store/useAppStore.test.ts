@@ -820,6 +820,82 @@ describe("undoSkipNow – puts the skipped rows back in the review", () => {
     expect(toast!.undoing).toBe(false);
     expect(manifest.error).toBeTruthy();
   });
+
+  // #981 — a locked dismissed row is gated like every other locked action.
+  it("a locked row routes the Undo to lockConflict op=restore and keeps the toast", async () => {
+    seedManifest([]);
+    seedSkipToast(["/p/c.jpg"]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: ["/p/b.jpg"] })
+    );
+
+    await useAppStore.getState().undoSkipNow();
+
+    const { toast, execute, manifest } = useAppStore.getState();
+    expect(execute.lockConflict).not.toBeNull();
+    expect(execute.lockConflict!.op).toBe("restore");
+    expect(execute.lockConflict!.paths).toEqual(["/p/b.jpg"]);
+    // The whole Undo list (skipped rows + pruned singletons), not just the locked row.
+    expect(execute.lockConflict!.originalPaths).toEqual([
+      "/p/a.jpg",
+      "/p/b.jpg",
+      "/p/c.jpg",
+    ]);
+    expect(toast).not.toBeNull();
+    expect(toast!.undoing).toBe(false);
+    expect(manifest.error).toBeNull();
+  });
+});
+
+describe("restoreToReview – the lock-confirm retry for op=restore (#981)", () => {
+  it("forceLocked sends force_locked:true, replaces the groups and clears the skip toast", async () => {
+    seedManifest([]);
+    useAppStore.setState({
+      toast: {
+        id: 9,
+        kind: "skip-now",
+        groupNumber: null,
+        decision: null,
+        affectedCount: 1,
+        lockedCount: 0,
+        snapshot: [{ file_path: "/p/a.jpg", decision: "", locked: true }],
+        prunedPaths: [],
+        undoing: false,
+      },
+    });
+    const restored = makeGroup(1, ["/p/a.jpg", "/p/b.jpg"]);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ok200({ restored: 1, groups: [restored] }));
+
+    await useAppStore
+      .getState()
+      .restoreToReview(["/p/a.jpg"], { forceLocked: true });
+
+    expect(fetchSpy.mock.calls[0][0]).toBe("/api/restore");
+    expect(fetchBody(fetchSpy, 0)).toEqual({
+      manifest_path: "/data/scan.db",
+      file_paths: ["/p/a.jpg"],
+      force_locked: true,
+    });
+    const state = useAppStore.getState();
+    expect(state.manifest.groups).toEqual([restored]);
+    expect(state.toast).toBeNull();
+    expect(state.execute.lockConflict).toBeNull();
+  });
+
+  it("a 409 again sets lockConflict op=restore with the caller's path list", async () => {
+    seedManifest([]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: ["/p/a.jpg"] })
+    );
+
+    await useAppStore.getState().restoreToReview(["/p/a.jpg", "/p/z.jpg"]);
+
+    const { execute } = useAppStore.getState();
+    expect(execute.lockConflict!.op).toBe("restore");
+    expect(execute.lockConflict!.originalPaths).toEqual(["/p/a.jpg", "/p/z.jpg"]);
+  });
 });
 
 describe("immediate Skip + singleton prune – Undo reverses both", () => {

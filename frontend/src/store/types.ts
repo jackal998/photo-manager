@@ -267,7 +267,7 @@ export interface UndoToast {
 export interface LockConflict {
   /** The paths the server reported as locked. */
   paths: string[];
-  op: "execute" | "remove" | "prune" | "decision" | "apply-best-copy";
+  op: "execute" | "remove" | "prune" | "decision" | "apply-best-copy" | "restore";
   /**
    * The original path list that triggered the conflict.
    * - execute: all decided paths that were in scope at call time (null means
@@ -279,6 +279,8 @@ export interface LockConflict {
    *   triggered the conflict.
    * - apply-best-copy: unused (null) — the retry re-runs by groupNumber, not
    *   a path list (see `groupNumber` below).
+   * - restore: the restore path list (the Undo's skipped rows + pruned
+   *   singletons) — the retry re-runs restoreToReview over it (#981).
    * Used by "Unlocked Only" to compute the filtered scope without re-hitting the
    * locked files.
    */
@@ -825,6 +827,17 @@ export interface AppActions {
    * `undoKeepBest` — a failed restore leaves the toast up.
    */
   undoSkipNow(): Promise<void>;
+
+  /**
+   * POST /api/restore for `paths` — the retry behind the lock-confirm dialog
+   * for op="restore" (#981). "Unlock & Apply" passes `forceLocked`; "Unlocked
+   * only" passes the unlocked subset. On success replaces manifest.groups and
+   * clears a skip-now toast; on 409 locked_paths sets lockConflict again.
+   */
+  restoreToReview(
+    paths: string[],
+    opts?: { forceLocked?: boolean }
+  ): Promise<void>;
 
   /** Clear the toast (its timer expired, or Undo finished). */
   dismissToast(): void;

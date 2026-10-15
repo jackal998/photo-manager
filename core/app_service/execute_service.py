@@ -365,10 +365,33 @@ def remove_from_review(
     return {"removed": len(safe_paths), "groups": groups}
 
 
+def _locked_skipped_paths(manifest_path: str, file_paths: list[str]) -> list[str]:
+    """Return the paths in ``file_paths`` that are locked AND dismissed (#981).
+
+    Only 'ignored' rows are gated: restore changes nothing else, so a locked
+    row still in review is not something this write would touch.
+    """
+    if not file_paths:
+        return []
+    conn = _connect(manifest_path)
+    try:
+        placeholders = ",".join("?" for _ in file_paths)
+        rows = conn.execute(
+            f"SELECT source_path FROM migration_manifest "
+            f"WHERE source_path IN ({placeholders}) "
+            f"AND outcome = 'ignored' AND is_locked = 1",
+            file_paths,
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+
+
 def restore_to_review(
     manifest_path: str,
     file_paths: list[str],
     allowed_roots: list[str] | None = None,
+    force_locked: bool = False,
 ) -> dict[str, Any]:
     """Undo an immediate Skip: put dismissed rows back in review (#909).
 
@@ -377,14 +400,24 @@ def restore_to_review(
     written — so resetting ``outcome`` to ``''`` reverses it exactly. Only rows
     currently 'ignored' change; a 'deleted' row stays deleted.
 
+    A locked dismissed row is gated like every other locked action (#981): it
+    is refused with ``ValueError("locked_paths", ...)`` and nothing is written,
+    unless ``force_locked`` — then it is unlocked and restored in one write.
+
     Args:
         manifest_path: Absolute path to the manifest sqlite.
         file_paths: Paths to return to review.
         allowed_roots: Trusted root directories.  Out-of-root rows in
             ``file_paths`` are skipped (not restored), as in remove.
+        force_locked: If True, unlock locked dismissed rows and restore them.
+            If False and any are locked, raises ValueError with the paths.
 
     Returns:
         Dict with keys: restored (rows changed), groups.
+
+    Raises:
+        ValueError: ``("locked_paths", [...])`` when a locked dismissed row is
+            in scope and ``force_locked`` is False.
     """
     _require_manifest(manifest_path)
     if allowed_roots:
@@ -397,7 +430,15 @@ def restore_to_review(
     else:
         safe_paths = file_paths
 
-    restored = ManifestRepository().restore_to_review(manifest_path, safe_paths)
+    repo = ManifestRepository()
+    repo.ensure_schema(manifest_path)
+    locked_paths = _locked_skipped_paths(manifest_path, safe_paths)
+    if locked_paths and not force_locked:
+        raise ValueError("locked_paths", locked_paths)
+
+    restored = repo.restore_to_review(
+        manifest_path, safe_paths, unlock_paths=locked_paths
+    )
 
     from core.app_service.review_service import load_review
     try:
