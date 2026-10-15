@@ -109,7 +109,7 @@ session, then reuse.
          - **Modified files** under `app/web/routes/` and `frontend/src/components/`
            crossing the behavioural threshold (≥10 added+deleted
            lines OR any `def` signature change) → **specifically
-           require `docs/features.md`**. Other doc touches do NOT
+           require `docs/features.md` or `docs/features/<area>.md`**. Other doc touches do NOT
            satisfy this stricter trigger.
          Bypass for either: `[docs-not-needed: <reason>]` in title
          or body.

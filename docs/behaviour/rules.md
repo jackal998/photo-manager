@@ -3,7 +3,7 @@
 One authoritative statement per cross-cutting rule: what the app does, which
 code decides it, and which test or scenario pins it.
 
-- Edit a rule HERE, never a copy. A feature entry in `docs/features.md` cites
+- Edit a rule HERE, never a copy. A feature entry in `docs/features/<area>.md` cites
   the rule by its ID (for example `R-LOCK-1`) instead of restating it.
 - `scripts/check_rules_register.py` (CI job `rules-register`) fails when a
   block is malformed, an owning symbol or pin is missing, or a cited ID does not

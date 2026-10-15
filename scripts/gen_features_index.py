@@ -1,24 +1,34 @@
-"""Generate the index table in docs/features.md from its entry headings.
+"""Generate the index table in docs/features.md from the per-Area entry files.
+
+The feature inventory is split (#958): each entry lives in docs/features/<area>.md,
+one file per Area value, and docs/features.md is the landing page holding the
+generated index and the section schema. The index links every entry to its file
+(``features/<area>.md#<slug>``).
 
 Usage:
     python scripts/gen_features_index.py            # rewrite the index block in place
     python scripts/gen_features_index.py --check    # exit 1 if the committed block is stale
     python scripts/gen_features_index.py PATH [--check]
 
+The area files are read from ``features/`` beside PATH (``docs/features/``).
+
 Entries are the H3 headings outside code fences, except those under the
 conventions H2 (CONVENTIONS_H2). Each entry must carry an `- **Area:** <value>`
 line as the first non-blank line under its heading; <value> must be in
-AREA_VOCABULARY. The index block sits between START_MARKER and END_MARKER and is
-sorted case-insensitively by feature name (the heading text).
+AREA_VOCABULARY and must match the file the entry lives in (see area_file_name).
+The landing holds no entries. The index block sits between START_MARKER and
+END_MARKER and is sorted case-insensitively by feature name (the heading text).
 
 Exit codes: 0 ok, 1 index out of date (--check), 2 structural error (missing
-markers, missing or unknown Area, malformed label).
+markers, missing or unknown Area, an entry in the wrong area file, an unknown
+area file, malformed label).
 """
 from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 START_MARKER = "<!-- features-index:start -->"
@@ -40,20 +50,35 @@ AREA_VOCABULARY = (
     "Web UI",
     "i18n",
 )
+# Directory of the area files, relative to the landing docs/features.md.
+FEATURES_SUBDIR = "features"
 BLOCK_FALLBACK = (
     "index block differs from generated output (header, blank, duplicate or unparsed line); "
     "regenerate with scripts/gen_features_index.py"
 )
-DEFAULT_PATH =Path(__file__).resolve().parent.parent / "docs" / "features.md"
+DEFAULT_PATH = Path(__file__).resolve().parent.parent / "docs" / "features.md"
 
 _HEADING_RE = re.compile(r"^(#{1,6}) (.+?)\s*$")
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
 _AREA_RE = re.compile(r"^- \*\*Area:\*\* (.+?)\s*$")
-_ROW_RE = re.compile(r"^\| \[(.*)\]\(#([^)]*)\) \| (.*) \|$")
+_ROW_RE = re.compile(r"^\| \[(.*)\]\(([^)]*)\) \| (.*) \|$")
 
 
 class StructureError(Exception):
     """A condition the generator cannot repair; the file must be fixed by hand."""
+
+
+def area_file_name(area: str) -> str:
+    """The area file for an Area value: lowercase, runs of non-alphanumerics become
+    '-', e.g. 'Set Action dialog' -> 'set-action-dialog.md', 'i18n' -> 'i18n.md'.
+    This function is the single source of the Area -> file mapping."""
+    if area not in AREA_VOCABULARY:
+        raise StructureError(f"Area '{area}' is not in AREA_VOCABULARY")
+    return re.sub(r"[^a-z0-9]+", "-", area.casefold()).strip("-") + ".md"
+
+
+def area_file_names() -> frozenset[str]:
+    return frozenset(area_file_name(area) for area in AREA_VOCABULARY)
 
 
 @dataclass(frozen=True)
@@ -70,6 +95,7 @@ class Entry:
     slug: str
     area: str
     line_idx: int
+    file: str = ""
 
 
 @dataclass(frozen=True)
@@ -186,12 +212,48 @@ def parse_entries(text: str) -> list[Entry]:
     return entries
 
 
+def collect_entries(area_texts: Mapping[str, str]) -> list[Entry]:
+    """Entries of every area file (name -> text), each tagged with its file. Fails
+    closed on an unknown file, an empty area file, or an entry whose Area does not
+    match the file it lives in."""
+    known = area_file_names()
+    entries: list[Entry] = []
+    file_of_label: dict[str, str] = {}
+    for fname in sorted(area_texts):
+        if fname not in known:
+            raise StructureError(
+                f"docs/features/{fname} is not an area file (expected one of {sorted(known)})"
+            )
+        found = parse_entries(area_texts[fname])
+        if not found:
+            raise StructureError(f"docs/features/{fname} holds no entries; delete the file")
+        for entry in found:
+            expected = area_file_name(entry.area)
+            if expected != fname:
+                raise StructureError(
+                    f"entry '{entry.label}' has Area '{entry.area}' but lives in "
+                    f"docs/features/{fname}; it belongs in docs/features/{expected}"
+                )
+            other = file_of_label.get(entry.label)
+            if other is not None and other != fname:
+                raise StructureError(
+                    f"entry '{entry.label}' is defined in docs/features/{other} and "
+                    f"docs/features/{fname}; a feature name must name one entry"
+                )
+            file_of_label[entry.label] = fname
+        entries.extend(replace(entry, file=fname) for entry in found)
+    return entries
+
+
 def _sort_key(entry: Entry) -> tuple[str, str]:
     return (entry.label.casefold(), entry.slug)
 
 
 def render_block(entries: list[Entry]) -> list[str]:
-    rows = [f"| [{e.label}](#{e.slug}) | {e.area} |" for e in sorted(entries, key=_sort_key)]
+    rows = [
+        f"| [{e.label}]({FEATURES_SUBDIR}/{e.file}#{e.slug}) | {e.area} |"
+        for e in sorted(entries, key=_sort_key)
+    ]
     return [START_MARKER, "| Feature | Area |", "|---|---|", *rows, END_MARKER]
 
 
@@ -233,10 +295,19 @@ def _row_problems(expected: list[str], committed: list[tuple[str, str, str]]) ->
     ]
 
 
-def check_text(text: str) -> list[str]:
+def _no_entries_in_landing(text: str) -> None:
+    if parse_entries(text):
+        raise StructureError(
+            "the landing docs/features.md holds entries; each entry belongs in "
+            "docs/features/<area>.md"
+        )
+
+
+def check_text(text: str, area_texts: Mapping[str, str] | None = None) -> list[str]:
     """Return a list of problems; an empty list means the committed block is current."""
     text = _normalise(text)
-    expected = render_block(parse_entries(text))
+    _no_entries_in_landing(text)
+    expected = render_block(collect_entries(area_texts or {}))
     lines = text.split("\n")
     start, end = _block_span(lines)
     committed = lines[start : end + 1]
@@ -245,9 +316,10 @@ def check_text(text: str) -> list[str]:
     return _row_problems(expected[3:-1], _committed_rows(committed)) or [BLOCK_FALLBACK]
 
 
-def regenerate_text(text: str) -> str:
+def regenerate_text(text: str, area_texts: Mapping[str, str] | None = None) -> str:
     text = _normalise(text)
-    block = render_block(parse_entries(text))
+    _no_entries_in_landing(text)
+    block = render_block(collect_entries(area_texts or {}))
     lines = text.split("\n")
     start, end = _block_span(lines)
     return "\n".join([*lines[:start], *block, *lines[end + 1 :]])
@@ -262,25 +334,34 @@ def _write_lf(path: Path, text: str) -> None:
         fh.write(text)
 
 
+def _area_texts(landing: Path) -> dict[str, str]:
+    """Every docs/features/*.md beside the landing, by file name; empty when absent."""
+    folder = landing.parent / FEATURES_SUBDIR
+    if not folder.is_dir():
+        return {}
+    return {p.name: _read(p) for p in sorted(folder.glob("*.md"))}
+
+
 def main(argv: list[str]) -> int:
     check = "--check" in argv
     positional = [a for a in argv if a != "--check"]
     path = Path(positional[0]) if positional else DEFAULT_PATH
     try:
         text = _read(path)
+        areas = _area_texts(path)
         if check:
-            problems = check_text(text)
+            problems = check_text(text, areas)
             if problems:
                 print(f"features index out of date in {path}:")
                 for problem in problems:
                     print(f"  - {problem}")
                 print("fix: python scripts/gen_features_index.py")
                 return 1
-            print(f"features index up to date ({len(parse_entries(text))} entries)")
+            print(f"features index up to date ({len(collect_entries(areas))} entries in {len(areas)} area files)")
             return 0
-        new_text = regenerate_text(text)
+        new_text = regenerate_text(text, areas)
         _write_lf(path, new_text)
-        print(f"wrote features index ({len(parse_entries(new_text))} entries) to {path}")
+        print(f"wrote features index ({len(collect_entries(areas))} entries) to {path}")
         return 0
     except (StructureError, OSError, UnicodeDecodeError) as exc:
         print(f"gen_features_index: {exc}", file=sys.stderr)

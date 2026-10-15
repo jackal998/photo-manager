@@ -30,7 +30,7 @@ all three; this section is the orchestrator-side reference for
    - **behavioural-modify trigger** (#262): MODIFIED files under
      `app/web/routes/` and `frontend/src/components/` with ≥10 added+deleted lines
      OR a `def` signature change. **Strict: requires
-     `docs/features.md` specifically.** Other doc touches
+     `docs/features.md` or `docs/features/<area>.md`.** Other doc touches
      (docs/testing.md, README, CLAUDE.md, pyproject) do NOT
      satisfy this trigger.
 

@@ -1,5 +1,9 @@
-"""CI gate: every PR body declares its ``docs/features.md`` impact, and the
+"""CI gate: every PR body declares its feature-inventory impact, and the
 declaration is checked against the PR's diff.
+
+The feature inventory is split (#958): ``docs/features.md`` is the landing and
+index, and each entry lives in ``docs/features/<area>.md``. The gate reads every
+one of those files, at the merge base and at HEAD.
 
 The existing docs guards (``docs_guard.py``) only ask whether the file was
 TOUCHED. Here the author names the entries the PR affects, and the gate checks
@@ -20,8 +24,7 @@ The body line (case-insensitive key, one line, CRLF tolerated)::
 
 Entry sections come from ``scripts/gen_features_index.py`` (``entry_sections``),
 so "entry" means the same thing to this gate as to the generated index. The
-index block sits under the ``## Index`` heading, outside every entry, so an
-index-only edit touches no entry.
+landing holds no entries, so an index-only edit touches no entry.
 
 Exemptions: none. The existing PR-body gates (``docs_guard``, ``news_guard``,
 ``qa_scenario_guard``) have no author or bot exemption either, so this gate
@@ -40,12 +43,14 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from scripts.gen_features_index import EntrySection, entry_sections
 
 DOC_PATH = "docs/features.md"
+DOC_DIR = "docs/features"
+_FEATURES_FILE = re.compile(r"^docs/features(?:\.md|/[^/]+\.md)$")
 
 _KEY_LINE = re.compile(
     r"^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?docs impact(?::\*\*|\*\*[ \t]*:|[ \t]*:)(.*)$",
@@ -55,11 +60,12 @@ _KEYWORD_FORM = re.compile(r"(none|restructure)[ \t]*(?:—|--|-)[ \t]*(.*)", re
 # An angle-bracketed token is a template placeholder: `<reason>`, `<entry>`.
 _PLACEHOLDER = re.compile(r"<[^<>]*>")
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+_FILE_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)$")
 _COMMA_SPACING = re.compile(r"\s*,\s*")
 
 FORMS_HINT = (
     "  The PR body needs ONE line `Docs impact: <value>`. <value> is one of:",
-    "    a) a comma-separated list of docs/features.md entries, each the exact",
+    "    a) a comma-separated list of docs/features entries, each the exact",
     "       `###` heading text or `#<slug>`:",
     "         Docs impact: Example entry, #example-slug",
     "    b) none — <reason>   (only when the diff touches NO entry section)",
@@ -68,21 +74,40 @@ FORMS_HINT = (
     "         Docs impact: restructure — split the Scan entries into two pages",
 )
 
+Ranges = list[tuple[int, int]]
+
+
+def is_features_path(path: str) -> bool:
+    """True for the landing docs/features.md and each docs/features/<area>.md."""
+    return _FEATURES_FILE.match(path) is not None
+
 
 @dataclass(frozen=True)
 class Inputs:
-    """The three texts the check needs; ``diff`` is ``git diff --unified=0
-    <base>...HEAD -- docs/features.md``, whose hunks index the two texts."""
+    """The texts the check needs. ``base_texts`` and ``head_texts`` map a features
+    path to its text at the merge base and at HEAD (a path absent on a side is
+    simply missing from that mapping). ``diff`` is ``git diff --unified=0
+    <base>...HEAD`` over the features paths, with its ``diff --git`` headers, so
+    each hunk can be attributed to its file."""
 
-    base_text: str
-    head_text: str
+    base_texts: Mapping[str, str]
+    head_texts: Mapping[str, str]
     diff: str
 
 
 @dataclass(frozen=True)
+class _Entry:
+    path: str
+    key: str  # "<path>#<slug>": the identity of an entry across both sides
+    label: str
+    slug: str
+    section: EntrySection
+
+
+@dataclass(frozen=True)
 class _DiffState:
-    base_sections: list[EntrySection]
-    head_sections: list[EntrySection]
+    base_entries: list[_Entry]
+    head_entries: list[_Entry]
     touched: set[str]
     labels: dict[str, str]
 
@@ -111,54 +136,62 @@ def _normalise_label(text: str) -> str:
     return _COMMA_SPACING.sub(",", text.strip())
 
 
-def _hunk_ranges(diff: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """Return (removed base ranges, added head ranges), 1-based inclusive."""
-    removed: list[tuple[int, int]] = []
-    added: list[tuple[int, int]] = []
+def _count(text: str | None) -> int:
+    """A hunk length; git omits it when it is 1."""
+    return 1 if text is None else int(text)
+
+
+def _hunks_by_path(diff: str) -> dict[str, tuple[Ranges, Ranges]]:
+    """Per file: (removed base ranges, added head ranges), 1-based inclusive."""
+    out: dict[str, tuple[Ranges, Ranges]] = {}
+    current: str | None = None
     for line in diff.splitlines():
-        match = _HUNK.match(line)
-        if match is None:
+        header = _FILE_HEADER.match(line)
+        if header is not None:
+            current = header.group(2)
+            out.setdefault(current, ([], []))
             continue
+        match = _HUNK.match(line)
+        if match is None or current is None:
+            continue
+        removed, added = out[current]
         old_start, old_len = int(match.group(1)), _count(match.group(2))
         new_start, new_len = int(match.group(3)), _count(match.group(4))
         if old_len:
             removed.append((old_start, old_start + old_len - 1))
         if new_len:
             added.append((new_start, new_start + new_len - 1))
-    return removed, added
+    return out
 
 
-def _count(text: str | None) -> int:
-    """A hunk length; git omits it when it is 1."""
-    return 1 if text is None else int(text)
+def _overlaps(section: EntrySection, ranges: Ranges) -> bool:
+    return any(section.start <= hi and lo <= section.end for lo, hi in ranges)
 
 
-def _slugs_overlapping(
-    sections: list[EntrySection], ranges: list[tuple[int, int]]
-) -> set[str]:
-    return {
-        section.slug
-        for section in sections
-        for lo, hi in ranges
-        if section.start <= hi and lo <= section.end
-    }
+def _entries(texts: Mapping[str, str]) -> list[_Entry]:
+    found: list[_Entry] = []
+    for path in sorted(texts):
+        for section in entry_sections(texts[path]):
+            found.append(_Entry(path, f"{path}#{section.slug}", section.label, section.slug, section))
+    return found
 
 
 def _diff_state(inputs: Inputs) -> _DiffState:
-    base_sections = entry_sections(inputs.base_text)
-    head_sections = entry_sections(inputs.head_text)
-    removed, added = _hunk_ranges(inputs.diff)
-    base_slugs = {s.slug for s in base_sections}
-    head_slugs = {s.slug for s in head_sections}
+    base_entries = _entries(inputs.base_texts)
+    head_entries = _entries(inputs.head_texts)
+    hunks = _hunks_by_path(inputs.diff)
+    base_keys = {e.key for e in base_entries}
+    head_keys = {e.key for e in head_entries}
     touched = (
-        (head_slugs - base_slugs)  # added entries
-        | (base_slugs - head_slugs)  # deleted entries
-        | _slugs_overlapping(head_sections, added)
-        | _slugs_overlapping(base_sections, removed)  # pure deletions inside an entry
+        (head_keys - base_keys)  # added entries
+        | (base_keys - head_keys)  # deleted entries
     )
-    labels = {s.slug: s.label for s in base_sections}
-    labels.update({s.slug: s.label for s in head_sections})
-    return _DiffState(base_sections, head_sections, touched, labels)
+    for entry in head_entries:  # additions and edits inside an entry
+        touched |= {entry.key} if _overlaps(entry.section, hunks.get(entry.path, ([], []))[1]) else set()
+    for entry in base_entries:  # pure deletions inside an entry
+        touched |= {entry.key} if _overlaps(entry.section, hunks.get(entry.path, ([], []))[0]) else set()
+    labels = {e.key: e.label for e in [*base_entries, *head_entries]}
+    return _DiffState(base_entries, head_entries, touched, labels)
 
 
 def _split_list(value: str, labels: list[str]) -> list[str] | None:
@@ -183,12 +216,12 @@ def _split_list(value: str, labels: list[str]) -> list[str] | None:
     return names
 
 
-def _resolve(name: str, sections: list[EntrySection]) -> set[str]:
-    """Slugs a written name denotes across both versions; empty when unknown."""
+def _resolve(name: str, entries: list[_Entry]) -> set[str]:
+    """Entry keys a written name denotes across both versions; empty when unknown."""
     if name.startswith("#"):
-        return {s.slug for s in sections if s.slug == name[1:]}
+        return {e.key for e in entries if e.slug == name[1:]}
     wanted = _normalise_label(name)
-    return {s.slug for s in sections if _normalise_label(s.label) == wanted}
+    return {e.key for e in entries if _normalise_label(e.label) == wanted}
 
 
 def _check_keyword(form: str, reason: str, load: Callable[[], Inputs]) -> tuple[int, str]:
@@ -198,9 +231,9 @@ def _check_keyword(form: str, reason: str, load: Callable[[], Inputs]) -> tuple[
         return 0, f"docs-impact: restructure — {reason}\n"
     state = _diff_state(load())
     if state.touched:
-        listed = [f"    {state.labels[slug]}" for slug in sorted(state.touched)]
+        listed = [f"    {state.labels[key]}" for key in sorted(state.touched)]
         return _fail(
-            ["  `none` but the diff touches these docs/features.md entries:", *listed,
+            ["  `none` but the diff touches these docs/features entries:", *listed,
              "  Name them in a list instead, or use restructure."]
         )
     return 0, f"docs-impact: none — {reason}; no entry section touched.\n"
@@ -208,24 +241,25 @@ def _check_keyword(form: str, reason: str, load: Callable[[], Inputs]) -> tuple[
 
 def _check_list(value: str, load: Callable[[], Inputs]) -> tuple[int, str]:
     state = _diff_state(load())
-    all_sections = [*state.head_sections, *state.base_sections]
-    names = _split_list(value, [s.label for s in all_sections])
+    all_entries = [*state.head_entries, *state.base_entries]
+    names = _split_list(value, [e.label for e in all_entries])
     if names is None:
         return _fail(["  the list has an empty item (stray comma)."])
     problems: list[str] = []
     named: set[str] = set()
     for name in names:
-        slugs = _resolve(name, all_sections)
-        if not slugs:
+        keys = _resolve(name, all_entries)
+        if not keys:
             problems.append(f"  unknown entry: {name}")
-        elif len(slugs) > 1:
+        elif len({key.rsplit("#", 1)[1] for key in keys}) > 1:
+            # keys sharing one slug are the same entry on both sides of a move
             problems.append(f"  ambiguous (several headings share this text): {name} — write its #slug")
         else:
-            named |= slugs
-    for slug in sorted(named - state.touched):
-        problems.append(f"  named but not touched by the diff: {state.labels[slug]}")
-    for slug in sorted(state.touched - named):
-        problems.append(f"  touched but not named: {state.labels[slug]}")
+            named |= keys
+    for key in sorted(named - state.touched):
+        problems.append(f"  named but not touched by the diff: {state.labels[key]}")
+    for key in sorted(state.touched - named):
+        problems.append(f"  touched but not named: {state.labels[key]}")
     if problems:
         return _fail(problems)
     return 0, f"docs-impact: {len(named)} entr{'y' if len(named) == 1 else 'ies'} named and checked against the diff.\n"
@@ -258,22 +292,18 @@ def _git(*args: str) -> str:
     ).stdout
 
 
-def _blob(rev: str) -> str:
-    """The doc at ``rev``; empty when the file does not exist there."""
-    probe = subprocess.run(
-        ["git", "cat-file", "-e", f"{rev}:{DOC_PATH}"], capture_output=True
-    )
-    if probe.returncode != 0:
-        return ""
-    return _git("show", f"{rev}:{DOC_PATH}")
+def _features_paths(rev: str) -> list[str]:
+    """The features files present at ``rev``: the landing and every area file."""
+    listing = _git("ls-tree", "-r", "--name-only", rev, "--", DOC_PATH, DOC_DIR)
+    return [path for path in listing.splitlines() if is_features_path(path)]
 
 
 def _git_inputs(base_ref: str) -> Inputs:
     merge_base = _git("merge-base", base_ref, "HEAD").strip()
     return Inputs(
-        base_text=_blob(merge_base),
-        head_text=_blob("HEAD"),
-        diff=_git("diff", "--unified=0", f"{base_ref}...HEAD", "--", DOC_PATH),
+        base_texts={p: _git("show", f"{merge_base}:{p}") for p in _features_paths(merge_base)},
+        head_texts={p: _git("show", f"HEAD:{p}") for p in _features_paths("HEAD")},
+        diff=_git("diff", "--unified=0", f"{base_ref}...HEAD", "--", DOC_PATH, DOC_DIR),
     )
 
 

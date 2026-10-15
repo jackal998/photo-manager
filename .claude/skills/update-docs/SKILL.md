@@ -33,7 +33,7 @@ Activate this skill after implementing any non-trivial change to photo-manager s
 | File | What it tracks | Sections / spots to check |
 |------|---------------|--------------------------|
 | `README.md` | Project structure tree, test list, test count, "Run tests" section | `## Project structure` block; `tests/` subtree; `# NNN tests` comment; layer-summary table in "Run tests" |
-| `docs/features.md` | Canonical feature inventory — entry points, triggers, conditions, related PRs/issues/scenarios | Per-feature sections; the generated index table at the top (regenerate with `python scripts/gen_features_index.py`; never hand-edit it) |
+| `docs/features/<area>.md` | Canonical feature inventory — entry points, triggers, conditions, related PRs/issues/scenarios (one file per Area) | Per-feature sections in the entry's Area file; the generated index table in `docs/features.md` (regenerate with `python scripts/gen_features_index.py`; never hand-edit it) |
 | `pyproject.toml` | Python version for Black / Ruff / Pylint; coverage `omit` list (each entry needs a justification + cross-layer pointer) | `target-version = ["py3XX"]`, `target-version = "py3XX"`, `py-version = "3.XX"`; `[tool.coverage.run] omit = [...]` comments |
 | `docs/testing.md` | The 3-layer model + per-module residual-risk table — canonical answer to "what's covered, what's not, what's the risk" | Per-module rows under each section (`scanner/`, `core/`, `infrastructure/`, `app/`); "Open work" list at the end |
 | `.claude/rules/testing-policy.md` (+ the floor summary in `CLAUDE.md` "Testing — the hard floor") | Hard testing rules (no padding, 3 layers, 70% per-file floor, 3-trigger rule for new features) | Only update if the policy itself changes |
@@ -64,10 +64,11 @@ Work through every item below. Check only the items relevant to your change.
 - [ ] Button label change, conditional dialog, action scope change,
       new keyboard shortcut, new menu item, post-action state change,
       new condition affecting a flow → add or update the corresponding
-      section in `docs/features.md` (the canonical feature inventory).
+      section in `docs/features/<area>.md` (the canonical feature inventory,
+      one file per Area; `docs/features.md` is its index).
       Touch `README.md § Usage — GUI § Step N` only if the change is
       part of the documented Step-1-4 happy path; otherwise the
-      `docs/features.md` entry is sufficient. Enforced by
+      `docs/features/<area>.md` entry is sufficient. Enforced by
       `scripts/hooks/docs_guard.py` at `gh pr create` time — see the
       [`docs/features.md`](../../../docs/features.md) "How to update
       this file" section.

@@ -67,8 +67,9 @@ The skill reads:
      calls have no dependencies on each other. Fire all of them in a
      single message with multiple tool calls and synthesise after
      all return — don't serialise.
-2. **`docs/features.md`** at the working tree's HEAD — the canonical
-   feature inventory used by `docs-features-drift/`.
+2. **`docs/features/<area>.md`** at the working tree's HEAD — the canonical
+   feature entries used by `docs-features-drift/` (one file per Area;
+   `docs/features.md` is the index that names them).
 3. **`qa/web/scenarios/sNN_*.py`** files named in features.md entries —
    used by `qa-scenario-drift/`.
 4. **`README.md § Usage — GUI § Step 1-4`** ONLY if the diff touches
@@ -346,16 +347,17 @@ When the user runs `/pr-review` (with or without a PR number):
 
 5. **Gate 4 — historical-drift caveat** (inline, conditional). If
    invoked with a PR number, run `git show <pr-head-sha>:docs/features.md`
-   to detect pre-features.md PRs (the file was introduced in
+   (and `git ls-tree -r --name-only <pr-head-sha> -- docs/features` for the
+   per-Area files, #958) to detect pre-features.md PRs (the file was introduced in
    [PR #263](https://github.com/jackal998/photo-manager/pull/263),
    backfilled in [PR #267](https://github.com/jackal998/photo-manager/pull/267)).
    - If the file didn't exist at PR head AND the current
-     features.md HAS an entry referencing this PR number → emit
+     feature entries (`docs/features/*.md`) HAS an entry referencing this PR number → emit
      ℹ️ informational note: "This PR predates the features.md
      inventory; entry was added in a later backfill PR." **Do
      NOT count as ⚠ or ✗.**
    - If the file didn't exist at PR head AND the current
-     features.md has NO entry referencing this PR number AND
+     feature entries (`docs/features/*.md`) have NO entry referencing this PR number AND
      the diff is behaviour-bearing → emit ✗ "no features.md
      entry exists for the new behaviour introduced by this PR".
 

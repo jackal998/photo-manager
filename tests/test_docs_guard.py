@@ -227,8 +227,8 @@ class TestBlock:
         `frontend/src/` at directory granularity, so suggesting the README
         tree for a new component would send the author to an edit with
         nowhere to land — and an unfollowable instruction is a gate
-        everyone bypasses. Components/hooks point at features.md (which
-        carries a `### Web —` entry per surface); store/lib/api/i18n point
+        everyone bypasses. Components/hooks point at the features area files
+        (which carry a `### Web —` entry per surface); store/lib/api/i18n point
         at testing.md's per-module table (which carries a row per module).
         """
         rc = _run(
@@ -238,7 +238,8 @@ class TestBlock:
         )
         assert rc == 2
         err = capsys.readouterr().err
-        assert "docs/features.md" in err
+        # #958 L1: the suggestion names the area file that holds the Web entries.
+        assert "docs/features/<area>.md (e.g. the `### Web —` entries in docs/features/web-ui.md)" in err
         assert "README.md project tree (under frontend/src" not in err
 
         rc = _run(
@@ -335,6 +336,32 @@ class TestBehaviouralModifyTrigger:
             behavioural_qualifies=True,
         )
         assert rc == 0
+
+    def test_above_threshold_modify_with_an_area_file_passes(self, monkeypatch):
+        """#958: entries live in docs/features/<area>.md; touching one satisfies the trigger."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: scope execute to highlighted'",
+            changed=[
+                "app/web/routes/execute.py",
+                "docs/features/execute-action.md",
+            ],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 0
+
+    def test_above_threshold_modify_with_only_a_readme_still_blocks(self, monkeypatch, capsys):
+        """A doc touch that is not a features file does not satisfy the strict trigger."""
+        rc = _run(
+            monkeypatch,
+            "gh pr create --title 'feat: scope execute to highlighted'",
+            changed=["app/web/routes/execute.py", "README.md"],
+            added=[],
+            behavioural_qualifies=True,
+        )
+        assert rc == 2
+        assert "docs/features.md" in capsys.readouterr().err
 
     def test_component_above_threshold_blocks_same_as_route(self, monkeypatch):
         """A React component rides the same gate as a FastAPI route —

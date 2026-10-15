@@ -66,7 +66,7 @@ behaviour unseen. This skill reconciles after the fact, against the code at HEAD
 6. **File or fix each finding.**
    - A false rule is fixed in `docs/behaviour/rules.md`, the register, never in a copy.
      Then run `python scripts/check_rules_register.py`.
-   - A stale entry is fixed in `docs/features.md`. If you change a heading or an
+   - A stale entry is fixed in its area file `docs/features/<area>.md`. If you change a heading or an
      `Area:` line, run `python scripts/gen_features_index.py --check`.
    - A finding not fixed in this pass is filed with `github-issue-create` (that skill's
      gate applies: explicit yes first). Deferred work is never silently dropped. Record
