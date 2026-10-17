@@ -601,3 +601,94 @@ describe("LockConfirmDialog — op restore (#981)", () => {
     expect(btn.className).not.toContain("bg-danger-warm");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #984 / F5 — "Unlock & Apply" weight follows the locked files' fate. Red
+// (destructive) plus the ⊗ glyph only when an execute deletes at least one
+// file; every other state is the default weight with no glyph. The glyph is
+// aria-hidden, so the accessible name stays "Unlock & Apply".
+// ---------------------------------------------------------------------------
+
+describe("LockConfirmDialog — Unlock & Apply weight by fate (#984, F5)", () => {
+  afterEach(() => {
+    clearGroups();
+    clearLockConflict();
+  });
+
+  it("execute Delete-only: destructive, ⊗ glyph, delete-scope title", () => {
+    seedGroupDecisions({ "/a.jpg": "delete" });
+    seedLockConflict("execute", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-danger-warm");
+    expect(btn.textContent).toContain("⊗");
+    expect(screen.getByText("Locked files in delete scope")).toBeInTheDocument();
+  });
+
+  it("execute Skip-only: default weight, no glyph, skip-scope title", () => {
+    seedGroupDecisions({ "/a.jpg": "ignore" });
+    seedLockConflict("execute", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-warm");
+    expect(btn.className).not.toContain("bg-danger-warm");
+    expect(btn.textContent).not.toContain("⊗");
+    expect(screen.getByText("Locked files in skip scope")).toBeInTheDocument();
+  });
+
+  it("execute mixed (Delete + Skip): destructive with ⊗ glyph", () => {
+    seedGroupDecisions({ "/a.jpg": "ignore", "/b.jpg": "delete" });
+    seedLockConflict("execute", ["/a.jpg", "/b.jpg"]);
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-danger-warm");
+    expect(btn.textContent).toContain("⊗");
+    expect(screen.getByText("Locked files in delete scope")).toBeInTheDocument();
+  });
+
+  it("remove: default weight, no glyph", () => {
+    seedLockConflict("remove", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-warm");
+    expect(btn.className).not.toContain("bg-danger-warm");
+    expect(btn.textContent).not.toContain("⊗");
+  });
+
+  it("prune: default weight, no glyph", () => {
+    seedLockConflict("prune", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-warm");
+    expect(btn.className).not.toContain("bg-danger-warm");
+    expect(btn.textContent).not.toContain("⊗");
+  });
+
+  it("restore: default weight, no glyph", () => {
+    seedLockConflict("restore", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-warm");
+    expect(btn.className).not.toContain("bg-danger-warm");
+    expect(btn.textContent).not.toContain("⊗");
+  });
+
+  it("decision: default weight, no glyph", () => {
+    seedLockConflict("decision", ["/a.jpg"], ["/a.jpg"], "delete");
+    render(<LockConfirmDialog />);
+    const btn = screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY);
+    expect(btn.className).toContain("bg-warm");
+    expect(btn.className).not.toContain("bg-danger-warm");
+    expect(btn.textContent).not.toContain("⊗");
+  });
+
+  it("accessible name stays 'Unlock & Apply' with no ⊗ when destructive", () => {
+    seedGroupDecisions({ "/a.jpg": "delete" });
+    seedLockConflict("execute", ["/a.jpg"]);
+    render(<LockConfirmDialog />);
+    const byName = screen.getByRole("button", { name: "Unlock & Apply" });
+    expect(byName).toBe(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    expect(byName.getAttribute("aria-label")).toBeNull();
+    expect(byName.textContent).toContain("⊗");
+  });
+});

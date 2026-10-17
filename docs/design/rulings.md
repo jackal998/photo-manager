@@ -128,7 +128,7 @@ The repo copy is authoritative for WHAT WAS DECIDED.
 - **Status:** implemented
 - **Implemented by:** `frontend/src/components/Toolbar.tsx::Toolbar`, `frontend/src/components/MenuBar.tsx::MenuBar`
 
-## Review screen post-implementation (F1-F4)
+## Review screen post-implementation (F1-F5)
 
 ### F1 — The hairline stays decorative; the unlocked padlock uses ink-muted
 - **Decision:** #a89f8f stays the decorative `hairline` colour and carries no state. The unlocked padlock is drawn in #6b6358, and the locked one stays #a85a2c. Lock state must differ in glyph shape as well as ink; the unlocked glyph actually shipped is recorded in OWN-922.
@@ -157,6 +157,13 @@ The repo copy is authoritative for WHAT WAS DECIDED.
 - **Source:** REPLY - review screen post-implementation.md (archived design project)
 - **Status:** closed (no build)
 - **Implemented by:** —
+
+### F5 — Lock-confirm "Unlock & Apply" weight follows the files' fate
+- **Decision:** In the lock-confirm dialog, "Unlock & Apply" is destructive (#c4503f) only when at least one locked file goes to the Recycle Bin, that is, execute with deleteN ≥ 1, including a Delete/Skip mix. Its label then carries the ⊗ glyph before the translated text, in an aria-hidden element, so the accessible name stays "Unlock & Apply". Every other op (execute Skip-only, remove, prune, decision, apply-best-copy, restore) uses the default weight with no glyph. Cancel and "Unlocked only" stay outline. Execute with deleteN = 0 uses the existing skip-scope title (`title_remove`). Nothing else changes: no header icon, no coloured body text, no banner, button order unchanged.
+- **Date:** 2026-10-16
+- **Source:** REPLY - lock-confirm button weight 2026-10-16.md (design/archive/requests); GitHub #984; boards in the project Design artifact
+- **Status:** implemented
+- **Implemented by:** `frontend/src/components/dialogs/LockConfirmDialog.tsx::LockConfirmDialog`
 
 ## Implementation deviations and owner rulings
 
