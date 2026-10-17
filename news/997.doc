@@ -1,0 +1,1 @@
+Record the bulk-verb and Keep-best lock exception as `R-LOCK-7` in the behaviour register, so the docs match the code (#972).
