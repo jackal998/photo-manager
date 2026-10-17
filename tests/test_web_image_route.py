@@ -420,6 +420,16 @@ class TestLifespanSettings:
 
     def test_absent_settings_file_keeps_default_cache_dirs(self, tmp_path, monkeypatch):
         """A fresh install (no settings.json) must keep today's defaults."""
+        # #968: the services' Path.home() defaults read USERPROFILE on Windows,
+        # and the thumb-cache init unlinks *.jpg there. Point the whole profile
+        # at a decoy so the default under test can never reach the real cache.
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        monkeypatch.setenv("USERPROFILE", str(profile))
+        monkeypatch.setenv("HOME", str(profile))
+        monkeypatch.setenv("LOCALAPPDATA", str(profile / "local"))
+        # Assert the unset-override fallback; the autouse #968 fixture sets it.
+        monkeypatch.delenv("PHOTO_MANAGER_DATA_DIR", raising=False)
         home = tmp_path / "home-without-settings"
         home.mkdir()
         monkeypatch.setenv("PHOTO_MANAGER_HOME", str(home))
@@ -427,7 +437,7 @@ class TestLifespanSettings:
         app = create_app(frontend_dist=tmp_path / "no-dist")
         _run_lifespan(app)
 
-        default_root = Path.home() / "AppData" / "Local" / "PhotoManager"
+        default_root = profile / "AppData" / "Local" / "PhotoManager"
         assert Path(app.state.image_service._disk_dir) == default_root / "thumbs"
         assert (
             app.state.transcode_service._base_dir.parent

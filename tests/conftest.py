@@ -169,6 +169,25 @@ def _isolate_delete_log_dir(monkeypatch, tmp_path_factory):
     monkeypatch.setattr(_log, "get_delete_log_directory", _redirected_delete_log_dir)
 
 
+@pytest.fixture(scope="session")
+def _app_data_session_dir(tmp_path_factory) -> str:
+    """One throwaway app-data root for the whole pytest session (#968)."""
+    return str(tmp_path_factory.mktemp("app_data"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_data_root(monkeypatch, _app_data_session_dir):
+    """Point every default app-data path at a temp dir, never the real profile (#968).
+
+    The thumbnail cache (``ImageService``, whose init unlinks root-level
+    ``*.jpg`` in it), the transcode cache, and ``init_logging()`` all resolve
+    ``PHOTO_MANAGER_DATA_DIR`` before falling back to
+    ``%USERPROFILE%\\AppData\\Local\\PhotoManager``. Setting the variable here
+    is inherited by any uvicorn subprocess a test launches.
+    """
+    monkeypatch.setenv("PHOTO_MANAGER_DATA_DIR", _app_data_session_dir)
+
+
 # ---------------------------------------------------------------------------
 # Playwright live-server fixture — web_probe tests only
 # ---------------------------------------------------------------------------

@@ -11,11 +11,13 @@ import subprocess
 
 from loguru import logger
 
+from infrastructure.app_data import app_data_override, app_data_root
+
 
 def init_logging(log_dir: str | None = None) -> None:
     """Initialize rotating file logging under the given directory."""
     if log_dir is None:
-        log_dir = str(Path.home() / "AppData" / "Local" / "PhotoManager" / "logs")
+        log_dir = str(app_data_root() / "logs")
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
 
@@ -34,11 +36,13 @@ def init_logging(log_dir: str | None = None) -> None:
 
 def get_log_directory() -> str:
     """Get the main log directory path."""
-    return str(Path.home() / "AppData" / "Local" / "PhotoManager" / "logs")
+    return str(app_data_root() / "logs")
 
 
 def get_delete_log_directory() -> str:
     """Get the delete log directory path."""
+    if app_data_override() is not None:
+        return str(app_data_root() / "delete_logs")
     return os.path.join(os.path.expandvars("%LOCALAPPDATA%"), "PhotoManager", "delete_logs")
 
 

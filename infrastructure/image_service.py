@@ -32,6 +32,8 @@ if sys.platform == "win32":
 
 from loguru import logger
 
+from infrastructure.app_data import app_data_root
+
 # Optional Pillow and HEIF support (top-level to satisfy linting)
 try:  # pragma: no cover - import availability
     from PIL import Image, ImageOps  # type: ignore
@@ -492,9 +494,7 @@ class ImageService:
         # has no one to talk to at __init__ time. ``set_status_reporter``
         # flushes this queue when called.
         self._pending_status_msg: str | None = None
-        self._disk_dir = str(
-            Path.home() / "AppData" / "Local" / "PhotoManager" / "thumbs"
-        )
+        self._disk_dir = str(app_data_root() / "thumbs")
         if settings is not None:
             raw_dir = settings.get("thumbnail_disk_cache_dir", self._disk_dir)
             if isinstance(raw_dir, str):

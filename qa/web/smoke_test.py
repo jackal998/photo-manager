@@ -144,6 +144,11 @@ def _run_browser_smoke(base_url: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
+    # #968: an in-process server (no --url) must not write into the real
+    # app-data folder. With --url this only sets an env var nothing reads.
+    from infrastructure.app_data import ensure_isolated_app_data
+
+    ensure_isolated_app_data()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--url",
