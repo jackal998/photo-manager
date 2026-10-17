@@ -25,8 +25,8 @@ code decides it, and which test or scenario pins it.
 ### R-LOCK-1 — A decision write or Skip now on a locked row is refused with 409
 
 - **Rule:** A decision write (PATCH /api/decision or bulk decide), an apply best copy, a Skip now, an Undo of a Skip now (POST /api/restore of a locked dismissed row, #981), or an Execute (of a locked row decided Skip as well as Delete, `R-LOCK-4`) that targets a locked row is refused with HTTP 409 code `locked_paths` and writes nothing unless `force_locked` is set (a decision write and apply best copy also accept `skip_locked`), and the web client answers that 409 by opening the lock-confirm dialog. Execute-skip joins this flow (#972).
-- **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/action_service.py::apply_best_copy`, `core/app_service/execute_service.py::remove_from_review`, `core/app_service/execute_service.py::restore_to_review`, `core/app_service/execute_service.py::execute_decisions`, `frontend/src/store/useAppStore.ts::lockConflict`
-- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_locked_row_without_flags_returns_409`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_without_force_returns_409`, `tests/test_web_action_routes.py::TestApplyBestCopy::test_locked_peer_without_override_returns_409`, `tests/test_web_execute_service.py::TestRemoveFromReview::test_locked_row_raises_without_force`, `tests/test_web_execute_service.py::TestRestoreToReview::test_locked_ignored_row_is_refused_and_nothing_is_written`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_skip_row_without_force_returns_409`, `tests/test_web_execute_routes.py::TestPostRestore::test_locked_ignored_row_gets_409_and_nothing_changes`, `frontend/src/components/dialogs/LockConfirmDialog.test.tsx::"states that the rows go back into review, unlocked, and nothing is deleted"`, `frontend/src/store/useAppStore.test.ts::"a locked row routes the Undo to lockConflict op=restore and keeps the toast"`, `qa/web/scenarios/s32_lock_confirm_bulk_regex.py`
+- **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/action_service.py::apply_best_copy`, `core/app_service/execute_service.py::remove_from_review`, `core/app_service/execute_service.py::restore_to_review`, `core/app_service/execute_service.py::execute_decisions`, `frontend/src/store/useAppStore.ts::lockConflict`, `app/web/routes/review.py::patch_decision`, `app/web/routes/action.py::post_bulk_decide`, `app/web/routes/action.py::post_apply_best_copy`, `app/web/routes/execute.py::post_execute`, `app/web/routes/execute.py::post_remove`, `app/web/routes/execute.py::post_restore`
+- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_locked_row_without_flags_returns_409`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_without_force_returns_409`, `tests/test_web_action_routes.py::TestApplyBestCopy::test_locked_peer_without_override_returns_409`, `tests/test_web_execute_routes.py::TestPostRemove::test_locked_row_without_force_returns_409`, `tests/test_web_execute_service.py::TestRestoreToReview::test_locked_ignored_row_is_refused_and_nothing_is_written`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_skip_row_without_force_returns_409`, `tests/test_web_execute_routes.py::TestPostRestore::test_locked_ignored_row_gets_409_and_nothing_changes`, `frontend/src/components/dialogs/LockConfirmDialog.test.tsx::"states that the rows go back into review, unlocked, and nothing is deleted"`, `frontend/src/store/useAppStore.test.ts::"a locked row routes the Undo to lockConflict op=restore and keeps the toast"`, `qa/web/scenarios/s32_lock_confirm_bulk_regex.py`
 - **Status:** pinned
 
 ### R-LOCK-2 — Force-locked re-send of a decision write or Execute unlocks its rows
@@ -70,7 +70,7 @@ code decides it, and which test or scenario pins it.
 
 - **Rule:** The Action and Execute review dialogs stay open when an interaction lands outside them, including the focus return from a lock-confirm dialog that closes on top of them.
 - **Owning code:** `frontend/src/components/action/ActionDialog.tsx::ActionDialog`, `frontend/src/components/execute/ExecuteDialog.tsx::ExecuteDialog`
-- **Pins:** `qa/web/scenarios/s32_lock_confirm_bulk_regex.py`, `qa/web/scenarios/s34_lock_confirm_at_execute.py`
+- **Pins:** `qa/web/scenarios/s32_lock_confirm_bulk_regex.py`, `qa/web/scenarios/s34_lock_confirm_at_execute.py`, `frontend/src/components/action/ActionDialog.test.tsx::"an outside pointer-down on the overlay leaves the dialog open"`, `frontend/src/components/execute/ExecuteDialog.test.tsx::"an outside pointer-down on the overlay leaves the dialog open"`
 - **Status:** pinned
 
 ## EXEC
@@ -103,9 +103,9 @@ code decides it, and which test or scenario pins it.
 ### R-DELETE-1 — Executing a delete sends each file to the Recycle Bin by default
 
 - **Rule:** Executing a delete through `execute_decisions` sends each file to the operating system Recycle Bin via send2trash by default, rather than unlinking it.
-- **Owning code:** `infrastructure/delete_service.py::delete_to_recycle`, `core/app_service/execute_service.py::execute_decisions`
-- **Pins:** none
-- **Status:** unpinned
+- **Owning code:** `infrastructure/delete_service.py::delete_to_recycle`, `core/app_service/execute_service.py::execute_decisions`, `app/web/models.py::ExecuteRequest`, `frontend/src/store/useAppStore.ts::executeDecisions`
+- **Pins:** `tests/test_web_execute_service.py::TestExecuteRecycleDefault::test_default_sends_delete_to_recycle_not_unlink`, `tests/test_web_execute_routes.py::TestExecuteRecycleDefault::test_body_without_recycle_key_recycles_each_file`, `frontend/src/store/useAppStore.test.ts::"executeDecisions sends recycle: true by default"`
+- **Status:** pinned
 
 ## SCAN
 

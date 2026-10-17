@@ -26,7 +26,7 @@
 //      fix (handleApply now depends on doApply, which itself depends on
 //      [field, pattern]).
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -178,6 +178,19 @@ describe("ActionDialog", () => {
     openDialog();
     render(<ActionDialog />);
     expect(screen.getByTestId(ACTION_DIALOG)).toBeInTheDocument();
+  });
+
+  // R-DIALOG-1: an interaction outside the dialog never closes it.
+  it("an outside pointer-down on the overlay leaves the dialog open", async () => {
+    openDialog();
+    render(<ActionDialog />);
+    // Radix attaches its outside-pointer listener on a timer after mount.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const overlay = document.querySelector<HTMLElement>(".fixed.inset-0");
+    expect(overlay).not.toBeNull();
+    fireEvent.pointerDown(overlay as HTMLElement);
+    expect(screen.getByTestId(ACTION_DIALOG)).toBeInTheDocument();
+    expect(useAppStore.getState().action.actionDialogOpen).toBe(true);
   });
 
   // 3. Field combo switches panels

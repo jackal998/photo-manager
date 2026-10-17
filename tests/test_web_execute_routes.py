@@ -12,12 +12,15 @@ import asyncio
 import os
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import httpx
 from fastapi.testclient import TestClient
 
 from app.web.main import create_app
+from core.services.interfaces import DeleteResult
+from infrastructure.delete_service import DeleteService
 from infrastructure.manifest_repository import ManifestRepository
 from scanner.manifest import _DDL as _MANIFEST_DDL
 
@@ -415,6 +418,55 @@ class TestExecutePerFileConsistency:
 # ---------------------------------------------------------------------------
 
 
+class TestExecuteRecycleDefault:
+    """R-DELETE-1: a POST /api/execute body with no `recycle` key recycles each file."""
+
+    def test_body_without_recycle_key_recycles_each_file(
+        self, client_with_roots, tmp_path
+    ):
+        client, root = client_with_roots
+        f1, f2 = _make_real_files(tmp_path, 2)
+
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f1),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 128,
+            },
+            {
+                "source_path": str(f2),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 4,
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 128,
+            },
+        ])
+
+        with patch.object(
+            DeleteService,
+            "delete_to_recycle",
+            side_effect=lambda paths: DeleteResult(success_paths=list(paths), failed=[]),
+        ) as recycle_mock, patch("os.unlink") as unlink_mock:
+            resp = client.post("/api/execute", json={
+                "manifest_path": str(manifest),
+            })
+
+        assert resp.status_code == 200, resp.text
+        recycled = sorted(c.args[0][0] for c in recycle_mock.call_args_list)
+        assert recycled == sorted([str(f1), str(f2)])
+        assert recycle_mock.call_count == 2
+        # Only the deleted files matter here; the audit-log rotation also unlinks.
+        unlinked = {str(c.args[0]) for c in unlink_mock.call_args_list}
+        assert not unlinked & {str(f1), str(f2)}
+        assert set(resp.json()["success_paths"]) == {str(f1), str(f2)}
+        assert _read_outcome(manifest, str(f1)) == "deleted"
+
+
 class TestExecuteLockedGate:
     def test_locked_delete_row_without_force_returns_409(
         self, client_with_roots, tmp_path
@@ -798,6 +850,10 @@ class TestPostRemove:
         })
         assert resp.status_code == 409, resp.text
         assert resp.json()["detail"]["code"] == "locked_paths"
+        # Nothing was written: both rows keep their outcome and their lock.
+        assert _read_outcome(manifest, str(f1)) == ""
+        assert _read_outcome(manifest, str(f2)) == ""
+        assert _read_is_locked(manifest, str(f1)) is True
 
 
 # ---------------------------------------------------------------------------
