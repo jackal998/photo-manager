@@ -369,14 +369,17 @@ class TestSkipDirectoryReconcile:
         """#982 — a lock means "don't touch this row". The open-time reconcile
         is a write with no user action behind it, so it must leave a locked
         recycle-bin row alone: ``outcome=''``, still locked, still loaded for
-        review. The unlocked recycle-bin row next to it is dismissed as before.
+        review. An unlocked recycle-bin row in a DIFFERENT group, with no
+        lock anywhere in it, is dismissed as before. (#982 M1: a partner in
+        the SAME group as the lock is kept too, see the group tests above.)
         """
         recycle_dir = tmp_path / "$RECYCLE.BIN"
         recycle_dir.mkdir()
         locked_trashed = recycle_dir / "locked.jpg"
         unlocked_trashed = recycle_dir / "unlocked.jpg"
         keep = tmp_path / "keep.jpg"
-        for f in (locked_trashed, unlocked_trashed, keep):
+        keep_other = tmp_path / "keep_other.jpg"
+        for f in (locked_trashed, unlocked_trashed, keep, keep_other):
             f.write_bytes(b"")
 
         db = tmp_path / "m.sqlite"
@@ -384,8 +387,9 @@ class TestSkipDirectoryReconcile:
             db,
             [
                 (str(locked_trashed), "g1"),
-                (str(unlocked_trashed), "g1"),
                 (str(keep), "g1"),
+                (str(unlocked_trashed), "g2"),
+                (str(keep_other), "g2"),
             ],
         )
         repo = ManifestRepository()
@@ -411,6 +415,8 @@ class TestSkipDirectoryReconcile:
             "the reconcile dismissed a locked row"
         )
         assert outcomes[str(unlocked_trashed)] == "ignored"
+        assert outcomes[str(keep)] == ""
+        assert outcomes[str(keep_other)] == ""
         conn = sqlite3.connect(str(db))
         try:
             (is_locked,) = conn.execute(
@@ -435,7 +441,8 @@ class TestSkipDirectoryReconcile:
         locked_trashed = recycle_dir / "locked.jpg"
         unlocked_trashed = recycle_dir / "unlocked.jpg"
         keep = tmp_path / "keep.jpg"
-        for f in (locked_trashed, unlocked_trashed, keep):
+        keep_other = tmp_path / "keep_other.jpg"
+        for f in (locked_trashed, unlocked_trashed, keep, keep_other):
             f.write_bytes(b"")
 
         db = tmp_path / "m.sqlite"
@@ -443,8 +450,9 @@ class TestSkipDirectoryReconcile:
             db,
             [
                 (str(locked_trashed), "g1"),
-                (str(unlocked_trashed), "g1"),
                 (str(keep), "g1"),
+                (str(unlocked_trashed), "g2"),
+                (str(keep_other), "g2"),
             ],
         )
         repo = ManifestRepository()
@@ -470,7 +478,7 @@ class TestSkipDirectoryReconcile:
 
         assert dismissed == 1
         assert any(
-            "Left 1 locked row(s)" in msg for msg in messages
+            "Left 1 skip-directory row(s)" in msg for msg in messages
         ), f"no locked-left count logged, got: {messages}"
 
     def test_lock_set_after_the_candidate_read_is_not_dismissed(self, tmp_path):
@@ -523,3 +531,135 @@ class TestSkipDirectoryReconcile:
         finally:
             conn.close()
         assert state == ("", 1), "a locked row was dismissed by the reconcile"
+
+    def test_locked_skip_row_keeps_its_unlocked_group_partner_visible(
+        self, tmp_path
+    ):
+        """#982 M1 (a) — the group is the unit, not the row.
+
+        The group holds a locked recycle-bin row and an unlocked one. Dismissing
+        the unlocked row would leave one member, and the load's orphan-skip
+        would hide the group: the locked row would vanish from review with no
+        user action. So the whole group stays, and both rows load.
+        """
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        locked_trashed = recycle_dir / "a.jpg"
+        unlocked_trashed = recycle_dir / "b.jpg"
+        for f in (locked_trashed, unlocked_trashed):
+            f.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(
+            db, [(str(locked_trashed), "g1"), (str(unlocked_trashed), "g1")]
+        )
+        _set_locked(db, str(locked_trashed))
+
+        loaded = {r.file_path for r in ManifestRepository().load(str(db))}
+
+        assert loaded == {str(locked_trashed), str(unlocked_trashed)}
+        assert set(_outcomes(db).values()) == {""}
+        assert _is_locked(db, str(locked_trashed)) == 1
+
+    def test_locked_non_skip_partner_keeps_skip_row_visible(self, tmp_path):
+        """#982 M1 (b) — the lock may sit on a row OUTSIDE the skip directory.
+
+        The group's only partner of the locked photo is a recycle-bin file. The
+        group contains a locked row, so the recycle-bin row is left in place and
+        the group stays visible.
+        """
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        locked_keep = tmp_path / "photo.jpg"
+        trashed = recycle_dir / "b.jpg"
+        for f in (locked_keep, trashed):
+            f.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(db, [(str(locked_keep), "g1"), (str(trashed), "g1")])
+        _set_locked(db, str(locked_keep))
+
+        loaded = {r.file_path for r in ManifestRepository().load(str(db))}
+
+        assert loaded == {str(locked_keep), str(trashed)}
+        assert set(_outcomes(db).values()) == {""}
+
+    def test_group_without_a_locked_row_is_dismissed_as_before(self, tmp_path):
+        """#982 M1 (c) — the rule changes nothing for an unlocked group."""
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        trashed = recycle_dir / "a.jpg"
+        keep = tmp_path / "b.jpg"
+        for f in (trashed, keep):
+            f.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(db, [(str(trashed), "g1"), (str(keep), "g1")])
+
+        ManifestRepository().reconcile_skip_directory_rows(str(db))
+
+        outcomes = _outcomes(db)
+        assert outcomes[str(trashed)] == "ignored"
+        assert outcomes[str(keep)] == ""
+
+    def test_lock_on_the_partner_after_the_candidate_read_blocks_the_dismiss(
+        self, tmp_path
+    ):
+        """#982 M1 (d) — the group-level race guard.
+
+        The skip row is still unlocked when the candidates are read. Then the
+        user locks its PARTNER (not the skip row) before the write. The write
+        must re-check the whole group and leave the skip row in review.
+        """
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        trashed = recycle_dir / "a.jpg"
+        partner = tmp_path / "b.jpg"
+        for f in (trashed, partner):
+            f.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(db, [(str(trashed), "g1"), (str(partner), "g1")])
+        repo = ManifestRepository()
+        repo.ensure_schema(str(db))
+        conn = sqlite3.connect(str(db))
+        try:
+            (trashed_id,) = conn.execute(
+                "SELECT id FROM migration_manifest WHERE source_path = ?",
+                (str(trashed),),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        # …the window: the partner is locked after the SELECT.
+        _set_locked(db, str(partner))
+
+        dismissed = repo._dismiss_skipped_rows(str(db), [trashed_id])
+
+        assert dismissed == 0
+        assert _outcomes(db)[str(trashed)] == ""
+
+
+def _set_locked(db: Path, source_path: str) -> None:
+    ManifestRepository().ensure_schema(str(db))  # adds the is_locked column
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE migration_manifest SET is_locked = 1 WHERE source_path = ?",
+            (source_path,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _is_locked(db: Path, source_path: str) -> int:
+    conn = sqlite3.connect(str(db))
+    try:
+        (value,) = conn.execute(
+            "SELECT is_locked FROM migration_manifest WHERE source_path = ?",
+            (source_path,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return value

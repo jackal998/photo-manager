@@ -173,9 +173,11 @@ WHERE source_path = ?
 """
 
 # #821 — every in-review row, for the open-time skip-directory reconcile.
-# #982 — ``is_locked`` rides along so the reconcile can leave locked rows out.
+# #982 — ``is_locked`` and ``group_id`` ride along so the reconcile can leave
+# every group that holds a locked row untouched (the group is the unit).
 _LIVE_ROWS_SQL = """
-SELECT id, source_path, is_locked FROM migration_manifest WHERE outcome = ''
+SELECT id, source_path, is_locked, group_id FROM migration_manifest
+ WHERE outcome = ''
 """
 
 # #821 — the reconcile's own dismissal write. Two deliberate differences
@@ -194,13 +196,21 @@ SELECT id, source_path, is_locked FROM migration_manifest WHERE outcome = ''
 #     path and 0.013 s keyed by id. It is also more precise: source_path
 #     has no uniqueness constraint, so a path-keyed write would touch every
 #     row sharing that path, not the row the SELECT actually saw.
-#   * ``AND is_locked = 0`` (#982) — the same re-check for the lock. A lock
-#     set after the candidate read is a user's "don't touch this row", and
-#     this write has no user action behind it, so it must lose the race too.
+#   * ``AND is_locked = 0`` and the ``NOT EXISTS`` (#982) — the same re-check
+#     for locks, at group level. A lock set after the candidate read, on this
+#     row OR on any partner in its group, is a user's "don't touch this group",
+#     and this write has no user action behind it, so it must lose the race
+#     too. ``group_id`` is indexed (idx_group_id), so the subquery is a lookup.
 _RECONCILE_DISMISS_SQL = """
 UPDATE migration_manifest
    SET outcome = 'ignored', executed = 0
  WHERE id = ? AND outcome = '' AND is_locked = 0
+   AND NOT EXISTS (
+       SELECT 1 FROM migration_manifest AS locked_peer
+        WHERE locked_peer.group_id = migration_manifest.group_id
+          AND locked_peer.is_locked = 1
+          AND locked_peer.outcome = ''
+   )
 """
 
 # #909 — the Undo of an immediate Skip. Guarded on ``outcome = 'ignored'``:
@@ -498,10 +508,11 @@ class ManifestRepository:
         rather than raising — the stale rows simply stay live for that open,
         which is exactly the pre-#821 behaviour.
 
-        **A locked row is never dismissed (#982).** A lock means "don't
-        touch this row"; this write has no user action behind it. A locked
-        row under a skip directory keeps ``outcome=''`` and its lock, stays
-        in review, and is counted in the open's log line (locked-left).
+        **A group holding a locked row is left whole (#982).** A lock means
+        "don't touch this row"; this write has no user action behind it. Every
+        group that contains a locked row is skipped entirely, so no row of it
+        is dismissed, and the group stays visible in review. The open's log
+        line counts the skip-directory rows left in place.
 
         Returns:
             The number of rows actually dismissed by this call — 0 on a
@@ -524,18 +535,29 @@ class ManifestRepository:
         # from a folder), and on the author's real 40,774-row manifest
         # the pre-filter saved 71 ms of a once-per-open cost (66 ms vs
         # 137 ms, best of 3) — not worth the dynamic SQL.
+        # #982 — the group is the unit. A group holding a locked row is left
+        # whole: dismissing a partner would leave one member, and the load's
+        # orphan-skip would then hide the locked row from review.
+        locked_groups = {
+            group_id
+            for _, _, is_locked, group_id in candidates
+            if is_locked and group_id is not None
+        }
         skipped = [
-            (row_id, bool(is_locked))
-            for row_id, source_path, is_locked in candidates
+            (row_id, is_locked, group_id)
+            for row_id, source_path, is_locked, group_id in candidates
             if has_skip_directory_ancestor(source_path)
         ]
-        row_ids = [row_id for row_id, is_locked in skipped if not is_locked]
-        locked_left = len(skipped) - len(row_ids)
-        if locked_left:
+        row_ids = [
+            row_id for row_id, is_locked, group_id in skipped
+            if not is_locked and group_id not in locked_groups
+        ]
+        left = len(skipped) - len(row_ids)
+        if left:
             logger.info(
-                "Left {} locked row(s) under a skip directory in review "
-                "(not dismissed) in {}",
-                locked_left,
+                "Left {} skip-directory row(s) in review (locked, or in a "
+                "group with a locked row; not dismissed) in {}",
+                left,
                 manifest_path,
             )
         return self._dismiss_skipped_rows(manifest_path, row_ids)
