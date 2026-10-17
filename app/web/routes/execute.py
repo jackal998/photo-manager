@@ -295,6 +295,8 @@ def post_prune(body: PruneRequest, request: Request) -> PruneResult:
         400 bad path
         403 path outside allowed roots
         404 manifest not found
+        409 locked_paths (a locked singleton is in scope and force_locked=False;
+            nothing is written)
         422 on unexpected error
     """
     roots = _allowed_roots(request)
@@ -309,9 +311,18 @@ def post_prune(body: PruneRequest, request: Request) -> PruneResult:
             body.include_actioned,
             body.paths,
             [str(r) for r in roots],
+            body.force_locked,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        args = exc.args
+        if args and args[0] == "locked_paths":
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "locked_paths", "locked_paths": args[1]},
+            ) from exc
+        raise HTTPException(status_code=422, detail=f"Prune failed: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Prune failed: {exc}") from exc
 
@@ -323,6 +334,7 @@ def _run_prune(
     include_actioned: bool,
     paths: list[str] | None,
     allowed_roots: list[str],
+    force_locked: bool = False,
 ) -> dict:
     from core.app_service.execute_service import prune_singletons
     return prune_singletons(
@@ -330,6 +342,7 @@ def _run_prune(
         include_actioned=include_actioned,
         paths=paths,
         allowed_roots=allowed_roots,
+        force_locked=force_locked,
     )
 
 

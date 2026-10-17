@@ -937,7 +937,9 @@ class TestPruneSingletons:
         assert result["locked_skipped"] == []
         assert _read_col(manifest, str(f1), "outcome") == "ignored"
 
-    def test_locked_singleton_in_locked_skipped(self, tmp_path):
+    def test_locked_singleton_in_scope_refused(self, tmp_path):
+        """#983: a locked singleton in category scope is refused (409 upstream),
+        not silently skipped, and nothing is written."""
         files = _make_real_files(tmp_path, 2)
         f1, f2 = files
 
@@ -962,10 +964,11 @@ class TestPruneSingletons:
             },
         ])
 
-        result = prune_singletons(str(manifest))
-        assert result["pruned"] == []
-        assert str(f1) in result["locked_skipped"]
+        with pytest.raises(ValueError) as exc:
+            prune_singletons(str(manifest))
+        assert exc.value.args == ("locked_paths", [str(f1)])
         assert _read_col(manifest, str(f1), "outcome") == ""  # untouched
+        assert _read_col(manifest, str(f1), "is_locked") == 1
 
     def test_actioned_singleton_excluded_without_include_actioned(self, tmp_path):
         """Singleton with decision='delete' is NOT pruned when include_actioned=False."""
@@ -1063,10 +1066,9 @@ class TestPruneSingletons:
         )
         assert set(result["pruned"]) == {str(f1), str(f3)}
 
-    def test_explicit_paths_skips_locked(self, tmp_path):
-        """A named path that is still locked is NOT pruned — it lands in
-        locked_skipped (the FE unlocks before requesting, but a race must
-        never silently prune a locked row)."""
+    def test_explicit_paths_refuses_locked(self, tmp_path):
+        """#983: a named path that is still locked is refused (409 upstream),
+        never silently skipped or pruned, and nothing is written."""
         f1, f2 = _make_real_files(tmp_path, 2)
         manifest = _make_manifest(tmp_path, [
             {"source_path": str(f1), "action": "", "group_id": "g1",
@@ -1075,9 +1077,9 @@ class TestPruneSingletons:
              "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
              "file_size_bytes": 64},
         ])
-        result = prune_singletons(str(manifest), paths=[str(f1)])
-        assert result["pruned"] == []
-        assert str(f1) in result["locked_skipped"]
+        with pytest.raises(ValueError) as exc:
+            prune_singletons(str(manifest), paths=[str(f1)])
+        assert exc.value.args == ("locked_paths", [str(f1)])
         assert _read_col(manifest, str(f1), "outcome") == ""  # untouched
 
     def test_explicit_paths_drops_non_singleton(self, tmp_path):
@@ -1099,6 +1101,88 @@ class TestPruneSingletons:
     def test_missing_manifest_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             prune_singletons(str(tmp_path / "no.sqlite"))
+
+
+class TestPruneSingletonsLockGate:
+    """#983: prune joins the lock flow. A locked singleton in scope without
+    force_locked refuses the whole call (nothing written); with force_locked
+    each locked singleton is ignored AND unlocked in the same write."""
+
+    def _two_singletons(self, tmp_path: Path, lock_f1: bool, lock_f3: bool):
+        f1, f2, f3, f4 = _make_real_files(tmp_path, 4)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "is_locked": int(lock_f1),
+             "file_size_bytes": 64},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+            {"source_path": str(f3), "action": "", "group_id": "g2",
+             "outcome": "", "user_decision": "", "is_locked": int(lock_f3),
+             "file_size_bytes": 64},
+            {"source_path": str(f4), "action": "REVIEW_DUPLICATE", "group_id": "g2",
+             "hamming_distance": 2, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 64},
+        ])
+        return manifest, f1, f3
+
+    def test_locked_singleton_refused_without_force_nothing_written(self, tmp_path):
+        manifest, f1, f3 = self._two_singletons(tmp_path, lock_f1=True, lock_f3=False)
+        with pytest.raises(ValueError) as exc:
+            prune_singletons(str(manifest))
+        assert exc.value.args == ("locked_paths", [str(f1)])
+        assert _read_col(manifest, str(f1), "outcome") == ""
+        assert _read_col(manifest, str(f1), "is_locked") == 1
+        assert _read_col(manifest, str(f3), "outcome") == ""
+
+    def test_mixed_scope_is_all_or_nothing(self, tmp_path):
+        manifest, f1, f3 = self._two_singletons(tmp_path, lock_f1=False, lock_f3=True)
+        with pytest.raises(ValueError) as exc:
+            prune_singletons(str(manifest), paths=[str(f1), str(f3)])
+        assert exc.value.args == ("locked_paths", [str(f3)])
+        assert _read_col(manifest, str(f1), "outcome") == ""  # unlocked one NOT pruned
+        assert _read_col(manifest, str(f3), "is_locked") == 1
+
+    def test_force_locked_prunes_and_unlocks_in_same_write(self, tmp_path):
+        manifest, f1, _ = self._two_singletons(tmp_path, lock_f1=True, lock_f3=False)
+        result = prune_singletons(str(manifest), paths=[str(f1)], force_locked=True)
+        assert result["pruned"] == [str(f1)]
+        assert _read_col(manifest, str(f1), "outcome") == "ignored"
+        assert _read_col(manifest, str(f1), "is_locked") == 0
+
+    def test_force_locked_mixed_scope_prunes_both(self, tmp_path):
+        manifest, f1, f3 = self._two_singletons(tmp_path, lock_f1=False, lock_f3=True)
+        result = prune_singletons(
+            str(manifest), paths=[str(f1), str(f3)], force_locked=True
+        )
+        assert sorted(result["pruned"]) == sorted([str(f1), str(f3)])
+        assert _read_col(manifest, str(f3), "outcome") == "ignored"
+        assert _read_col(manifest, str(f3), "is_locked") == 0
+
+    def test_locked_singleton_outside_scope_not_gated(self, tmp_path):
+        manifest, f1, f3 = self._two_singletons(tmp_path, lock_f1=False, lock_f3=True)
+        result = prune_singletons(str(manifest), paths=[str(f1)])
+        assert result["pruned"] == [str(f1)]
+        assert _read_col(manifest, str(f3), "is_locked") == 1
+
+    def test_failed_write_keeps_lock(self, tmp_path):
+        manifest, f1, _ = self._two_singletons(tmp_path, lock_f1=True, lock_f3=False)
+        with patch.object(
+            ManifestRepository, "finalize_outcome", side_effect=OSError("disk")
+        ):
+            with pytest.raises(OSError):
+                prune_singletons(str(manifest), paths=[str(f1)], force_locked=True)
+        assert _read_col(manifest, str(f1), "is_locked") == 1
+        assert _read_col(manifest, str(f1), "outcome") == ""
+
+    def test_out_of_root_locked_singleton_not_gated(self, tmp_path):
+        manifest, f1, _ = self._two_singletons(tmp_path, lock_f1=True, lock_f3=False)
+        result = prune_singletons(
+            str(manifest), paths=[str(f1)],
+            allowed_roots=[str(tmp_path / "elsewhere")],
+        )
+        assert result["pruned"] == []
+        assert _read_col(manifest, str(f1), "is_locked") == 1
 
 
 # ---------------------------------------------------------------------------

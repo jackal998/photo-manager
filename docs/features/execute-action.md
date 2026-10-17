@@ -242,7 +242,7 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
 - **Behaviour:**
   - The setting is re-read from `GET /api/settings` every time. With **Never prune**, nothing happens.
   - **Locked singletons first ([#584](https://github.com/jackal998/photo-manager/issues/584) D6).** On both **Ask** and **Always**, locked singletons first raise the lock prompt:
-    - **Unlock & Apply** unlocks them and adds them to the prune set, whatever the next dialog decides.
+    - **Unlock & Apply** adds them to the prune set, whatever the next dialog decides. The prune request carries `force_locked`, and the server unlocks each one in the same write as its ignored outcome (no separate unlock request, #983).
     - **Unlocked only** and **Cancel** both keep them and continue with the unlocked ones.
   - **Always prune** prunes the plain and actioned singletons, plus any just unlocked, in one call.
   - **Ask each time** opens **"Prune singleton groups?"**, listing the candidate paths, in one of three layouts:
@@ -250,7 +250,7 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
     - *actioned only* — "N singleton group(s) with an un-executed delete / skip action remain. Prune them from the list?" Here **Prune** itself includes the actioned ones.
     - *mixed* — the plain count, plus "…and M more carry an un-executed delete / skip action", plus a checkbox **"Also prune M actioned singleton(s)"** (`prune-include-actioned`). The checkbox starts **unchecked** and is not remembered.
   - **Buttons.** **Keep all** (`prune-btn-keep`) and **Prune N** (`prune-btn-remove`). N is the plain count, or the actioned count when there are no plain singletons. With **Don't ask again** (`prune-remember`) ticked, Prune switches the setting to Always and Keep all switches it to Never. Escape or a click outside counts as Keep all.
-  - **Applying the prune.** `POST /api/prune` receives the exact path list (the explicit mode of `prune_singletons`). It re-checks that each path is still an unlocked singleton inside the allowed roots, then finalizes it as `outcome='ignored'`; the file on disk is not touched. The returned groups replace the store's. A failed prune shows on the status bar's error line.
+  - **Applying the prune.** `POST /api/prune` receives the exact path list (the explicit mode of `prune_singletons`). It re-checks that each path is still a singleton inside the allowed roots. A locked one in scope is refused with 409 `locked_paths` and nothing is written, unless the lock-confirm was accepted (`force_locked`); then it is finalized as `outcome='ignored'` and unlocked in the same write (#983). The file on disk is not touched. The returned groups replace the store's. A failed prune shows on the status bar's error line.
 - **Conditions / variants:**
   - **Keep all** and **Never prune** leave the singleton in the manifest with `outcome=''`. It stays hidden, as a single-member group, and is offered again after the next destructive op.
   - A kept **actioned** singleton keeps its pending decision while hidden, and no Execute, scoped or unscoped, acts on it, as `R-EXEC-2` states (#941, below).

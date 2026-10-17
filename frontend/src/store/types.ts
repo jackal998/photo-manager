@@ -681,11 +681,16 @@ export interface AppActions {
    * own callers pass it; when it is omitted — PruneConfirmDialog resolving
    * the open prompt — the owner recorded on that prompt is used.
    */
-  applyPrune(paths: string[], undoToastId?: number | null): Promise<void>;
+  applyPrune(
+    paths: string[],
+    undoToastId?: number | null,
+    forceLocked?: boolean
+  ): Promise<void>;
 
   /**
    * Resolve the prune-context lock gate (LockConfirmDialog op="prune").
-   * - "unlock-apply": unlock the locked singletons, then fold them into the prune.
+   * - "unlock-apply": fold the locked singletons into the prune with force_locked;
+   *   the server unlocks each in the same write (#983, no separate unlock).
    * - "unlocked-only" / "cancel": hold the locked singletons; continue with the
    *   unlocked buckets only (faithful to Qt — Cancel does NOT abort the prune).
    * Then continues per the stashed pref: "always" auto-prunes; "ask" opens the

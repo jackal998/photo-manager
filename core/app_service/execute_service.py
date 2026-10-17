@@ -543,6 +543,7 @@ def prune_singletons(
     include_actioned: bool = False,
     paths: list[str] | None = None,
     allowed_roots: list[str] | None = None,
+    force_locked: bool = False,
 ) -> dict[str, Any]:
     """Remove singleton groups from the review manifest.
 
@@ -569,10 +570,18 @@ def prune_singletons(
             plain singletons (user_decision == '').  Ignored in explicit mode.
         paths: Explicit-mode prune set (#686).  None = category mode.
         allowed_roots: Trusted root directories.  Out-of-root singleton rows
-            are silently skipped (not pruned).
+            are silently skipped (not pruned) and never lock-gated.
+        force_locked: If True, prune locked singletons in scope too; each is
+            unlocked in the same write as its ignored outcome (#983). If False
+            and any locked singleton is in scope, raises
+            ``ValueError("locked_paths", [...])`` and nothing is written.
 
     Returns:
-        Dict with keys: pruned, locked_skipped, groups.
+        Dict with keys: pruned, locked_skipped (always empty since #983), groups.
+
+    Raises:
+        ValueError: ``("locked_paths", [...])`` when a locked singleton is in
+            scope and force_locked is False.
     """
     requested: set[str] | None = set(paths) if paths is not None else None
     _require_manifest(manifest_path)
@@ -586,9 +595,10 @@ def prune_singletons(
     finally:
         conn.close()
 
-    to_prune: list[str] = []
-    locked_skipped: list[str] = []
-
+    # Scope first, then the lock gate (the #985 order): out-of-root rows are
+    # dropped before the gate, so a locked out-of-root row is neither gated nor
+    # pruned.
+    selected: list[tuple[str, bool]] = []
     for source_path, user_decision, is_locked_val, _group_id in rows:
         # Explicit mode (#686): consider only the caller-named singletons. A
         # requested path that is no longer a singleton simply never appears in
@@ -596,8 +606,11 @@ def prune_singletons(
         if requested is not None and source_path not in requested:
             continue
 
-        if is_locked_val:
-            locked_skipped.append(source_path)
+        # Category mode: plain singletons, plus actioned ones when asked.
+        decision = user_decision or ""
+        if requested is None and not (
+            decision == "" or (include_actioned and decision in ("delete", "ignore"))
+        ):
             continue
 
         # --- Path-safety check ------------------------------------------------
@@ -607,20 +620,19 @@ def prune_singletons(
             )
             continue
 
-        decision = user_decision or ""
-        if requested is not None:
-            # Explicit mode: the caller already resolved which buckets (plain /
-            # actioned / unlocked-locked) to include, so prune every requested
-            # singleton that survived the locked / under-roots guards above.
-            to_prune.append(source_path)
-        elif decision == "":
-            to_prune.append(source_path)
-        elif include_actioned and decision in ("delete", "ignore"):
-            to_prune.append(source_path)
-        # Actioned singletons when include_actioned=False: silently skip.
+        selected.append((source_path, bool(is_locked_val)))
 
+    # #983: a locked singleton in scope is refused like every other write — the
+    # whole call raises before anything is written — unless the caller confirmed
+    # the lock gate (force_locked).
+    locked_in_scope = [p for p, locked in selected if locked]
+    if locked_in_scope and not force_locked:
+        raise ValueError("locked_paths", locked_in_scope)
+
+    # Each locked row is unlocked in the same write as its ignored outcome (#985).
+    to_prune = [p for p, _locked in selected]
     if to_prune:
-        repo.finalize_outcome(manifest_path, to_prune, "ignored")
+        repo.finalize_outcome(manifest_path, to_prune, "ignored", clear_lock=True)
 
     from core.app_service.review_service import load_review
     try:
@@ -630,7 +642,10 @@ def prune_singletons(
         logger.warning("Failed to reload groups after prune: {}", exc)
         groups = []
 
-    return {"pruned": to_prune, "locked_skipped": locked_skipped, "groups": groups}
+    # locked_skipped is always empty since #983: a locked singleton in scope is
+    # either refused (409) or pruned and unlocked. Kept so PruneResult's shape
+    # does not change for existing callers.
+    return {"pruned": to_prune, "locked_skipped": [], "groups": groups}
 
 
 def save_manifest(

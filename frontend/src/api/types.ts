@@ -265,6 +265,12 @@ export interface PruneRequest {
    * actioned via `include_actioned`).
    */
   paths?: string[];
+  /**
+   * #983: confirmed lock-gate prune. Without it the server refuses (409
+   * `locked_paths`) any locked singleton in scope. With it, each such singleton
+   * is pruned and unlocked in the same write. Sent only for lock-confirmed rows.
+   */
+  force_locked?: boolean;
 }
 
 export interface PruneResult {

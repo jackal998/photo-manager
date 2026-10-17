@@ -1056,13 +1056,20 @@ export const useAppStore = create<AppStore>()(
       });
     },
 
-    async applyPrune(paths, undoToastId) {
+    async applyPrune(paths, undoToastId, forceLocked) {
       // Read before anything clears the prompt: the dialog resolves the prompt
       // its flow opened, so an omitted owner is the one recorded there.
+      const prompt = get().execute.prunePrompt;
       const owner =
         undoToastId !== undefined
           ? undoToastId
-          : get().execute.prunePrompt?.undoToastId ?? null;
+          : prompt?.undoToastId ?? null;
+      // #983: force_locked only for lock-confirmed singletons. The gate's verdict
+      // passes it explicitly; otherwise the open prompt's lockedToPrune decides.
+      // A locked path that was never confirmed is never force-pruned.
+      const force =
+        forceLocked ??
+        (prompt?.lockedToPrune ?? []).some((p) => paths.includes(p));
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
@@ -1080,6 +1087,7 @@ export const useAppStore = create<AppStore>()(
         const result = await postPrune({
           manifest_path: manifestPath,
           paths,
+          ...(force ? { force_locked: true } : {}),
         });
 
         set((state) => {
@@ -1142,31 +1150,21 @@ export const useAppStore = create<AppStore>()(
 
       let lockedToPrune: string[] = [];
       if (verdict === "unlock-apply") {
-        // Unlock the locked singletons so the backend prune won't skip them,
-        // then commit them to the prune set (the Qt to_prune.extend tail — they
-        // prune regardless of any later "Keep all" on the prune dialog).
-        const unlocked = await get().setLocks(locked, false);
-        if (unlocked) {
-          lockedToPrune = locked;
-        } else {
-          // The unlock PATCH failed and setLocks reverted the rows, so they are
-          // still locked and can't be pruned — hold them back (lockedToPrune
-          // stays []) rather than fold a still-locked path the backend would
-          // only skip. The unrelated unlocked buckets still prune as the user
-          // asked; surface a prune-context error for the held items. (PATCH
-          // /api/lock and POST /api/prune are independent endpoints — a failed
-          // unlock does not imply the prune would fail, so we don't abort the
-          // whole gesture, only drop the rows we couldn't unlock.)
-          set((state) => {
-            state.manifest.error =
-              "Couldn't unlock the locked items — they were held back from pruning.";
-          });
-        }
+        // #983: no separate unlock request (that was unlock-before-apply, the
+        // #985 bug class). The locked singletons join the prune request with
+        // force_locked, and the server unlocks each in the same write as its
+        // ignored outcome. A failed write leaves every row locked and un-pruned.
+        lockedToPrune = locked;
       }
       // "unlocked-only" / "cancel": hold the locked singletons (lockedToPrune=[]).
 
+      const forceLocked = lockedToPrune.length > 0;
       if (pref === "always") {
-        await get().applyPrune([...plain, ...actioned, ...lockedToPrune], owner);
+        await get().applyPrune(
+          [...plain, ...actioned, ...lockedToPrune],
+          owner,
+          forceLocked
+        );
         return;
       }
 
@@ -1175,7 +1173,7 @@ export const useAppStore = create<AppStore>()(
       // buckets are empty there is nothing to ask — prune the already-decided
       // set (just lockedToPrune, possibly empty) directly.
       if (plain.length === 0 && actioned.length === 0) {
-        await get().applyPrune(lockedToPrune, owner);
+        await get().applyPrune(lockedToPrune, owner, forceLocked);
         return;
       }
       set((state) => {
