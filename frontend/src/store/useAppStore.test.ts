@@ -1663,6 +1663,108 @@ describe("applyPrune – success replaces groups and clears prune state", () => 
 });
 
 // ---------------------------------------------------------------------------
+// applyPrune – a late 409 locked_paths opens the prune lock gate (#1000)
+// ---------------------------------------------------------------------------
+
+describe("applyPrune – a late 409 locked_paths opens the prune lock gate (#1000)", () => {
+  function seedLatePrune(pref: "ask" | "always") {
+    // A row locked after the candidates read: the server refuses the prune.
+    const lockGroup = makeGroup(1, ["/p/lock.jpg", "/p/sibling.jpg"]);
+    lockGroup.items[0].is_locked = true;
+    seedManifest([lockGroup]);
+    useAppStore.setState((s) => ({
+      settings: {
+        ...s.settings,
+        values: { ...s.settings.values, "ui.prune_singletons": pref },
+      },
+    }));
+  }
+
+  it("a 409 sets lockConflict op=prune with the locked row and no manifest.error", async () => {
+    seedLatePrune("ask");
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: ["/p/lock.jpg"] })
+    );
+
+    await useAppStore.getState().applyPrune(["/p/lock.jpg", "/p/plain.jpg"]);
+
+    const { manifest, execute } = useAppStore.getState();
+    expect(execute.lockConflict).toEqual({
+      paths: ["/p/lock.jpg"],
+      op: "prune",
+      originalPaths: null,
+    });
+    expect(execute.prunePending).toMatchObject({
+      plain: ["/p/plain.jpg"],
+      actioned: [],
+      late: true,
+    });
+    expect(manifest.error).toBeNull();
+  });
+
+  it("Unlock & Apply re-sends once with force_locked, carrying the confirmed row", async () => {
+    seedLatePrune("always");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        conflict409({ code: "locked_paths", locked_paths: ["/p/lock.jpg"] })
+      )
+      .mockResolvedValueOnce(
+        ok200({ pruned: ["/p/plain.jpg", "/p/lock.jpg"], locked_skipped: [], groups: [] })
+      );
+
+    await useAppStore.getState().applyPrune(["/p/lock.jpg", "/p/plain.jpg"]);
+    await useAppStore.getState().resolvePruneLock("unlock-apply");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const body = JSON.parse((fetchSpy.mock.calls[1][1] as { body: string }).body);
+    expect(body.force_locked).toBe(true);
+    expect(body.paths).toEqual(["/p/plain.jpg", "/p/lock.jpg"]);
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+  });
+
+  it("Cancel after a late 409 writes nothing more, even on the always pref", async () => {
+    seedLatePrune("always");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        conflict409({ code: "locked_paths", locked_paths: ["/p/lock.jpg"] })
+      );
+
+    await useAppStore.getState().applyPrune(["/p/lock.jpg", "/p/plain.jpg"]);
+    await useAppStore.getState().resolvePruneLock("cancel");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const { execute } = useAppStore.getState();
+    expect(execute.lockConflict).toBeNull();
+    expect(execute.prunePending).toBeNull();
+  });
+
+  it("on the ask pref, Unlock & Apply after a late 409 re-opens the prompt with the confirmed row and writes nothing until the user confirms", async () => {
+    seedLatePrune("ask");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        conflict409({ code: "locked_paths", locked_paths: ["/p/lock.jpg"] })
+      );
+
+    await useAppStore.getState().applyPrune(["/p/lock.jpg", "/p/plain.jpg"]);
+    await useAppStore.getState().resolvePruneLock("unlock-apply");
+
+    // Only the refused request was sent: the confirmed row waits in the prompt.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const { execute } = useAppStore.getState();
+    expect(execute.lockConflict).toBeNull();
+    expect(execute.prunePending).toBeNull();
+    expect(execute.prunePrompt).toMatchObject({
+      plain: ["/p/plain.jpg"],
+      actioned: [],
+      lockedToPrune: ["/p/lock.jpg"],
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // maybeOfferPrune — the post-destructive-op orchestrator (the Qt decision tree)
 // ---------------------------------------------------------------------------
 

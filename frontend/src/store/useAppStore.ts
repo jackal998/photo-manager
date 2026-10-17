@@ -1113,6 +1113,40 @@ export const useAppStore = create<AppStore>()(
           }
         });
       } catch (err) {
+        // #1000 — a row locked after the candidates read: the server refused
+        // the whole prune with 409 locked_paths. Open the lock-confirm gate
+        // (op "prune") instead of showing the raw error. The unlocked rows keep
+        // their bucket (plain/actioned) from the open prompt, if there is one.
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          const lockedNow = (err.lockedPaths ?? []).filter((p) =>
+            paths.includes(p)
+          );
+          if (lockedNow.length > 0) {
+            const promptActioned = new Set(prompt?.actioned ?? []);
+            const unlocked = paths.filter((p) => !lockedNow.includes(p));
+            const actioned = unlocked.filter((p) => promptActioned.has(p));
+            const plain = unlocked.filter((p) => !promptActioned.has(p));
+            const pref = normalizePrunePref(
+              get().settings.values["ui.prune_singletons"]
+            );
+            set((state) => {
+              state.execute.prunePrompt = null;
+              state.execute.prunePending = {
+                plain,
+                actioned,
+                pref,
+                undoToastId: owner,
+                late: true,
+              };
+              state.execute.lockConflict = {
+                paths: lockedNow,
+                op: "prune",
+                originalPaths: null,
+              };
+            });
+            return;
+          }
+        }
         set((state) => {
           state.manifest.error =
             err instanceof Error ? err.message : String(err);
@@ -1147,6 +1181,9 @@ export const useAppStore = create<AppStore>()(
       set((state) => {
         state.execute.prunePending = null;
       });
+      // #1000 — a late 409 refused the whole request, so Cancel writes nothing
+      // more. (The pre-request gate's Cancel continues with the unlocked buckets.)
+      if (pending.late === true && verdict === "cancel") return;
 
       let lockedToPrune: string[] = [];
       if (verdict === "unlock-apply") {

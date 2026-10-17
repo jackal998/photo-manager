@@ -331,6 +331,13 @@ export interface PrunePending {
   pref: PrunePref;
   /** #909 — the owning "skip-now" toast, carried through the lock gate. */
   undoToastId?: number | null;
+  /**
+   * #1000 — set when the gate opened on a late 409 from POST /api/prune (a row
+   * locked after the candidates read). That 409 refused the whole request, so
+   * Cancel writes nothing more; the pre-request gate's Cancel continues with
+   * the unlocked buckets instead.
+   */
+  late?: boolean;
 }
 
 /** User verdict on the prune-context lock gate (LockConfirmDialog op="prune"). */
