@@ -1,0 +1,1 @@
+Unlock & Apply clears a locked row's lock only when its Execute action applies; a row whose delete failed, is missing, or is out of the allowed roots keeps its lock (#985)

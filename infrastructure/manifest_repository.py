@@ -165,6 +165,13 @@ _FINALIZE_OUTCOME_SQL = """
 UPDATE migration_manifest SET outcome = ?, executed = ? WHERE source_path = ?
 """
 
+# #985 — the same write, also clearing the lock. Used by execute so a locked
+# row loses its lock in the very statement that writes its outcome.
+_FINALIZE_OUTCOME_CLEAR_LOCK_SQL = """
+UPDATE migration_manifest SET outcome = ?, executed = ?, is_locked = 0
+WHERE source_path = ?
+"""
+
 # #821 — every in-review row, for the open-time skip-directory reconcile.
 _LIVE_ROWS_SQL = """
 SELECT id, source_path FROM migration_manifest WHERE outcome = ''
@@ -869,7 +876,12 @@ class ManifestRepository:
         return len(updates)
 
     def finalize_outcome(
-        self, manifest_path: str, file_paths: list[str], outcome: str
+        self,
+        manifest_path: str,
+        file_paths: list[str],
+        outcome: str,
+        *,
+        clear_lock: bool = False,
     ) -> None:
         """Write the post-execute outcome for a batch of rows.
 
@@ -878,6 +890,9 @@ class ManifestRepository:
           'deleted'  → outcome='deleted', executed=1
           'ignored'  → outcome='ignored', executed=0
           (any other value is written as-is with executed=0)
+
+        ``clear_lock=True`` also sets ``is_locked=0`` in that same statement
+        (#985): a locked row is unlocked if and only if its outcome is written.
 
         Calls ensure_schema first so old manifests gain the outcome column
         before the UPDATE runs (mirrors load()'s auto-migrate contract).
@@ -892,22 +907,26 @@ class ManifestRepository:
         self.ensure_schema(manifest_path)
         executed_value = 1 if outcome == "deleted" else 0
         params = [(outcome, executed_value, p) for p in file_paths]
+        sql = _FINALIZE_OUTCOME_CLEAR_LOCK_SQL if clear_lock else _FINALIZE_OUTCOME_SQL
         conn = _connect(manifest_path)
         try:
-            conn.executemany(_FINALIZE_OUTCOME_SQL, params)
+            conn.executemany(sql, params)
             conn.commit()
         finally:
             conn.close()
 
-    def remove_from_review(self, manifest_path: str, file_paths: list[str]) -> None:
+    def remove_from_review(
+        self, manifest_path: str, file_paths: list[str], *, clear_lock: bool = False
+    ) -> None:
         """Mark rows as dismissed from review (outcome='ignored').
 
         Ignored rows are excluded from future load() calls so they do not
         reappear when the manifest is reopened.  VACUUM is intentionally omitted:
         rows are marked (UPDATE), not deleted, so SQLite has no freed pages to
         reclaim and a VACUUM call would be a no-op at the cost of a full DB rewrite.
+        ``clear_lock=True`` unlocks the rows in the same write (#985).
         """
-        self.finalize_outcome(manifest_path, file_paths, "ignored")
+        self.finalize_outcome(manifest_path, file_paths, "ignored", clear_lock=clear_lock)
 
     def restore_to_review(self, manifest_path: str, file_paths: list[str]) -> int:
         """Return dismissed rows to review (outcome 'ignored' → '') — #909.

@@ -31,9 +31,9 @@ code decides it, and which test or scenario pins it.
 
 ### R-LOCK-2 — Force-locked re-send of a decision write or Execute unlocks its rows
 
-- **Rule:** Re-sending a refused decision write (PATCH /api/decision or bulk decide) or an Execute with `force_locked` set applies it to the locked rows and clears their lock. A decision write clears the lock in the same write as the decision. An Execute clears it in its own write before it deletes or skips the rows, so a row whose delete then fails stays in review, unlocked. Apply best copy is not covered by this rule.
-- **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/execute_service.py::execute_decisions`
-- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_force_locked_applies_decision_and_unlocks`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_with_force_true_applies_decision`, `qa/web/scenarios/s36_lock_confirm_destructive_execute.py`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_force_locked_unlocks_and_deletes`
+- **Rule:** Re-sending a refused decision write (PATCH /api/decision or bulk decide) or an Execute with `force_locked` set applies it to the locked rows and clears each row's lock in the same write as its decision or outcome; a row whose Execute action does not apply keeps its lock. Apply best copy is not covered by this rule.
+- **Owning code:** `core/app_service/review_service.py::set_decisions`, `core/app_service/action_service.py::bulk_decide`, `core/app_service/execute_service.py::execute_decisions`, `infrastructure/manifest_repository.py::ManifestRepository.finalize_outcome`
+- **Pins:** `tests/test_web_review_routes.py::TestPatchDecisionLockedRowGate::test_force_locked_applies_decision_and_unlocks`, `tests/test_web_action_routes.py::TestBulkDecideLockedRowGate::test_locked_row_with_force_true_applies_decision`, `qa/web/scenarios/s36_lock_confirm_destructive_execute.py`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_force_locked_unlocks_and_deletes`, `tests/test_web_execute_service.py::TestLockedRowUnlockOnlyWhenApplied::test_locked_delete_whose_delete_fails_keeps_lock`, `tests/test_web_execute_service.py::TestLockedRowUnlockOnlyWhenApplied::test_locked_delete_of_missing_file_keeps_lock`, `tests/test_web_execute_service.py::TestLockedRowUnlockOnlyWhenApplied::test_locked_skip_whose_outcome_write_fails_keeps_lock`
 - **Status:** pinned
 
 ### R-LOCK-3 — The lock toggle shows the padlock in warm ink when locked and muted ink when unlocked
@@ -45,17 +45,17 @@ code decides it, and which test or scenario pins it.
 
 ### R-LOCK-4 — An Execute that would delete or skip a locked row is refused with 409
 
-- **Rule:** An Execute whose scope includes a locked row decided `delete` or `ignore` (Skip) answers HTTP 409 code `locked_paths` and writes nothing unless `force_locked` is set; with `force_locked` the locked rows are unlocked and then deleted or set to outcome `ignored`. An Execute whose scope leaves the locked rows out executes the unlocked rows and leaves the locked rows in review, still locked.
+- **Rule:** An Execute whose scope includes a locked row decided `delete` or `ignore` (Skip) answers HTTP 409 code `locked_paths` and writes nothing unless `force_locked` is set; with `force_locked` each locked row is deleted or set to outcome `ignored`, and its lock is cleared in that same write. A locked row whose action does not apply keeps its lock and stays in review. A locked row outside the allowed roots is not offered for unlock: it is filtered out before the gate, is not listed in `locked_paths`, and keeps its lock. An Execute whose scope leaves the locked rows out executes the unlocked rows and leaves the locked rows in review, still locked.
 - **Owning code:** `core/app_service/execute_service.py::execute_decisions`
-- **Pins:** `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_delete_row_without_force_returns_409`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_skip_row_without_force_returns_409`, `tests/test_web_execute_service.py::TestExecuteDecisions::test_locked_rows_raise_without_force`, `tests/test_web_execute_service.py::TestExecuteLockedSkipRows::test_locked_skip_row_raises_without_force`, `tests/test_web_execute_service.py::TestExecuteLockedSkipRows::test_force_locked_skip_row_unlocks_and_finalises_ignored`, `tests/test_web_execute_service.py::TestExecuteLockedSkipRows::test_locked_skip_row_left_out_of_scope_is_not_finalised`, `qa/web/scenarios/s34_lock_confirm_at_execute.py`
+- **Pins:** `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_delete_row_without_force_returns_409`, `tests/test_web_execute_routes.py::TestExecuteLockedGate::test_locked_skip_row_without_force_returns_409`, `tests/test_web_execute_service.py::TestExecuteDecisions::test_locked_rows_raise_without_force`, `tests/test_web_execute_service.py::TestExecuteLockedSkipRows::test_locked_skip_row_raises_without_force`, `tests/test_web_execute_service.py::TestExecuteLockedSkipRows::test_force_locked_skip_row_unlocks_and_finalises_ignored`, `tests/test_web_execute_service.py::TestExecuteLockedSkipRows::test_locked_skip_row_left_out_of_scope_is_not_finalised`, `tests/test_web_execute_service.py::TestLockedRowUnlockOnlyWhenApplied::test_locked_delete_outside_roots_is_not_gated_and_keeps_lock`, `tests/test_web_execute_service.py::TestLockedRowUnlockOnlyWhenApplied::test_locked_skip_outside_roots_is_not_gated_and_keeps_lock`, `qa/web/scenarios/s34_lock_confirm_at_execute.py`
 - **Status:** pinned
 
 ### R-LOCK-5 — Skip now with force_locked unlocks the locked rows and removes them
 
-- **Rule:** Skip now with `force_locked` set clears the lock of each locked row it is given and then sets the rows it accepts to outcome `ignored`; rows outside the allowed roots are not accepted.
-- **Owning code:** `core/app_service/execute_service.py::remove_from_review`
-- **Pins:** none
-- **Status:** unpinned
+- **Rule:** Skip now with `force_locked` set accepts only the rows inside the allowed roots; a locked row outside them is not accepted and keeps its lock. Each accepted locked row is unlocked in the same write that sets it outcome `ignored`, so a row whose write fails keeps its lock.
+- **Owning code:** `core/app_service/execute_service.py::remove_from_review`, `infrastructure/manifest_repository.py::ManifestRepository.remove_from_review`
+- **Pins:** `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_out_of_root_row_keeps_lock_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_in_root_row_is_ignored_and_unlocked_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_failed_ignore_write_keeps_locked_row_locked`, `tests/test_web_execute_service.py::TestExecuteRecycleLockedRow::test_recycle_success_clears_lock_with_deleted_outcome`
+- **Status:** pinned
 
 ## DIALOG
 
