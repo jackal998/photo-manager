@@ -54,10 +54,10 @@ Qt divergences:
     (all-delete) shows first, then the POST 409 opens LockConfirmDialog. Final
     Cancel outcome is identical: nothing executed.
   - Qt asserts the IMMEDIATE apply-button LABEL
-    (LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE). The web has NO per-context button
-    variant — the destructive button is always "Unlock & Apply" — so the
-    IMMEDIATE/delete-now cue is asserted on the dialog BODY text ("DELETED")
-    instead of a button label.
+    (LOCK_CONFIRM_BTN_UNLOCK_DELETE_IMMEDIATE). The web's button label is always
+    "Unlock & Apply"; only its weight is per-context (F5, #984: red with a ⊗ glyph
+    only for a Delete). The IMMEDIATE/delete-now cue is asserted on the dialog BODY
+    text ("DELETED") instead of a button label.
   - Qt reads user_decision/is_locked directly from SQLite (_read_state). The web
     port snapshots + re-reads via GET /api/manifest (the serialised authority),
     plus a disk-absence guard that nothing was deleted.

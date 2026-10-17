@@ -234,9 +234,16 @@ export function LockConfirmDialog() {
       ? t("web.lock_confirm.file_singular", "file")
       : t("web.lock_confirm.file_plural", "files");
 
+  // F5 (design ruling, #984): "Unlock & Apply" is destructive only when an
+  // execute will send at least one locked file to the Recycle Bin. Every other
+  // op and a Skip-only execute keep the default weight. The ⊗ glyph marks the
+  // destructive state so it reads in grayscale too (the warm and danger-warm
+  // colours have almost the same lightness).
+  const isDestructive = op === "execute" && (fates?.deleteN ?? 0) >= 1;
+
   const title =
     op === "execute"
-      ? executeSkipOnly
+      ? fates?.deleteN === 0
         ? t("web.lock_confirm.title_remove", "Locked files in skip scope")
         : t("web.lock_confirm.title_execute", "Locked files in delete scope")
       : op === "remove"
@@ -329,17 +336,15 @@ export function LockConfirmDialog() {
             {t("web.lock_confirm.unlocked_only", "Unlocked only")}
           </Button>
           <Button
-            // "decision" / "apply-best-copy" / "restore" are not destructive —
-            // nothing is deleted (decisions only queue; restore puts dismissed
-            // rows back in review). Every other op is.
-            variant={
-              op === "decision" || op === "apply-best-copy" || op === "restore"
-                ? "default"
-                : "destructive"
-            }
+            variant={isDestructive ? "destructive" : "default"}
             data-testid={LOCK_CONFIRM_BTN_UNLOCK_APPLY}
             onClick={handleUnlockApply}
           >
+            {isDestructive && (
+              <span aria-hidden="true" className="mr-1">
+                ⊗
+              </span>
+            )}
             {t("web.lock_confirm.unlock_apply", "Unlock & Apply")}
           </Button>
         </DialogFooter>
