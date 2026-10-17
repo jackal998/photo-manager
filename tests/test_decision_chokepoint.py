@@ -197,7 +197,7 @@ class TestWriteTxn:
         with repo.write_txn(str(manifest)):
             started = time.monotonic()
             with pytest.raises(RuntimeError):
-                repo.load(str(manifest))
+                list(repo.load(str(manifest)))  # load() is a generator
             assert time.monotonic() - started < 1.0
 
     def test_write_txn_auto_migrates_pre_outcome_manifest(self, tmp_path):

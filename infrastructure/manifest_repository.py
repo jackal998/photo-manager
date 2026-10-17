@@ -29,11 +29,15 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from collections.abc import Iterable, Iterator
+import threading
+from collections.abc import Collection, Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 
+from core.app_service.lock_gate import LockedRowsError
 from core.models import PhotoGroup, PhotoRecord
 from infrastructure.utils import get_exif_datetime_original, get_filesystem_creation_datetime
 
@@ -159,6 +163,19 @@ UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
 
 _UPDATE_LOCK_SQL = """
 UPDATE migration_manifest SET is_locked = ? WHERE source_path = ?
+"""
+
+# A3 — a decision write. Value, lock and lock condition live in ONE statement,
+# so a lock set after the plan's read is still refused (B-1). The condition
+# stops a caller with a wrong ``confirmed`` from clearing a lock it did not name.
+_WRITE_DECISION_SQL = """
+UPDATE migration_manifest
+   SET user_decision = :decision,
+       is_locked = CASE WHEN :lock_after IS NOT NULL THEN :lock_after
+                        WHEN :confirmed = 1          THEN 0
+                        ELSE is_locked END
+ WHERE source_path = :path
+   AND (is_locked = 0 OR :confirmed = 1)
 """
 
 _FINALIZE_OUTCOME_SQL = """
@@ -456,6 +473,113 @@ def _photo_record(
     )
 
 
+# ------------------------------------------------------ A3 guarded write primitives
+# Design: docs/audits/2026-10-17-write-chokepoint/design.md sections 2.3-2.4.
+
+_TXN_STATE = threading.local()
+
+
+def _txn_key(manifest_path: str) -> str:
+    return os.path.normcase(os.path.abspath(manifest_path))
+
+
+def _open_txn_paths() -> set[str]:
+    """Manifests with a write_txn open on THIS thread (ordering rule, 2.4)."""
+    paths: set[str] | None = getattr(_TXN_STATE, "paths", None)
+    if paths is None:
+        paths = set()
+        _TXN_STATE.paths = paths
+    return paths
+
+
+def _guard_no_open_txn(manifest_path: str) -> None:
+    """Refuse a manifest write that would wait on this thread's own open txn.
+
+    A write on another connection while this thread holds RESERVED would sit
+    out the 5 s busy timeout and then fail, so it is refused at once instead.
+    """
+    if _txn_key(manifest_path) in _open_txn_paths():
+        raise RuntimeError("manifest write inside an open write_txn")
+
+
+@dataclass(frozen=True)
+class DecisionWrite:
+    """One row's decision write, applied by ``ManifestTxn.write_decisions``.
+
+    ``lock_after``: None = unlock if the row is confirmed, otherwise leave the
+    lock as it is; True = lock it (Keep best's keeper); False = unlock it,
+    which on a locked row needs that row confirmed. The dataclass cannot see
+    the row's state: ``refuse_unconfirmed`` and the SQL guard enforce the rule.
+    """
+
+    path: str
+    decision: str
+    lock_after: bool | None = None
+
+
+class ManifestTxn:
+    """The open IMMEDIATE transaction handed out by ``write_txn``."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def _query_locked(self, outcome: str | None) -> set[str]:
+        sql = "SELECT source_path FROM migration_manifest WHERE is_locked = 1"
+        args: tuple[str, ...] = ()
+        if outcome is not None:
+            sql += " AND outcome = ?"
+            args = (outcome,)
+        return {row[0] for row in self._conn.execute(sql, args)}
+
+    def locked_paths(self, *, outcome: str | None = None) -> set[str]:
+        """Locked source paths, visible or not (B-5). Input to the plan only."""
+        return self._query_locked(outcome)
+
+    def refuse_unconfirmed(
+        self,
+        paths: Iterable[str],
+        confirmed: Collection[str],
+        *,
+        outcome: str | None = None,
+        matched_total: int | None = None,
+    ) -> None:
+        """Raise LockedRowsError for each locked path not named in ``confirmed``.
+
+        Reads its own lock set rather than ``locked_paths()``, so a stale plan
+        cannot switch the refusal off. Set-based, because source_path is not
+        unique (BE-19).
+        """
+        blocked = (self._query_locked(outcome) & set(paths)) - set(confirmed)
+        if blocked:
+            raise LockedRowsError(sorted(blocked), matched_total)
+
+    def write_decisions(
+        self,
+        writes: Iterable[DecisionWrite],
+        *,
+        confirmed: Collection[str],
+        matched_total: int | None = None,
+    ) -> int:
+        """Refuse unconfirmed locked rows, then write. Returns rows changed."""
+        batch = list(writes)
+        confirmed_set = frozenset(confirmed)
+        self.refuse_unconfirmed(
+            [w.path for w in batch], confirmed_set, matched_total=matched_total
+        )
+        if not batch:
+            return 0
+        params = [
+            {
+                "decision": w.decision,
+                "lock_after": None if w.lock_after is None else int(w.lock_after),
+                "confirmed": int(w.path in confirmed_set),
+                "path": w.path,
+            }
+            for w in batch
+        ]
+        return self._conn.executemany(_WRITE_DECISION_SQL, params).rowcount
+
+
 class ManifestRepository:
     """Read all manifest rows; write user decisions back."""
 
@@ -482,6 +606,7 @@ class ManifestRepository:
         drop AFTER the adds guarantees the copy SELECT finds every
         surviving column on the old table.
         """
+        _guard_no_open_txn(manifest_path)
         path = Path(manifest_path)
         if not path.exists():
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
@@ -489,6 +614,32 @@ class ManifestRepository:
         try:
             migrate_manifest_schema(conn)
         finally:
+            conn.close()
+
+    @contextmanager
+    def write_txn(self, manifest_path: str) -> Iterator[ManifestTxn]:
+        """Open one IMMEDIATE transaction on the manifest (A3, design 2.3).
+
+        ``ensure_schema`` runs first (auto-migrate, BE-18); then one connection
+        takes the write lock with BEGIN IMMEDIATE. Commit on normal exit,
+        rollback on any exception. Until exit, this thread may not load or
+        migrate the same manifest: such a call raises at once (2.4).
+        """
+        self.ensure_schema(manifest_path)
+        key = _txn_key(manifest_path)
+        conn = _connect(manifest_path)
+        conn.isolation_level = None  # BEGIN is issued explicitly below
+        _open_txn_paths().add(key)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield ManifestTxn(conn)
+            except BaseException:
+                conn.rollback()
+                raise
+            conn.commit()
+        finally:
+            _open_txn_paths().discard(key)
             conn.close()
 
     # --------------------------------------------------------- reconcile
@@ -536,6 +687,7 @@ class ManifestRepository:
         """
         from scanner.walker import has_skip_directory_ancestor
 
+        _guard_no_open_txn(manifest_path)
         self.ensure_schema(manifest_path)
         conn = _connect(manifest_path)
         try:
