@@ -1,0 +1,1 @@
+Make the lock-confirm "Unlock & Apply" button red only when a locked file will be deleted, not for Skip, remove, prune, restore or decision (#984)
