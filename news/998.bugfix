@@ -1,0 +1,1 @@
+Prune refuses a locked singleton with a lock confirmation, like every other write, and unlocks it in the same write (#983)

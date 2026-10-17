@@ -1008,8 +1008,9 @@ class TestPostPrune:
         assert body["locked_skipped"] == []
         assert _read_outcome(manifest, str(f1)) == "ignored"
 
-    def test_locked_singleton_is_skipped(self, client_with_roots, tmp_path):
-        """A locked singleton stays in locked_skipped and is NOT pruned."""
+    def test_locked_singleton_refused_409_nothing_written(self, client_with_roots, tmp_path):
+        """#983: a locked singleton in scope without force_locked → 409
+        locked_paths, and the manifest is untouched (all or nothing)."""
         client, root = client_with_roots
         files = _make_real_files(tmp_path, 2)
         f1, f2 = files
@@ -1038,13 +1039,38 @@ class TestPostPrune:
         resp = client.post("/api/prune", json={
             "manifest_path": str(manifest),
         })
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["pruned"] == []
-        assert str(f1) in body["locked_skipped"]
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "locked_paths"
+        assert detail["locked_paths"] == [str(f1)]
 
-        # outcome must be unchanged.
+        # outcome and lock must be unchanged.
         assert _read_outcome(manifest, str(f1)) == ""
+        assert _read_is_locked(manifest, str(f1)) is True
+
+    def test_force_locked_prunes_and_unlocks_locked_singleton(self, client_with_roots, tmp_path):
+        """#983: force_locked=True prunes the locked singleton (ignored) and
+        clears its lock in the same write."""
+        client, root = client_with_roots
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {"source_path": str(f1), "action": "", "group_id": "g1",
+             "outcome": "", "user_decision": "", "is_locked": 1,
+             "file_size_bytes": 128},
+            {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+             "hamming_distance": 4, "outcome": "deleted", "user_decision": "delete",
+             "file_size_bytes": 128},
+        ])
+
+        resp = client.post("/api/prune", json={
+            "manifest_path": str(manifest),
+            "paths": [str(f1)],
+            "force_locked": True,
+        })
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["pruned"] == [str(f1)]
+        assert _read_outcome(manifest, str(f1)) == "ignored"
+        assert _read_is_locked(manifest, str(f1)) is False
 
     def test_explicit_paths_prunes_only_named(self, client_with_roots, tmp_path):
         """`paths` in the request body threads through to explicit-mode prune

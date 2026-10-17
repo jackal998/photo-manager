@@ -69,6 +69,10 @@ class PruneRequest(BaseModel):
     # Unlock&Applied locked singleton, keep the plain bucket". ``None`` keeps the
     # original category behaviour (all plain + optionally all actioned).
     paths: list[str] | None = None
+    # #983: a locked singleton in scope is refused (409 locked_paths) unless the
+    # client confirmed the lock gate and sends force_locked=True. Each such row
+    # is pruned and unlocked in the same write.
+    force_locked: bool = False
 
 
 class SaveRequest(BaseModel):
