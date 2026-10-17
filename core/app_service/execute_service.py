@@ -326,7 +326,8 @@ def remove_from_review(
 
     Args:
         manifest_path: Absolute path to the manifest sqlite.
-        file_paths: Paths to mark as ignored.
+        file_paths: Paths to mark as ignored. Only rows still in review are
+            written; deleted or already-dismissed rows are left as they are.
         force_locked: If True, remove locked rows anyway; each is unlocked in
             the same write as its ignored outcome (#985). If False and any
             in-root rows are locked, raises ValueError with the locked paths.
@@ -367,7 +368,9 @@ def remove_from_review(
 
     # #985: nothing is unlocked up front. Locked rows keep their lock until the
     # ignored write clears it in the same statement (clear_lock=True).
-    repo.remove_from_review(manifest_path, safe_paths, clear_lock=True)
+    # #A2: the write itself is guarded to rows still in review; rows already
+    # deleted or dismissed are left as they are and are not counted.
+    written = repo.remove_from_review(manifest_path, safe_paths, clear_lock=True)
 
     from core.app_service.review_service import load_review
     try:
@@ -377,7 +380,7 @@ def remove_from_review(
         logger.warning("Failed to reload groups after remove: {}", exc)
         groups = []
 
-    return {"removed": len(safe_paths), "groups": groups}
+    return {"removed": written, "groups": groups}
 
 
 def _locked_skipped_paths(manifest_path: str, file_paths: list[str]) -> list[str]:

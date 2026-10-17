@@ -855,6 +855,41 @@ class TestPostRemove:
         assert _read_outcome(manifest, str(f2)) == ""
         assert _read_is_locked(manifest, str(f1)) is True
 
+    def test_skip_now_reports_and_writes_only_the_in_review_rows(self, client_with_roots, tmp_path):
+        """A deleted row sent alongside an in-review row is left alone; the response counts only the written row."""
+        client, root = client_with_roots
+        f_review, f_deleted = _make_real_files(tmp_path, 2)
+
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f_review),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "",
+                "file_size_bytes": 128,
+            },
+            {
+                "source_path": str(f_deleted),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 4,
+                "outcome": "deleted",
+                "executed": 1,
+                "user_decision": "delete",
+                "file_size_bytes": 128,
+            },
+        ])
+
+        resp = client.post("/api/remove", json={
+            "manifest_path": str(manifest),
+            "file_paths": [str(f_review), str(f_deleted)],
+        })
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["removed"] == 1
+        assert _read_outcome(manifest, str(f_review)) == "ignored"
+        assert _read_outcome(manifest, str(f_deleted)) == "deleted"
+
 
 # ---------------------------------------------------------------------------
 # POST /api/restore — the Undo of an immediate Skip (#909)

@@ -771,6 +771,84 @@ class TestRemoveFromReview:
         with pytest.raises(FileNotFoundError):
             remove_from_review(str(tmp_path / "no.sqlite"), ["x"])
 
+    def test_deleted_row_is_left_as_it_is(self, tmp_path):
+        # A 'deleted' row's file is gone to the Recycle Bin. Skip now must not
+        # rewrite it to 'ignored', or a later Undo would offer it back in review.
+        (f,) = _make_real_files(tmp_path, 1)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "deleted",
+                "executed": 1,
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        result = remove_from_review(str(manifest), [str(f)])
+
+        assert result["removed"] == 0
+        assert _read_col(manifest, str(f), "outcome") == "deleted"
+        assert _read_col(manifest, str(f), "executed") == 1
+
+    def test_locked_dismissed_row_keeps_its_lock_under_force(self, tmp_path):
+        # Already dismissed and locked: no 409 (it is not in review), and the
+        # forced Skip now must not unlock it or touch its outcome.
+        (f,) = _make_real_files(tmp_path, 1)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "ignored",
+                "executed": 0,
+                "user_decision": "ignore",
+                "is_locked": 1,
+                "file_size_bytes": 64,
+            },
+        ])
+
+        result = remove_from_review(
+            str(manifest), [str(f)], force_locked=True, allowed_roots=[str(tmp_path)],
+        )
+
+        assert result["removed"] == 0
+        assert _read_col(manifest, str(f), "outcome") == "ignored"
+        assert _read_col(manifest, str(f), "executed") == 0
+        assert _read_col(manifest, str(f), "is_locked") == 1
+
+    def test_mixed_batch_writes_only_the_in_review_row(self, tmp_path):
+        f_review, f_deleted = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f_review),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "",
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(f_deleted),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "deleted",
+                "executed": 1,
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        result = remove_from_review(str(manifest), [str(f_review), str(f_deleted)])
+
+        assert result["removed"] == 1
+        assert _read_col(manifest, str(f_review), "outcome") == "ignored"
+        assert _read_col(manifest, str(f_deleted), "outcome") == "deleted"
+        assert _read_col(manifest, str(f_deleted), "executed") == 1
+
 
 # ---------------------------------------------------------------------------
 # restore_to_review — the Undo of an immediate Skip (#909)
