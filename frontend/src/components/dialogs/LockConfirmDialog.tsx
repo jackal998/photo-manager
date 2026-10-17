@@ -32,6 +32,9 @@
 //   op === "apply-best-copy" → "N locked rows would be affected" (DEFERRED,
 //                       same reasoning as "decision" — the write only queues
 //                       keep/delete decisions). Re-runs applyBestCopy(groupNumber).
+//   op === "restore"  → "N locked rows go back into review and are unlocked"
+//                       (#981; the Undo of an immediate Skip hit a locked row).
+//                       Nothing is deleted, so Unlock & Apply is NOT destructive.
 
 import {
   Dialog,
@@ -87,6 +90,7 @@ export function LockConfirmDialog() {
   const setDecisions = useAppStore((s) => s.setDecisions);
   const resolvePruneLock = useAppStore((s) => s.resolvePruneLock);
   const applyBestCopy = useAppStore((s) => s.applyBestCopy);
+  const restoreToReview = useAppStore((s) => s.restoreToReview);
   const set = useAppStore.setState;
   const t = useT();
 
@@ -133,6 +137,8 @@ export function LockConfirmDialog() {
       if (groupNumber !== undefined) {
         void applyBestCopy(groupNumber, { forceLocked: true });
       }
+    } else if (op === "restore") {
+      void restoreToReview(original, { forceLocked: true });
     } else {
       void removeFromList(original, true);
     }
@@ -167,6 +173,9 @@ export function LockConfirmDialog() {
       if (groupNumber !== undefined) {
         void applyBestCopy(groupNumber, { skipLocked: true });
       }
+    } else if (op === "restore") {
+      // Restore only the unlocked subset; the locked rows stay dismissed.
+      void restoreToReview(unlockedPaths);
     } else {
       // Re-run remove with only the unlocked subset.
       void removeFromList(unlockedPaths, false);
@@ -236,7 +245,9 @@ export function LockConfirmDialog() {
           ? t("web.lock_confirm.title_decision", "Locked rows affected")
           : op === "apply-best-copy"
             ? t("web.lock_confirm.title_apply_best_copy", "Locked rows in this group")
-            : t("web.lock_confirm.title_prune", "Locked singleton groups");
+            : op === "restore"
+              ? t("web.lock_confirm.title_restore", "Locked rows going back into review")
+              : t("web.lock_confirm.title_prune", "Locked singleton groups");
   const description =
     op === "execute"
       ? executeMixed
@@ -274,6 +285,12 @@ export function LockConfirmDialog() {
                 "Applying best-copy to this group would affect rows that include {n} locked {rowWord}. Nothing is deleted yet — this only queues keep/delete decisions. Unlock and apply to all, apply to the unlocked rows only, or cancel.",
                 { n, rowWord }
               )
+            : op === "restore"
+              ? t(
+                  "web.lock_confirm.body_restore",
+                  "{n} locked {fileWord} {isWord} about to go back into review and be unlocked. Nothing is deleted: restored files stay on disk. Unlock and restore, restore only the unlocked files, or cancel.",
+                  { n, fileWord, isWord }
+                )
             : t(
                 "web.lock_confirm.body_prune",
                 "{n} locked singleton {groupWord} would be pruned. Unlock and prune {pronoun}, or keep {pronoun} in the list.",
@@ -312,11 +329,13 @@ export function LockConfirmDialog() {
             {t("web.lock_confirm.unlocked_only", "Unlocked only")}
           </Button>
           <Button
-            // "decision" / "apply-best-copy" are not destructive — nothing is
-            // deleted, they only queue decisions (Qt #417 parity). Every
-            // other op is.
+            // "decision" / "apply-best-copy" / "restore" are not destructive —
+            // nothing is deleted (decisions only queue; restore puts dismissed
+            // rows back in review). Every other op is.
             variant={
-              op === "decision" || op === "apply-best-copy" ? "default" : "destructive"
+              op === "decision" || op === "apply-best-copy" || op === "restore"
+                ? "default"
+                : "destructive"
             }
             data-testid={LOCK_CONFIRM_BTN_UNLOCK_APPLY}
             onClick={handleUnlockApply}

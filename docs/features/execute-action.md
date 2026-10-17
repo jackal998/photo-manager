@@ -118,11 +118,13 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
   | `POST /api/remove` | `remove` |
   | `PATCH /api/decision` | `decision` ([#733](https://github.com/jackal998/photo-manager/issues/733)) |
   | `POST /api/action/apply-best-copy` | `apply-best-copy` ([#744](https://github.com/jackal998/photo-manager/issues/744)) |
+  | `POST /api/restore` | `restore` ([#981](https://github.com/jackal998/photo-manager/issues/981)) |
 
   It also opens with no request at all, for locked singletons before a prune (`prune`, [#686](https://github.com/jackal998/photo-manager/issues/686)).
 - **Trigger:** The server re-reads `is_locked` from SQLite on each such call and never trusts the client. In user terms, any of:
   - **Execute** / **Execute selected** with a locked Delete or Skip row in scope.
   - A finalizing **Skip** that includes a locked row — from the Execute dialog's row menu, the main-tree context menu, or **List → Skip Selected now**.
+  - The **Undo** of an immediate Skip that includes a locked dismissed row — restore is gated like every other locked action (`R-LOCK-1`, #981).
   - A decision change on a locked row. Right-click Keep/Delete in either tree and the `d`/`k` shortcuts go through `store.setDecisions`. The row's own Keep/Delete/Skip control and the preview pane's decision buttons are disabled on a locked row, so they never reach the gate.
   - **Apply best-copy decisions to this group** (group context menu) on a group with locked rows.
   - A [singleton-prune offer](#singleton-prune-offer-after-destructive-ops-426) that includes locked singletons.
@@ -136,8 +138,9 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
     - `decision` — **"Locked rows affected"**: "Setting this decision would change M row(s); N is/are locked. **Nothing is deleted yet — this only queues the decision.** Unlock and set all, set only the unlocked rows, or cancel."
     - `apply-best-copy` — **"Locked rows in this group"**: "…Nothing is deleted yet — this only queues keep/delete decisions…"
     - `prune` — **"Locked singleton groups"**: "N locked singleton group(s) would be pruned. Unlock and prune it/them, or keep it/them in the list."
+    - `restore` — **"Locked rows going back into review"**: "N locked file(s) is/are about to go back into review and be unlocked. **Nothing is deleted: restored files stay on disk.** Unlock and restore, restore only the unlocked files, or cancel." Unlock & Apply unlocks and restores the same list (`force_locked`); Unlocked only restores the unlocked subset; Cancel leaves the toast up with its Undo.
 
-    **Unlock & Apply** is styled as destructive except for `decision` and `apply-best-copy`, which only queue decisions.
+    **Unlock & Apply** is styled as destructive except for `decision`, `apply-best-copy` and `restore`, which do not delete anything.
 - **Conditions / variants:**
   - **Lock / Unlock never prompt** — `PATCH /api/lock` is not gated.
   - **At Execute, locked Delete and locked Skip rows both trip the gate** (`R-LOCK-4`).

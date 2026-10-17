@@ -1744,6 +1744,10 @@ export const useAppStore = create<AppStore>()(
         state.manifest.error = null;
       });
 
+      const restorePaths = [
+        ...toast.snapshot.map((row) => row.file_path),
+        ...(toast.prunedPaths ?? []),
+      ];
       try {
         // A skip writes nothing but outcome='ignored' (no file I/O, no CSV,
         // no decision or lock change — a locked row 409s before any write),
@@ -1753,10 +1757,7 @@ export const useAppStore = create<AppStore>()(
         // unlock is not reversed here.)
         const result = await postRestore({
           manifest_path: manifestPath,
-          file_paths: [
-            ...toast.snapshot.map((row) => row.file_path),
-            ...(toast.prunedPaths ?? []),
-          ],
+          file_paths: restorePaths,
         });
         set((state) => {
           // An Undo already in flight when another manifest was opened still
@@ -1768,6 +1769,20 @@ export const useAppStore = create<AppStore>()(
           if (state.toast?.id === toast.id) state.toast = null;
         });
       } catch (err) {
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          // #981 — a locked dismissed row. Restore is gated like every other
+          // locked action: the lock-confirm dialog owns the retry (op
+          // "restore"). The toast stays up, so Cancel keeps its Undo.
+          set((state) => {
+            if (state.toast?.id === toast.id) state.toast.undoing = false;
+            state.execute.lockConflict = {
+              paths: err.lockedPaths ?? [],
+              op: "restore",
+              originalPaths: restorePaths,
+            };
+          });
+          return;
+        }
         // Leave the toast up on failure, as undoKeepBest does — dismissing it
         // would take the only way back with it.
         set((state) => {
@@ -1775,6 +1790,47 @@ export const useAppStore = create<AppStore>()(
           state.manifest.error =
             err instanceof Error ? err.message : String(err);
         });
+      }
+    },
+
+    async restoreToReview(paths, opts = {}) {
+      const manifestPath = get().manifest.path;
+      if (manifestPath === null) return;
+
+      // #718 — clear any stale error from a previous action before this one.
+      set((state) => {
+        state.manifest.error = null;
+      });
+
+      try {
+        const result = await postRestore({
+          manifest_path: manifestPath,
+          file_paths: paths,
+          force_locked: opts.forceLocked ?? false,
+        });
+        set((state) => {
+          // Same guard as undoSkipNow: a manifest opened meanwhile keeps its groups.
+          if (state.manifest.path === manifestPath) {
+            state.manifest.groups = result.groups;
+          }
+          // The retry restored the skipped rows, so the skip toast's Undo is spent.
+          if (state.toast?.kind === "skip-now") state.toast = null;
+        });
+      } catch (err) {
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          set((state) => {
+            state.execute.lockConflict = {
+              paths: err.lockedPaths ?? [],
+              op: "restore",
+              originalPaths: [...paths],
+            };
+          });
+        } else {
+          set((state) => {
+            state.manifest.error =
+              err instanceof Error ? err.message : String(err);
+          });
+        }
       }
     },
 

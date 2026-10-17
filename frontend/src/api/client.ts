@@ -310,10 +310,10 @@ export async function postRemove(req: RemoveRequest): Promise<RemoveResult> {
   return postJsonOrConflict<RemoveResult>("/api/remove", req);
 }
 
-// POST /api/restore (#909)
+// POST /api/restore (#909) — 409 locked_paths (#981) routes to LockConfirmDialog.
 
 export async function postRestore(req: RestoreRequest): Promise<RestoreResult> {
-  return postJson<RestoreResult>("/api/restore", req);
+  return postJsonOrConflict<RestoreResult>("/api/restore", req);
 }
 
 // POST /api/prune

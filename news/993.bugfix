@@ -1,0 +1,1 @@
+Gate the Undo of a Skip on a locked row behind the lock-confirm dialog, so it no longer returns a locked row to review silently (#981)

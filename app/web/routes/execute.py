@@ -248,6 +248,7 @@ def post_restore(body: RestoreRequest, request: Request) -> RestoreResult:
         400 bad path
         403 path outside allowed roots
         404 manifest not found
+        409 locked_paths (a locked dismissed row is in scope and force_locked=False)
         422 on unexpected error
     """
     roots = _allowed_roots(request)
@@ -265,9 +266,18 @@ def post_restore(body: RestoreRequest, request: Request) -> RestoreResult:
             manifest_path=body.manifest_path,
             file_paths=body.file_paths,
             allowed_roots=[str(r) for r in roots],
+            force_locked=body.force_locked,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        args = exc.args
+        if args and args[0] == "locked_paths":
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "locked_paths", "locked_paths": args[1]},
+            ) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Restore failed: {exc}") from exc
 

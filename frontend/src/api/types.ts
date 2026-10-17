@@ -244,6 +244,7 @@ export interface RemoveResult {
 export interface RestoreRequest {
   manifest_path: string;
   file_paths: string[];
+  force_locked?: boolean;
 }
 
 export interface RestoreResult {
