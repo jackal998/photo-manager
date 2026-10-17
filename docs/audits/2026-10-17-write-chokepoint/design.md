@@ -271,7 +271,7 @@ reaches only bulk-decide. The execute, remove, restore and prune routes return
 403 first on `manifest_path` (`execute.py:65-67`, `_path_guard.py:69-74`).
 Allowed roots are the folders of the manifest's own visible rows
 (`review_service.py:80-88`). So this is consistency work, not a file-safety
-hole. It is Track B item B2, together with D2, D3 and a register rule R-SAFE-1.
+hole. It is Track B item B2, together with D2, D3 and a proposed roots rule (SAFE-1, not yet in the register).
 
 ---
 
@@ -520,7 +520,7 @@ carries the only extra per-file read.
 | Item | What | Value | Tag | Needs |
 |---|---|---|---|---|
 | **B1** | One route error mapper (`_errors.py::service_errors`) | One place that shapes the 409 and the 4xx details; fixes no bug | REFACTOR | - |
-| **B2** | One roots policy: `split_by_roots`, register rule R-SAFE-1, empty list fails closed, decision writes recorded as exempt or filtered | Consistent and stated root handling; closes B-7 and B-8 | FIX (adds uniform log lines to classify and bulk decide, and changes empty-list behaviour) | D2, D3 |
+| **B2** | One roots policy: `split_by_roots`, proposed roots rule SAFE-1 (not yet in the register), empty list fails closed, decision writes recorded as exempt or filtered | Consistent and stated root handling; closes B-7 and B-8 | FIX (adds uniform log lines to classify and bulk decide, and changes empty-list behaviour) | D2, D3 |
 | **B3** | Client helper: `lockGate.ts`, `resolveLockConflict` re-send table, `WriteOutcome`, `raiseToast()` | One re-send path, so new ops cannot drift; a stronger tripwire | REFACTOR | A8 |
 | **B4** | The re-send keeps its caller: Skip-now toast after "Unlocked only" (B-11 half), toolbar stale-lock toast (B-12), restore clears its own toast only (B-13), empty narrowed scope for remove/restore (B-14), toolbar reads a result (B-15) | Toasts and undo stay true after a lock dialog | FIX | - (the "Unlock & Apply" toast half waits for D11) |
 | **B5** | Forced decision clears the padlock (B-16); every write tail checks the manifest did not switch (B-17) | The screen matches the server after a forced write | FIX | - |
@@ -560,7 +560,7 @@ Only product choices are listed here. My lean comes first in each.
 | D1 | Should right-click Keep/Delete, K/D, Skip Selected now and Execute only selected act on selected rows the filter hides? | (a) Visible rows only, like the toolbar and R-EXEC-1. (b) The whole selection, with the hidden count shown. | **(a).** One rule for every bulk verb; the store's own comment calls the other way "a bulk write whose extent the user cannot see" (`useAppStore.ts:1564-1568`). | B8 |
 | D4 | Should the Set Action bulk apply get an Undo toast? | (a) Yes, like the toolbar and Keep best. (b) No; the dialog already previews and confirms deletes. | **(a).** Every other reversible bulk decision write has one. | B9 |
 | D2 | **Deferred with the roots track (Track B).** What does an empty allowed-roots list mean? | (a) Nothing is allowed. (b) Everything is allowed (services today). | **(a)**, matching `is_under_roots` and `main.py:48` "secure-by-default". | B2 |
-| D3 | **Deferred with the roots track (Track B).** Should decision, lock and Keep-best writes check allowed roots? | (a) Yes. (b) No, recorded as exempt in R-SAFE-1. | **(b).** They touch no file; Execute is the file boundary. | B2 |
+| D3 | **Deferred with the roots track (Track B).** Should decision, lock and Keep-best writes check allowed roots? | (a) Yes. (b) No, recorded as exempt in the proposed SAFE-1. | **(b).** They touch no file; Execute is the file boundary. | B2 |
 | D8 | Button weight for ActionDialog "Unlock & Apply", RemoveFromList "Yes", DeleteConfirm "Mark N for deletion", Rescan confirm. | (a) Extend F5. (b) Keep them red. | **(a)**, but **needs a design ruling.** | B12 |
 | D9 | Copy: the "Manifest error:" prefix; DeleteConfirm's contradiction; "Unlock and apply anyway?"; the two Skip labels. | (a) One copy pass under a design request. (b) Leave. | **(a)**, **needs a design ruling**. | out of scope |
 
