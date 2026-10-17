@@ -143,7 +143,7 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
   - **Lock / Unlock never prompt** — `PATCH /api/lock` is not gated.
   - **At Execute, locked Delete and locked Skip rows both trip the gate** (`R-LOCK-4`).
   - **Not every path uses this dialog.**
-    - The toolbar's bulk Keep/Delete/Skip verbs leave locked rows out in the browser, and the group header's Keep-best button sends `skip_locked` so the server leaves them alone. Both report "N locked file(s) unchanged" in their undo toast.
+    - The toolbar's bulk Keep/Delete/Skip verbs and the group header's Keep-best button are the `R-LOCK-7` exception: they leave locked rows out with no 409 and no dialog. Both report "N locked file(s) unchanged" in their undo toast.
     - The Set Action by Field dialog has its own inline three-button prompt (`action-lock-confirm-dialog`). Its **Apply to Unlocked Only** is disabled when the 409's `matched_total` leaves no unlocked row. Cancelling that prompt keeps the Set Action dialog open with the user's field, regex and action ([#764](https://github.com/jackal998/photo-manager/issues/764), the twin of #721): `ActionDialog.onInteractOutside` always calls `preventDefault`, and Escape is guarded only while the dialog is applying.
   - **Unlocked only is never disabled here.** When every targeted row is locked it re-runs over whatever is left (for `decision`, nothing). The retired desktop client disabled it in that case.
   - **`prune`:** Cancel does not abort the prune. Cancel and **Unlocked only** both keep the locked singletons and go on to the unlocked ones; **Unlock & Apply** unlocks and prunes them.
