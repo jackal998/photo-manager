@@ -1,0 +1,1 @@
+Open the lock-confirm dialog when a prune hits a row locked after the candidates read, instead of a raw HTTP 409 error (#1015)
