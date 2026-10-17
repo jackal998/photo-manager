@@ -139,8 +139,6 @@ Entries for the **Execute Action** area of the feature inventory. The index and 
     - `apply-best-copy` — **"Locked rows in this group"**: "…Nothing is deleted yet — this only queues keep/delete decisions…"
     - `prune` — **"Locked singleton groups"**: "N locked singleton group(s) would be pruned. Unlock and prune it/them, or keep it/them in the list."
     - `restore` — **"Locked rows going back into review"**: "N locked file(s) is/are about to go back into review and be unlocked. **Nothing is deleted: restored files stay on disk.** Unlock and restore, restore only the unlocked files, or cancel." Unlock & Apply unlocks and restores the same list (`force_locked`); Unlocked only restores the unlocked subset; Cancel leaves the toast up with its Undo.
-
-    **Unlock & Apply** is styled as destructive except for `decision`, `apply-best-copy` and `restore`, which do not delete anything.
 - **Conditions / variants:**
   - **Lock / Unlock never prompt** — `PATCH /api/lock` is not gated.
   - **At Execute, locked Delete and locked Skip rows both trip the gate** (`R-LOCK-4`).
