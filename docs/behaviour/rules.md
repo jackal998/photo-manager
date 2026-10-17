@@ -57,6 +57,13 @@ code decides it, and which test or scenario pins it.
 - **Pins:** `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_out_of_root_row_keeps_lock_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_in_root_row_is_ignored_and_unlocked_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_failed_ignore_write_keeps_locked_row_locked`, `tests/test_web_execute_service.py::TestExecuteRecycleLockedRow::test_recycle_success_clears_lock_with_deleted_outcome`
 - **Status:** pinned
 
+### R-LOCK-6 — A manifest open never dismisses a row of a group that holds a lock
+
+- **Rule:** The skip-directory reconcile on a manifest load leaves every group that contains a locked row untouched, so no row of such a group is dismissed and a locked row stays in review, locked and visible. The load logs how many skip-directory rows it left in place. The dismissal write re-checks the lock at group level inside the statement, so a lock set on any partner after the candidate read also blocks it. No user action sits behind this write, so it must never clear a lock or hide a locked row (#982).
+- **Owning code:** `infrastructure/manifest_repository.py::ManifestRepository.reconcile_skip_directory_rows`, `infrastructure/manifest_repository.py::ManifestRepository._dismiss_skipped_rows`
+- **Pins:** `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_locked_skip_row_keeps_its_unlocked_group_partner_visible`, `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_locked_non_skip_partner_keeps_skip_row_visible`, `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_group_without_a_locked_row_is_dismissed_as_before`, `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_locked_row_under_skip_directory_stays_in_review_and_locked`, `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_reconcile_reports_how_many_locked_rows_it_left`, `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_lock_on_the_partner_after_the_candidate_read_blocks_the_dismiss`, `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_lock_set_after_the_candidate_read_is_not_dismissed`
+- **Status:** pinned
+
 ## DIALOG
 
 ### R-DIALOG-1 — The Action and Execute dialogs do not close on an outside interaction
