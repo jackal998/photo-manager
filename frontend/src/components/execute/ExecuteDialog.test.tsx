@@ -215,6 +215,21 @@ describe("ExecuteDialog", () => {
     expect(screen.getByTestId(EXECUTE_DIALOG)).toBeInTheDocument();
   });
 
+  // R-DIALOG-1: an interaction outside the dialog never closes it.
+  it("an outside pointer-down on the overlay leaves the dialog open", async () => {
+    act(() => {
+      openDialog();
+    });
+    render(<ExecuteDialog />);
+    // Radix attaches its outside-pointer listener on a timer after mount.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const overlay = document.querySelector<HTMLElement>(".fixed.inset-0");
+    expect(overlay).not.toBeNull();
+    fireEvent.pointerDown(overlay as HTMLElement);
+    expect(screen.getByTestId(EXECUTE_DIALOG)).toBeInTheDocument();
+    expect(useAppStore.getState().execute.executeOpen).toBe(true);
+  });
+
   it("does not render dialog content when executeOpen=false", () => {
     render(<ExecuteDialog />);
     expect(screen.queryByTestId(EXECUTE_DIALOG)).not.toBeInTheDocument();

@@ -23,6 +23,8 @@ from core.app_service.execute_service import (
     save_manifest,
 )
 from core.app_service.review_service import load_review
+from core.services.interfaces import DeleteResult
+from infrastructure.delete_service import DeleteService
 from infrastructure.manifest_repository import ManifestRepository
 from scanner.manifest import _DDL as _MANIFEST_DDL
 
@@ -1476,6 +1478,49 @@ class TestExecuteRecycleLockedRow:
         assert not f1.exists()
         assert _read_col(manifest, str(f1), "outcome") == "deleted"
         assert _read_col(manifest, str(f1), "is_locked") == 0
+
+
+class TestExecuteRecycleDefault:
+    """R-DELETE-1: a delete with no `recycle` argument goes to the Recycle Bin."""
+
+    def test_default_sends_delete_to_recycle_not_unlink(self, tmp_path):
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f1),
+                "action": "",
+                "group_id": "g1",
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+            {
+                "source_path": str(f2),
+                "action": "REVIEW_DUPLICATE",
+                "group_id": "g1",
+                "hamming_distance": 2,
+                "outcome": "",
+                "user_decision": "delete",
+                "file_size_bytes": 64,
+            },
+        ])
+
+        with patch.object(
+            DeleteService,
+            "delete_to_recycle",
+            side_effect=lambda paths: DeleteResult(success_paths=list(paths), failed=[]),
+        ) as recycle_mock, patch("os.unlink") as unlink_mock:
+            result = execute_decisions(str(manifest))
+
+        recycled = sorted(c.args[0][0] for c in recycle_mock.call_args_list)
+        assert recycled == sorted([str(f1), str(f2)])
+        assert recycle_mock.call_count == 2
+        # Only the deleted files matter here; the audit-log rotation also unlinks.
+        unlinked = {str(c.args[0]) for c in unlink_mock.call_args_list}
+        assert not unlinked & {str(f1), str(f2)}
+        assert set(result["success_paths"]) == {str(f1), str(f2)}
+        assert _read_col(manifest, str(f1), "outcome") == "deleted"
+        assert _read_col(manifest, str(f2), "outcome") == "deleted"
 
 
 class TestRemoveFromReviewLockedRows:

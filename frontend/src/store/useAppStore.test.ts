@@ -575,6 +575,31 @@ describe("executeDecisions – success replaces manifest groups and clears runni
   });
 });
 
+describe("executeDecisions – the default request recycles, it never unlinks", () => {
+  it("executeDecisions sends recycle: true by default", async () => {
+    const group = makeGroup(1, ["/photos/e.jpg", "/photos/f.jpg"]);
+    group.items[0].user_decision = "delete";
+    group.items[1].user_decision = "ignore";
+    seedManifest([group]);
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({
+        success_paths: ["/photos/e.jpg"],
+        failed: [],
+        ignored: ["/photos/f.jpg"],
+        missing: [],
+        db_write_failed: [],
+        log_path: null,
+        groups: [],
+      })
+    );
+
+    await useAppStore.getState().executeDecisions();
+
+    expect(fetchBody(fetchSpy, 0)).toMatchObject({ recycle: true });
+  });
+});
+
 describe("executeDecisions – 409 locked_paths captures originalPaths and op=execute", () => {
   it("sets lockConflict with op=execute and originalPaths = all decided paths", async () => {
     // Seed two decided files.
