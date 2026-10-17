@@ -1,0 +1,1 @@
+Skip now dismisses only rows still in review; deleted and already-dismissed rows keep their outcome and lock, so Undo can no longer restore a deleted file (#1016)
