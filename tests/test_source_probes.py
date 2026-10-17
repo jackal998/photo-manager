@@ -544,116 +544,262 @@ def test_probe_no_legacy_move_wording_in_user_facing_translations():
 
 
 # ---------------------------------------------------------------------------
-# Client transport for row-writing endpoints (#1000, A1)
+# Client transport: default-deny for plain writes (#1000, A1)
 # ---------------------------------------------------------------------------
-# A row-writing endpoint (decision, outcome or lock) answers 409 `locked_paths`
-# when a row is locked. The client must read that 409 through the
-# `…OrConflict` transport, or the lock-confirm dialog never opens and the user
-# sees a raw "HTTP 409" string (#1000). This is a tripwire: it catches a new
-# plain `postJson` / `patchJson` call on one of these paths, not every shape a
-# future writer could take.
+# Every top-level declaration in frontend/src/api/client.ts that reaches the
+# plain postJson / patchJson transport, directly or through a local alias, must
+# be on _PLAIN_TRANSPORT_ALLOWLIST. A write that answers 409 locked_paths has to
+# go through the …OrConflict transport, or the lock-confirm dialog never opens
+# and the user sees a raw "HTTP 409" string (#1000). The allow-list holds only
+# the seven writers that touch no decision, outcome or lock row, each pinned to
+# the one path it may use. Boundaries come from the token stream (brace and
+# paren depth on comment- and string-masked source), not from line ranges, so
+# one declaration cannot be absorbed into another.
 
 CLIENT_TS_PATH = REPO / "frontend" / "src" / "api" / "client.ts"
 
-_ROW_WRITE_PATHS = (
-    "/api/decision",
-    "/api/lock",
-    "/api/execute",
-    "/api/remove",
-    "/api/restore",
-    "/api/prune",
-    "/api/action/bulk-decide",
-    "/api/action/apply-best-copy",
-)
-# Exported client functions exempt from the transport rule, each with its reason.
-_TRANSPORT_ALLOWLIST = {
-    "patchLocks": "the lock toggle is ungated (REC-EXC, execute-action.md:143)",
-    "postPruneCandidates": "read-only classifier; the POST only carries the manifest path",
+_PLAIN_TRANSPORT_ALLOWLIST: dict[str, tuple[str, str]] = {
+    "startScan": ("/api/scan", "starts a scan task; writes no decision, outcome or lock"),
+    "cancelScan": ("/api/scan/", "cancels a scan task; writes no decision, outcome or lock"),
+    "patchLocks": ("/api/lock", "the lock toggle is ungated (REC-EXC, execute-action.md:143)"),
+    "patchSettings": ("/api/settings", "writes settings.json; no row is touched"),
+    "postPruneCandidates": (
+        "/api/prune/candidates",
+        "read-only classifier; the POST only carries the manifest path",
+    ),
+    "postSave": (
+        "/api/save",
+        "checkpoints the WAL and copies the file; writes no decision, outcome or lock",
+    ),
+    "postReveal": ("/api/reveal", "opens the file manager; writes nothing"),
 }
-_EXPORT_FN_RE = re.compile(r"^export (?:async )?function (\w+)", re.MULTILINE)
-_PLAIN_TRANSPORT_RE = re.compile(r"\b(?:postJson|patchJson|putJson|deleteJson)\s*[<(]")
+_TRANSPORT_PRIMITIVES = frozenset({"postJson", "patchJson"})
+_TOP_KEYWORD_RE = re.compile(r"\b(export|function|const|let|var|type|interface|import)\b")
+_DECL_NAME_RE = re.compile(
+    r"(?:export\s+)?(?:async\s+)?(?:function\s*\*?\s*|const\s+|let\s+|var\s+"
+    r"|type\s+|interface\s+)(\w+)"
+)
+_ALIAS_RHS_RE = re.compile(r"=\s*(\w+)\s*;?\s*$")
 _PATH_LITERAL_RE = re.compile(r"""["'`](/api/[^"'`$]*)""")
 
 
-def _client_functions(src: str) -> dict[str, str]:
-    """Map each exported function name in *src* to its source region."""
-    matches = list(_EXPORT_FN_RE.finditer(src))
-    regions: dict[str, str] = {}
-    for i, match in enumerate(matches):
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(src)
-        regions[match.group(1)] = src[match.start():end]
-    return regions
+def _mask_source(src: str) -> tuple[str, str]:
+    """Return ``(code, masked)``.
+
+    Both blank comments. ``code`` keeps string contents (path literals are read
+    from it); ``masked`` also blanks string contents, so braces or keywords
+    inside a string cannot move the depth or the boundaries.
+    """
+    code = list(src)
+    masked = list(src)
+    n = len(src)
+    i = 0
+    while i < n:
+        ch = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/":
+            end = src.find("\n", i)
+            end = n if end == -1 else end
+            for k in range(i, end):
+                code[k] = masked[k] = " "
+            i = end
+        elif ch == "/" and nxt == "*":
+            end = src.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            for k in range(i, end):
+                if src[k] != "\n":
+                    code[k] = masked[k] = " "
+            i = end
+        elif ch in "\"'`":
+            end = i + 1
+            while end < n and src[end] != ch:
+                end += 2 if src[end] == "\\" else 1
+            for k in range(i + 1, min(end, n)):
+                if src[k] != "\n":
+                    masked[k] = " "
+            i = end + 1
+        else:
+            i += 1
+    return "".join(code), "".join(masked)
 
 
-def _row_write_path(region: str) -> str | None:
-    """Return the row-writing endpoint a function region calls, if any."""
-    for literal in _PATH_LITERAL_RE.findall(region):
-        path = literal.split("?")[0]
-        if path in _ROW_WRITE_PATHS:
-            return path
-    return None
+def _top_level_regions(masked: str) -> list[tuple[int, int]]:
+    """Split *masked* into top-level declaration spans, by syntax.
 
-
-def _find_plain_transport_row_writes(src: str) -> list[str]:
-    """Return ``name -> path`` findings for row writers on the plain transport."""
-    findings: list[str] = []
-    for name, region in _client_functions(src).items():
-        if name in _TRANSPORT_ALLOWLIST:
+    A span starts at a keyword sitting at brace/paren depth 0. An ``export``
+    keyword starts its declaration, so the ``function`` / ``const`` after it
+    does not start a second one.
+    """
+    depth_at: list[int] = []
+    depth = 0
+    for ch in masked:
+        depth_at.append(depth)
+        if ch in "{([":
+            depth += 1
+        elif ch in "})]":
+            depth -= 1
+    starts: list[int] = []
+    for match in _TOP_KEYWORD_RE.finditer(masked):
+        pos = match.start()
+        if depth_at[pos] != 0:
             continue
-        path = _row_write_path(region)
-        if path is not None and _PLAIN_TRANSPORT_RE.search(region):
-            findings.append(f"{name} writes {path} through a plain postJson/patchJson")
+        if match.group(1) != "export" and re.search(
+            r"\bexport\s+(?:async\s+)?$", masked[max(0, pos - 24):pos]
+        ):
+            continue
+        starts.append(pos)
+    bounds = starts + [len(masked)]
+    return [(bounds[i], bounds[i + 1]) for i in range(len(starts))]
+
+
+def _client_declarations(src: str) -> dict[str, tuple[str, str]]:
+    """Map each top-level declaration name to ``(masked, code)`` for its span."""
+    code, masked = _mask_source(src)
+    declarations: dict[str, tuple[str, str]] = {}
+    for start, end in _top_level_regions(masked):
+        region_masked = masked[start:end]
+        match = _DECL_NAME_RE.match(region_masked)
+        if match is None:
+            continue  # e.g. `export { a, b };`: no body to check
+        declarations[match.group(1)] = (region_masked, code[start:end])
+    return declarations
+
+
+def _transport_names(declarations: dict[str, tuple[str, str]]) -> set[str]:
+    """The primitives plus every local alias of them (``const send = postJson``)."""
+    names = set(_TRANSPORT_PRIMITIVES)
+    changed = True
+    while changed:
+        changed = False
+        for name, (masked, _code) in declarations.items():
+            rhs = _ALIAS_RHS_RE.search(masked.strip())
+            if name not in names and rhs and rhs.group(1) in names:
+                names.add(name)
+                changed = True
+    return names
+
+
+def _find_plain_transport_findings(src: str) -> list[str]:
+    """Return one finding per top-level declaration that is not allowed to reach
+    the plain transport, or whose allow-listed path has drifted.
+    """
+    declarations = _client_declarations(src)
+    transport = _transport_names(declarations)
+    findings: list[str] = []
+    for name, (masked, code) in declarations.items():
+        if name in _TRANSPORT_PRIMITIVES:
+            continue  # the transport itself, not a caller of it
+        reached = sorted(t for t in transport if re.search(rf"\b{t}\b", masked))
+        if not reached:
+            continue
+        path_match = _PATH_LITERAL_RE.search(code)
+        path = path_match.group(1) if path_match else None
+        if name in _PLAIN_TRANSPORT_ALLOWLIST:
+            expected = _PLAIN_TRANSPORT_ALLOWLIST[name][0]
+            if path != expected:
+                findings.append(
+                    f"{name} is allow-listed for {expected!r} but reaches the plain "
+                    f"transport on {path!r}"
+                )
+            continue
+        findings.append(
+            f"{name} reaches the plain postJson/patchJson transport "
+            f"(via {', '.join(reached)}) on {path!r}; use the …OrConflict transport "
+            "or add it to _PLAIN_TRANSPORT_ALLOWLIST with a reason"
+        )
     return findings
 
 
-def test_probe_client_row_writes_use_conflict_transport():
-    """Every client function that writes a decision, outcome or lock must read
-    its 409 through `…OrConflict` (#1000).
+def test_probe_client_plain_transport_is_default_deny():
+    """No client declaration reaches postJson / patchJson unless allow-listed.
+
+    A new writer, a new endpoint, a local alias, or a declaration absorbed into
+    an allow-listed one all fail here (#1000).
     """
     src = CLIENT_TS_PATH.read_text(encoding="utf-8")
-    findings = _find_plain_transport_row_writes(src)
+    findings = _find_plain_transport_findings(src)
     assert not findings, (
-        "A row-writing client function uses the plain transport, so a 409 "
-        "locked_paths becomes a raw 'HTTP 409' error instead of opening the "
-        "lock-confirm dialog. Switch it to postJsonOrConflict / "
-        "patchJsonOrConflict, or add it to _TRANSPORT_ALLOWLIST with a reason "
-        "from the design. Findings: " + "; ".join(findings)
+        "A client declaration reaches the plain transport. A 409 locked_paths on "
+        "a row write would show as a raw 'HTTP 409' error instead of the "
+        "lock-confirm dialog. Findings: " + "; ".join(findings)
     )
 
 
-def test_probe_client_transport_allow_list_names_real_functions():
-    """An allow-list entry must name a function that still exists, so a stale
+def test_probe_client_allow_list_names_live_declarations():
+    """An allow-list entry must name a declaration that still exists, so a stale
     exemption fails loudly instead of silently covering nothing.
     """
-    names = set(_client_functions(CLIENT_TS_PATH.read_text(encoding="utf-8")))
-    stale = sorted(set(_TRANSPORT_ALLOWLIST) - names)
-    assert not stale, f"_TRANSPORT_ALLOWLIST names missing functions: {stale}"
+    names = set(_client_declarations(CLIENT_TS_PATH.read_text(encoding="utf-8")))
+    stale = sorted(set(_PLAIN_TRANSPORT_ALLOWLIST) - names)
+    assert not stale, f"_PLAIN_TRANSPORT_ALLOWLIST names missing declarations: {stale}"
 
 
-def test_probe_transport_catches_plain_row_write():
-    """Must-catch: a row writer on postJson is reported (the #1000 shape)."""
+def test_probe_transport_catches_new_endpoint_on_plain_transport():
+    """Must-catch: a new function on a new endpoint, on the plain transport."""
     fixture = (
-        "export async function badWrite(req: X): Promise<Y> {\n"
-        '  return postJson<Y>("/api/prune", req);\n'
+        "export async function undoKeepBest(req: X): Promise<Y> {\n"
+        '  return patchJson<Y>("/api/action/undo-keep-best", req);\n'
         "}\n"
     )
-    findings = _find_plain_transport_row_writes(fixture)
-    assert findings == ["badWrite writes /api/prune through a plain postJson/patchJson"]
+    findings = _find_plain_transport_findings(fixture)
+    assert len(findings) == 1 and findings[0].startswith("undoKeepBest ")
 
 
-def test_probe_transport_passes_conflict_transport_and_allow_list():
-    """Must-pass: the OrConflict transport, a read-only POST, and an allow-listed
-    lock toggle on the plain transport are all accepted.
+def test_probe_transport_catches_local_alias_of_plain_transport():
+    """Must-catch: a local alias of postJson, reached by an export."""
+    fixture = (
+        "const send = postJson;\n"
+        "export async function sneak(req: X): Promise<Y> {\n"
+        '  return send<Y>("/api/execute", req);\n'
+        "}\n"
+    )
+    names = [f.split(" ")[0] for f in _find_plain_transport_findings(fixture)]
+    assert names == ["send", "sneak"]
+
+
+def test_probe_transport_catches_declaration_after_allow_listed_one():
+    """Must-catch: an arrow export placed after an allow-listed function is its
+    own declaration, so it is not absorbed into the allow-listed region.
     """
     fixture = (
-        "export async function goodWrite(req: X): Promise<Y> {\n"
-        '  return postJsonOrConflict<Y>("/api/prune", req);\n'
+        "export async function patchLocks(req: X): Promise<Y> {\n"
+        '  return patchJson<Y>("/api/lock", req);\n'
         "}\n"
-        "export async function readOnly(req: X): Promise<Y> {\n"
-        '  return postJson<Y>("/api/prune/candidates", req);\n'
+        "export const sneak = (req: X): Promise<Y> => postJson<Y>(\"/api/execute\", req);\n"
+    )
+    findings = _find_plain_transport_findings(fixture)
+    assert len(findings) == 1 and findings[0].startswith("sneak ")
+
+
+def test_probe_transport_catches_allow_listed_path_drift():
+    """Must-catch: an allow-listed writer that moves to another path is reported."""
+    fixture = (
+        "export async function patchLocks(req: X): Promise<Y> {\n"
+        '  return patchJson<Y>("/api/execute", req);\n'
+        "}\n"
+    )
+    findings = _find_plain_transport_findings(fixture)
+    assert len(findings) == 1 and "allow-listed for '/api/lock'" in findings[0]
+
+
+def test_probe_transport_passes_conflict_transport_and_allow_listed_fixture():
+    """Must-pass: the OrConflict transport, a comment or string mentioning
+    postJson, and an allow-listed writer on its declared path are all accepted.
+    """
+    fixture = (
+        "// postJson is only mentioned in this comment\n"
+        "export async function goodWrite(req: X): Promise<Y> {\n"
+        '  const note = "postJson(";\n'
+        '  return postJsonOrConflict<Y>("/api/prune", req);\n'
         "}\n"
         "export async function patchLocks(req: X): Promise<Y> {\n"
         '  return patchJson<Y>("/api/lock", req);\n'
         "}\n"
     )
-    assert _find_plain_transport_row_writes(fixture) == []
+    assert _find_plain_transport_findings(fixture) == []
+
+
+def test_probe_client_plain_transport_must_pass_on_current_tree():
+    """Must-pass on today's tree: the probe is clean on the real client.ts."""
+    src = CLIENT_TS_PATH.read_text(encoding="utf-8")
+    assert _find_plain_transport_findings(src) == []

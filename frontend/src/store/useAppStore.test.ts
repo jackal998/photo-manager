@@ -1739,6 +1739,29 @@ describe("applyPrune – a late 409 locked_paths opens the prune lock gate (#100
     expect(execute.lockConflict).toBeNull();
     expect(execute.prunePending).toBeNull();
   });
+
+  it("on the ask pref, Unlock & Apply after a late 409 re-opens the prompt with the confirmed row and writes nothing until the user confirms", async () => {
+    seedLatePrune("ask");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        conflict409({ code: "locked_paths", locked_paths: ["/p/lock.jpg"] })
+      );
+
+    await useAppStore.getState().applyPrune(["/p/lock.jpg", "/p/plain.jpg"]);
+    await useAppStore.getState().resolvePruneLock("unlock-apply");
+
+    // Only the refused request was sent: the confirmed row waits in the prompt.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const { execute } = useAppStore.getState();
+    expect(execute.lockConflict).toBeNull();
+    expect(execute.prunePending).toBeNull();
+    expect(execute.prunePrompt).toMatchObject({
+      plain: ["/p/plain.jpg"],
+      actioned: [],
+      lockedToPrune: ["/p/lock.jpg"],
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

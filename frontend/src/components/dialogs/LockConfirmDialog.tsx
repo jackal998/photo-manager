@@ -184,8 +184,9 @@ export function LockConfirmDialog() {
 
   function handleCancel() {
     if (op === "prune") {
-      // Cancel does NOT abort the prune (Qt parity) — it holds the locked
-      // singletons and still offers/sweeps the unlocked buckets.
+      // Cancel does NOT abort the prune (Qt parity; pre-request gate only: a
+      // late 409's Cancel writes nothing) — it holds the locked singletons and
+      // still offers/sweeps the unlocked buckets.
       void resolvePruneLock("cancel");
       return;
     }
