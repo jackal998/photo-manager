@@ -319,7 +319,7 @@ export async function postRestore(req: RestoreRequest): Promise<RestoreResult> {
 // POST /api/prune
 
 export async function postPrune(req: PruneRequest): Promise<PruneResult> {
-  return postJson<PruneResult>("/api/prune", req);
+  return postJsonOrConflict<PruneResult>("/api/prune", req);
 }
 
 // POST /api/prune/candidates (#686)

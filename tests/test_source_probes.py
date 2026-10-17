@@ -541,3 +541,119 @@ def test_probe_no_legacy_move_wording_in_user_facing_translations():
         "with a one-line reason. Leaks: "
         + "\n".join(f"  {f}: {k} = {v!r}" for f, k, v in leaks)
     )
+
+
+# ---------------------------------------------------------------------------
+# Client transport for row-writing endpoints (#1000, A1)
+# ---------------------------------------------------------------------------
+# A row-writing endpoint (decision, outcome or lock) answers 409 `locked_paths`
+# when a row is locked. The client must read that 409 through the
+# `…OrConflict` transport, or the lock-confirm dialog never opens and the user
+# sees a raw "HTTP 409" string (#1000). This is a tripwire: it catches a new
+# plain `postJson` / `patchJson` call on one of these paths, not every shape a
+# future writer could take.
+
+CLIENT_TS_PATH = REPO / "frontend" / "src" / "api" / "client.ts"
+
+_ROW_WRITE_PATHS = (
+    "/api/decision",
+    "/api/lock",
+    "/api/execute",
+    "/api/remove",
+    "/api/restore",
+    "/api/prune",
+    "/api/action/bulk-decide",
+    "/api/action/apply-best-copy",
+)
+# Exported client functions exempt from the transport rule, each with its reason.
+_TRANSPORT_ALLOWLIST = {
+    "patchLocks": "the lock toggle is ungated (REC-EXC, execute-action.md:143)",
+    "postPruneCandidates": "read-only classifier; the POST only carries the manifest path",
+}
+_EXPORT_FN_RE = re.compile(r"^export (?:async )?function (\w+)", re.MULTILINE)
+_PLAIN_TRANSPORT_RE = re.compile(r"\b(?:postJson|patchJson|putJson|deleteJson)\s*[<(]")
+_PATH_LITERAL_RE = re.compile(r"""["'`](/api/[^"'`$]*)""")
+
+
+def _client_functions(src: str) -> dict[str, str]:
+    """Map each exported function name in *src* to its source region."""
+    matches = list(_EXPORT_FN_RE.finditer(src))
+    regions: dict[str, str] = {}
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(src)
+        regions[match.group(1)] = src[match.start():end]
+    return regions
+
+
+def _row_write_path(region: str) -> str | None:
+    """Return the row-writing endpoint a function region calls, if any."""
+    for literal in _PATH_LITERAL_RE.findall(region):
+        path = literal.split("?")[0]
+        if path in _ROW_WRITE_PATHS:
+            return path
+    return None
+
+
+def _find_plain_transport_row_writes(src: str) -> list[str]:
+    """Return ``name -> path`` findings for row writers on the plain transport."""
+    findings: list[str] = []
+    for name, region in _client_functions(src).items():
+        if name in _TRANSPORT_ALLOWLIST:
+            continue
+        path = _row_write_path(region)
+        if path is not None and _PLAIN_TRANSPORT_RE.search(region):
+            findings.append(f"{name} writes {path} through a plain postJson/patchJson")
+    return findings
+
+
+def test_probe_client_row_writes_use_conflict_transport():
+    """Every client function that writes a decision, outcome or lock must read
+    its 409 through `…OrConflict` (#1000).
+    """
+    src = CLIENT_TS_PATH.read_text(encoding="utf-8")
+    findings = _find_plain_transport_row_writes(src)
+    assert not findings, (
+        "A row-writing client function uses the plain transport, so a 409 "
+        "locked_paths becomes a raw 'HTTP 409' error instead of opening the "
+        "lock-confirm dialog. Switch it to postJsonOrConflict / "
+        "patchJsonOrConflict, or add it to _TRANSPORT_ALLOWLIST with a reason "
+        "from the design. Findings: " + "; ".join(findings)
+    )
+
+
+def test_probe_client_transport_allow_list_names_real_functions():
+    """An allow-list entry must name a function that still exists, so a stale
+    exemption fails loudly instead of silently covering nothing.
+    """
+    names = set(_client_functions(CLIENT_TS_PATH.read_text(encoding="utf-8")))
+    stale = sorted(set(_TRANSPORT_ALLOWLIST) - names)
+    assert not stale, f"_TRANSPORT_ALLOWLIST names missing functions: {stale}"
+
+
+def test_probe_transport_catches_plain_row_write():
+    """Must-catch: a row writer on postJson is reported (the #1000 shape)."""
+    fixture = (
+        "export async function badWrite(req: X): Promise<Y> {\n"
+        '  return postJson<Y>("/api/prune", req);\n'
+        "}\n"
+    )
+    findings = _find_plain_transport_row_writes(fixture)
+    assert findings == ["badWrite writes /api/prune through a plain postJson/patchJson"]
+
+
+def test_probe_transport_passes_conflict_transport_and_allow_list():
+    """Must-pass: the OrConflict transport, a read-only POST, and an allow-listed
+    lock toggle on the plain transport are all accepted.
+    """
+    fixture = (
+        "export async function goodWrite(req: X): Promise<Y> {\n"
+        '  return postJsonOrConflict<Y>("/api/prune", req);\n'
+        "}\n"
+        "export async function readOnly(req: X): Promise<Y> {\n"
+        '  return postJson<Y>("/api/prune/candidates", req);\n'
+        "}\n"
+        "export async function patchLocks(req: X): Promise<Y> {\n"
+        '  return patchJson<Y>("/api/lock", req);\n'
+        "}\n"
+    )
+    assert _find_plain_transport_row_writes(fixture) == []
