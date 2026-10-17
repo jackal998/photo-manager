@@ -11,7 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from infrastructure.manifest_repository import ManifestRepository
+from core.app_service.lock_gate import apply_gated_writes, verdict_from_flags
+from infrastructure.manifest_repository import DecisionWrite, ManifestRepository
 from infrastructure.settings import load_settings
 from app.viewmodels.main_vm import MainVM
 from core.app_service.review_view import serialize_groups
@@ -144,35 +145,13 @@ def set_decisions(
                 f"Allowed values: {sorted(VALID_DECISIONS)}"
             )
 
-    # Locked-rows gate — RE-READ is_locked from the DB (never trust client
-    # state). Reuses ManifestRepository.load(), the same repository call
-    # action_service.bulk_decide's path_to_rec build is ultimately backed by.
-    repo = ManifestRepository()
-    path_to_rec = {rec.file_path: rec for rec in repo.load(manifest_path)}
-    locked: list[str] = [
-        p for p in decisions if getattr(path_to_rec.get(p), "is_locked", False)
-    ]
-
-    if skip_locked:
-        # Apply to Unlocked Only — narrow the write set IN PLACE so both the
-        # write and the returned count reflect the actually-applied subset.
-        # Locked rows keep their is_locked + user_decision untouched.
-        locked_set = set(locked)
-        decisions = {p: v for p, v in decisions.items() if p not in locked_set}
-    elif locked and not force_locked:
-        # 409 carries the FULL targeted count (before any narrowing) so the
-        # caller can derive the unlocked count without a separate preview.
-        raise ValueError("locked_paths", locked, len(decisions))
-    elif force_locked and locked:
-        # Unlock & Apply All — unlock the locked rows in the same write as
-        # the decision (mirrors Qt's batch_update_decisions_and_lock call).
-        repo.batch_update_decisions_and_lock(
-            manifest_path, decisions, {p: False for p in locked}
-        )
-        return len(decisions)
-
-    repo.batch_update_decisions(manifest_path, decisions)
-    return len(decisions)
+    # The lock gate runs inside one IMMEDIATE transaction: the locked set is
+    # read from the same connection that writes, and the primitive refuses
+    # any unconfirmed locked row (hidden rows included, B-5). No load() here.
+    verdict = verdict_from_flags(force_locked, skip_locked)
+    writes = [DecisionWrite(path=p, decision=v) for p, v in decisions.items()]
+    with ManifestRepository().write_txn(manifest_path) as tx:
+        return len(apply_gated_writes(tx, writes, verdict))
 
 
 def set_locks(manifest_path: str, locks: dict[str, bool]) -> int:
