@@ -173,8 +173,9 @@ WHERE source_path = ?
 """
 
 # #821 — every in-review row, for the open-time skip-directory reconcile.
+# #982 — ``is_locked`` rides along so the reconcile can leave locked rows out.
 _LIVE_ROWS_SQL = """
-SELECT id, source_path FROM migration_manifest WHERE outcome = ''
+SELECT id, source_path, is_locked FROM migration_manifest WHERE outcome = ''
 """
 
 # #821 — the reconcile's own dismissal write. Two deliberate differences
@@ -193,10 +194,13 @@ SELECT id, source_path FROM migration_manifest WHERE outcome = ''
 #     path and 0.013 s keyed by id. It is also more precise: source_path
 #     has no uniqueness constraint, so a path-keyed write would touch every
 #     row sharing that path, not the row the SELECT actually saw.
+#   * ``AND is_locked = 0`` (#982) — the same re-check for the lock. A lock
+#     set after the candidate read is a user's "don't touch this row", and
+#     this write has no user action behind it, so it must lose the race too.
 _RECONCILE_DISMISS_SQL = """
 UPDATE migration_manifest
    SET outcome = 'ignored', executed = 0
- WHERE id = ? AND outcome = ''
+ WHERE id = ? AND outcome = '' AND is_locked = 0
 """
 
 # #909 — the Undo of an immediate Skip. Guarded on ``outcome = 'ignored'``:
@@ -494,10 +498,16 @@ class ManifestRepository:
         rather than raising — the stale rows simply stay live for that open,
         which is exactly the pre-#821 behaviour.
 
+        **A locked row is never dismissed (#982).** A lock means "don't
+        touch this row"; this write has no user action behind it. A locked
+        row under a skip directory keeps ``outcome=''`` and its lock, stays
+        in review, and is counted in the open's log line (locked-left).
+
         Returns:
             The number of rows actually dismissed by this call — 0 on a
             clean manifest, on an already-reconciled one, and when the
-            write could not be performed.
+            write could not be performed. Locked rows left in place are
+            not in this count; they are logged.
         """
         from scanner.walker import has_skip_directory_ancestor
 
@@ -514,10 +524,20 @@ class ManifestRepository:
         # from a folder), and on the author's real 40,774-row manifest
         # the pre-filter saved 71 ms of a once-per-open cost (66 ms vs
         # 137 ms, best of 3) — not worth the dynamic SQL.
-        row_ids = [
-            row_id for row_id, source_path in candidates
+        skipped = [
+            (row_id, bool(is_locked))
+            for row_id, source_path, is_locked in candidates
             if has_skip_directory_ancestor(source_path)
         ]
+        row_ids = [row_id for row_id, is_locked in skipped if not is_locked]
+        locked_left = len(skipped) - len(row_ids)
+        if locked_left:
+            logger.info(
+                "Left {} locked row(s) under a skip directory in review "
+                "(not dismissed) in {}",
+                locked_left,
+                manifest_path,
+            )
         return self._dismiss_skipped_rows(manifest_path, row_ids)
 
     def _dismiss_skipped_rows(

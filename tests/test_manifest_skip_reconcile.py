@@ -362,3 +362,164 @@ class TestSkipDirectoryReconcile:
         )
         assert state[str(other)] == ("ignored", 0)
         assert state[str(keep)] == ("", 0)
+
+    def test_locked_row_under_skip_directory_stays_in_review_and_locked(
+        self, tmp_path
+    ):
+        """#982 — a lock means "don't touch this row". The open-time reconcile
+        is a write with no user action behind it, so it must leave a locked
+        recycle-bin row alone: ``outcome=''``, still locked, still loaded for
+        review. The unlocked recycle-bin row next to it is dismissed as before.
+        """
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        locked_trashed = recycle_dir / "locked.jpg"
+        unlocked_trashed = recycle_dir / "unlocked.jpg"
+        keep = tmp_path / "keep.jpg"
+        for f in (locked_trashed, unlocked_trashed, keep):
+            f.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(
+            db,
+            [
+                (str(locked_trashed), "g1"),
+                (str(unlocked_trashed), "g1"),
+                (str(keep), "g1"),
+            ],
+        )
+        repo = ManifestRepository()
+        repo.ensure_schema(str(db))
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 1 WHERE source_path = ?",
+                (str(locked_trashed),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        loaded = {r.file_path for r in repo.load(str(db))}
+
+        assert str(locked_trashed) in loaded, (
+            "a locked row must stay in the review set after an open"
+        )
+        assert str(unlocked_trashed) not in loaded
+        outcomes = _outcomes(db)
+        assert outcomes[str(locked_trashed)] == "", (
+            "the reconcile dismissed a locked row"
+        )
+        assert outcomes[str(unlocked_trashed)] == "ignored"
+        conn = sqlite3.connect(str(db))
+        try:
+            (is_locked,) = conn.execute(
+                "SELECT is_locked FROM migration_manifest WHERE source_path = ?",
+                (str(locked_trashed),),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert is_locked == 1, "the reconcile cleared a lock"
+
+    def test_reconcile_reports_how_many_locked_rows_it_left(self, tmp_path):
+        """#982 — the open reports the locked rows it left in place.
+
+        The dismissed count is the return value (unchanged, 1 here); the
+        locked-left count surfaces on the existing app-log line for this
+        pass, so the one count a reader needs is printed next to the other.
+        """
+        from loguru import logger
+
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        locked_trashed = recycle_dir / "locked.jpg"
+        unlocked_trashed = recycle_dir / "unlocked.jpg"
+        keep = tmp_path / "keep.jpg"
+        for f in (locked_trashed, unlocked_trashed, keep):
+            f.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(
+            db,
+            [
+                (str(locked_trashed), "g1"),
+                (str(unlocked_trashed), "g1"),
+                (str(keep), "g1"),
+            ],
+        )
+        repo = ManifestRepository()
+        repo.ensure_schema(str(db))
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 1 WHERE source_path = ?",
+                (str(locked_trashed),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        messages: list[str] = []
+        handler_id = logger.add(
+            lambda m: messages.append(m.record["message"]), level="INFO"
+        )
+        try:
+            dismissed = repo.reconcile_skip_directory_rows(str(db))
+        finally:
+            logger.remove(handler_id)
+
+        assert dismissed == 1
+        assert any(
+            "Left 1 locked row(s)" in msg for msg in messages
+        ), f"no locked-left count logged, got: {messages}"
+
+    def test_lock_set_after_the_candidate_read_is_not_dismissed(self, tmp_path):
+        """#982 — the same race as the outcome guard, for the lock.
+
+        The candidates are read (unlocked) on a closed connection; a user
+        may lock one of them before the dismissal write. The write re-checks
+        ``is_locked = 0`` inside the statement, so it leaves that row alone.
+        """
+        recycle_dir = tmp_path / "$RECYCLE.BIN"
+        recycle_dir.mkdir()
+        raced = recycle_dir / "raced.jpg"
+        keep = tmp_path / "keep.jpg"
+        for f in (raced, keep):
+            f.write_bytes(b"")
+
+        db = tmp_path / "m.sqlite"
+        _write_manifest(db, [(str(raced), "g1"), (str(keep), "g1")])
+        repo = ManifestRepository()
+        repo.ensure_schema(str(db))
+        conn = sqlite3.connect(str(db))
+        try:
+            (raced_id,) = conn.execute(
+                "SELECT id FROM migration_manifest WHERE source_path = ?",
+                (str(raced),),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        # …the window: the user locks the row after the SELECT.
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 1 WHERE id = ?",
+                (raced_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        dismissed = repo._dismiss_skipped_rows(str(db), [raced_id])
+
+        assert dismissed == 0
+        conn = sqlite3.connect(str(db))
+        try:
+            state = conn.execute(
+                "SELECT outcome, is_locked FROM migration_manifest WHERE id = ?",
+                (raced_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert state == ("", 1), "a locked row was dismissed by the reconcile"

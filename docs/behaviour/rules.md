@@ -57,6 +57,13 @@ code decides it, and which test or scenario pins it.
 - **Pins:** `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_out_of_root_row_keeps_lock_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_in_root_row_is_ignored_and_unlocked_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_failed_ignore_write_keeps_locked_row_locked`, `tests/test_web_execute_service.py::TestExecuteRecycleLockedRow::test_recycle_success_clears_lock_with_deleted_outcome`
 - **Status:** pinned
 
+### R-LOCK-6 — A manifest open never dismisses a locked row; it stays in review and locked
+
+- **Rule:** Opening a manifest runs the skip-directory reconcile, which dismisses unlocked rows under a skip directory (`outcome='ignored'`) and no others. A locked row under a skip directory keeps `outcome=''` and its lock, stays in the review set, and is not counted as dismissed; the open logs how many locked rows it left in place next to the dismissed count. The dismissal write re-checks `is_locked = 0` inside the statement, so a lock set after the candidate read is also left alone. No user action sits behind this write, so it must never clear a lock or a review state (#982).
+- **Owning code:** `infrastructure/manifest_repository.py::ManifestRepository.reconcile_skip_directory_rows`, `infrastructure/manifest_repository.py::ManifestRepository._dismiss_skipped_rows`
+- **Pins:** `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_locked_row_under_skip_directory_stays_in_review_and_locked`, `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_reconcile_reports_how_many_locked_rows_it_left`, `tests/test_manifest_skip_reconcile.py::TestSkipDirectoryReconcile::test_lock_set_after_the_candidate_read_is_not_dismissed`
+- **Status:** pinned
+
 ## DIALOG
 
 ### R-DIALOG-1 — The Action and Execute dialogs do not close on an outside interaction
