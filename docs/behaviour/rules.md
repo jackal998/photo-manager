@@ -52,9 +52,9 @@ code decides it, and which test or scenario pins it.
 
 ### R-LOCK-5 — Skip now with force_locked unlocks the locked rows and removes them
 
-- **Rule:** Skip now with `force_locked` set accepts only the rows inside the allowed roots; a locked row outside them is not accepted and keeps its lock. Each accepted locked row is unlocked in the same write that sets it outcome `ignored`, so a row whose write fails keeps its lock.
+- **Rule:** Skip now with `force_locked` set accepts only the rows inside the allowed roots and only rows still in review; a locked row outside them is not accepted and keeps its lock, and a locked row already dismissed or deleted is left as it is with its lock (no 409). Each accepted locked row is unlocked in the same write that sets it outcome `ignored`, so a row whose write fails keeps its lock.
 - **Owning code:** `core/app_service/execute_service.py::remove_from_review`, `infrastructure/manifest_repository.py::ManifestRepository.remove_from_review`
-- **Pins:** `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_out_of_root_row_keeps_lock_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_in_root_row_is_ignored_and_unlocked_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_failed_ignore_write_keeps_locked_row_locked`, `tests/test_web_execute_service.py::TestExecuteRecycleLockedRow::test_recycle_success_clears_lock_with_deleted_outcome`
+- **Pins:** `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_out_of_root_row_keeps_lock_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_locked_in_root_row_is_ignored_and_unlocked_under_force`, `tests/test_web_execute_service.py::TestRemoveFromReviewLockedRows::test_failed_ignore_write_keeps_locked_row_locked`, `tests/test_web_execute_service.py::TestRemoveFromReview::test_locked_dismissed_row_keeps_its_lock_under_force`, `tests/test_web_execute_service.py::TestExecuteRecycleLockedRow::test_recycle_success_clears_lock_with_deleted_outcome`
 - **Status:** pinned
 
 ### R-LOCK-6 — A manifest open never dismisses a row of a group that holds a lock
@@ -100,9 +100,9 @@ code decides it, and which test or scenario pins it.
 
 ### R-SKIP-1 — Skip now on unlocked rows sets them ignored at once and its undo restores them
 
-- **Rule:** Skip now on rows that include no locked row sets their outcome to `ignored` in one request with no confirmation dialog, deletes no file, and raises an undo toast that restores them to review.
-- **Owning code:** `core/app_service/execute_service.py::remove_from_review`, `core/app_service/execute_service.py::restore_to_review`, `infrastructure/manifest_repository.py::remove_from_review`, `frontend/src/store/useAppStore.ts::removeFromList`
-- **Pins:** `tests/test_web_execute_service.py::TestRemoveFromReview::test_removes_sets_ignored_outcome`, `tests/test_web_execute_service.py::TestRestoreToReview::test_undoes_a_skip_and_the_rows_come_back_as_they_were`, `qa/web/scenarios/s20_multi_remove_from_list.py`
+- **Rule:** Skip now on rows that include no locked row sets their outcome to `ignored` in one request with no confirmation dialog, deletes no file, and raises an undo toast that restores them to review. Skip now acts only on rows still in review (outcome `''`) at write time: a row already `deleted` or `ignored` is left exactly as it is (same outcome, `executed`, and lock), is not counted in the response, and raises no 409 even when locked. The response counts only the rows actually written.
+- **Owning code:** `core/app_service/execute_service.py::remove_from_review`, `core/app_service/execute_service.py::restore_to_review`, `infrastructure/manifest_repository.py::remove_from_review`, `infrastructure/manifest_repository.py::ManifestRepository.finalize_outcome`, `frontend/src/store/useAppStore.ts::removeFromList`
+- **Pins:** `tests/test_web_execute_service.py::TestRemoveFromReview::test_removes_sets_ignored_outcome`, `tests/test_web_execute_service.py::TestRemoveFromReview::test_deleted_row_is_left_as_it_is`, `tests/test_web_execute_service.py::TestRemoveFromReview::test_mixed_batch_writes_only_the_in_review_row`, `tests/test_web_execute_routes.py::TestPostRemove::test_skip_now_reports_and_writes_only_the_in_review_rows`, `tests/test_web_execute_service.py::TestRestoreToReview::test_undoes_a_skip_and_the_rows_come_back_as_they_were`, `qa/web/scenarios/s20_multi_remove_from_list.py`
 - **Status:** pinned
 
 ## DELETE

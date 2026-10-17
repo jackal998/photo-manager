@@ -172,6 +172,20 @@ UPDATE migration_manifest SET outcome = ?, executed = ?, is_locked = 0
 WHERE source_path = ?
 """
 
+# Skip now (#A2) — the same writes, guarded so only a row still in review
+# (outcome '') is touched. A 'deleted' or 'ignored' row is left exactly as it
+# is: same outcome, executed and lock. The guard sits in the statement itself,
+# so a row finalised between the service's read and this write is not rewritten.
+_FINALIZE_IN_REVIEW_SQL = """
+UPDATE migration_manifest SET outcome = ?, executed = ?
+WHERE source_path = ? AND outcome = ''
+"""
+
+_FINALIZE_IN_REVIEW_CLEAR_LOCK_SQL = """
+UPDATE migration_manifest SET outcome = ?, executed = ?, is_locked = 0
+WHERE source_path = ? AND outcome = ''
+"""
+
 # #821 — every in-review row, for the open-time skip-directory reconcile.
 # #982 — ``is_locked`` and ``group_id`` ride along so the reconcile can leave
 # every group that holds a locked row untouched (the group is the unit).
@@ -924,7 +938,8 @@ class ManifestRepository:
         outcome: str,
         *,
         clear_lock: bool = False,
-    ) -> None:
+        in_review_only: bool = False,
+    ) -> int:
         """Write the post-execute outcome for a batch of rows.
 
         Sets ``outcome`` and the redundant ``executed`` cross-check in one
@@ -936,6 +951,11 @@ class ManifestRepository:
         ``clear_lock=True`` also sets ``is_locked=0`` in that same statement
         (#985): a locked row is unlocked if and only if its outcome is written.
 
+        ``in_review_only=True`` (Skip now, #A2) writes only rows whose outcome
+        is still '' at write time; any other row is left untouched.
+
+        Returns the number of rows the UPDATE changed.
+
         Calls ensure_schema first so old manifests gain the outcome column
         before the UPDATE runs (mirrors load()'s auto-migrate contract).
 
@@ -944,23 +964,34 @@ class ManifestRepository:
         surface failures.
         """
         if not file_paths:
-            return
+            return 0
         # Auto-migrate so old manifests gain the outcome column before the UPDATE.
         self.ensure_schema(manifest_path)
         executed_value = 1 if outcome == "deleted" else 0
         params = [(outcome, executed_value, p) for p in file_paths]
-        sql = _FINALIZE_OUTCOME_CLEAR_LOCK_SQL if clear_lock else _FINALIZE_OUTCOME_SQL
+        if in_review_only:
+            sql = (
+                _FINALIZE_IN_REVIEW_CLEAR_LOCK_SQL if clear_lock
+                else _FINALIZE_IN_REVIEW_SQL
+            )
+        else:
+            sql = _FINALIZE_OUTCOME_CLEAR_LOCK_SQL if clear_lock else _FINALIZE_OUTCOME_SQL
         conn = _connect(manifest_path)
         try:
-            conn.executemany(sql, params)
+            # sqlite3 sums the modified rows of an executemany DML into rowcount.
+            written = conn.executemany(sql, params).rowcount
             conn.commit()
         finally:
             conn.close()
+        return written
 
     def remove_from_review(
         self, manifest_path: str, file_paths: list[str], *, clear_lock: bool = False
-    ) -> None:
-        """Mark rows as dismissed from review (outcome='ignored').
+    ) -> int:
+        """Mark rows still in review as dismissed (outcome='ignored').
+
+        Only rows whose outcome is '' are written (#A2); a deleted or already
+        dismissed row is left as it is. Returns the number of rows written.
 
         Ignored rows are excluded from future load() calls so they do not
         reappear when the manifest is reopened.  VACUUM is intentionally omitted:
@@ -968,7 +999,10 @@ class ManifestRepository:
         reclaim and a VACUUM call would be a no-op at the cost of a full DB rewrite.
         ``clear_lock=True`` unlocks the rows in the same write (#985).
         """
-        self.finalize_outcome(manifest_path, file_paths, "ignored", clear_lock=clear_lock)
+        return self.finalize_outcome(
+            manifest_path, file_paths, "ignored",
+            clear_lock=clear_lock, in_review_only=True,
+        )
 
     def restore_to_review(
         self,
