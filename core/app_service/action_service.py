@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from core.app_service.action_resolve import resolve_matched_paths
+from core.app_service.lock_gate import apply_gated_writes, verdict_from_flags
 from core.app_service.path_safety import is_under_roots
 from core.app_service.review_view import serialize_groups
 from core.services.auto_select import (
@@ -27,7 +28,7 @@ from core.services.auto_select import (
     non_keepers_for_aggressive_delete,
     top_score_path_per_group,
 )
-from infrastructure.manifest_repository import ManifestRepository
+from infrastructure.manifest_repository import DecisionWrite, ManifestRepository
 from infrastructure.settings import load_settings
 
 
@@ -141,12 +142,9 @@ def bulk_decide(
     _require_manifest(manifest_path)
 
     # Mutually-exclusive lock verdicts: "apply to all (unlock)" and "apply to
-    # unlocked only" are contradictory write intents. The 3-button FE can never
-    # send both, but POST /api/action/bulk-decide is a public HTTP boundary —
-    # reject an incoherent body here (route → 422), per the validate-at-system-
-    # boundaries rule.
-    if force_locked and skip_locked:
-        raise ValueError("force_locked and skip_locked are mutually exclusive")
+    # unlocked only" are contradictory write intents. POST /api/action/bulk-decide
+    # is a public HTTP boundary, so an incoherent body is refused here (route → 422).
+    verdict = verdict_from_flags(force_locked, skip_locked)
 
     vm = _load_vm(manifest_path)
     groups_objs = vm.groups
@@ -191,52 +189,19 @@ def bulk_decide(
             "groups": serialize_groups(groups_objs),
         }
 
-    # Locked-rows handling (decision actions only; real writes only — preview
-    # returned above). Reads is_locked from the already-loaded record objects,
-    # the same source-of-truth discipline as execute_service. Three modes mirror
-    # the Qt LockedRowsConfirmDialog verdicts:
-    #   force_locked → mutate locked rows too (Unlock & Apply All)
-    #   skip_locked  → apply to the unlocked subset only (Apply to Unlocked Only)
-    #   neither      → refuse with 409 if any matched row is locked
-    locked: list[str] = []
-    if kind == "decision":
-        path_to_rec: dict[str, Any] = {}
-        for group in groups_objs:
-            for rec in getattr(group, "items", []):
-                path_to_rec[rec.file_path] = rec
-        locked = [
-            p for p in safe if getattr(path_to_rec.get(p), "is_locked", False)
-        ]
-        if skip_locked:
-            # Narrow `safe` to the unlocked subset IN PLACE so the write set AND
-            # the returned matched/affected_paths both report the actually-
-            # applied subset (mirrors Qt set_count=len(unlocked_items)). Locked
-            # rows keep their is_locked + user_decision untouched — clear
-            # `locked` so the force-unlock apply below can never touch them.
-            locked_set = set(locked)
-            safe = [p for p in safe if p not in locked_set]
-            locked = []
-        elif locked and not force_locked:
-            # 409 carries the FULL matched count (len(safe) BEFORE any narrowing)
-            # so the FE derives unlocked = matched_total - len(locked) without a
-            # separate preview.
-            raise ValueError("locked_paths", locked, len(safe))
-
-    # Apply.
+    # Apply. Lock verbs stay unguarded (BE-10). A decision write runs the lock
+    # gate inside one IMMEDIATE transaction: the locked set is read on the
+    # write's own connection, so it covers hidden rows and a lock set after the
+    # VM was loaded. The three modes match the Qt verdicts: force_locked unlocks
+    # the confirmed rows, skip_locked narrows to the unlocked subset, and
+    # neither refuses with 409 (the primitive counts matched_total = len(safe)).
     repo = ManifestRepository()
     if kind in ("lock", "unlock"):
         repo.batch_update_lock_state(manifest_path, {p: lock_value for p in safe})
-    elif locked:
-        # force_locked path — Unlock & Apply All: the Qt verdict UNLOCKS the
-        # locked rows in the same write as the decision (#733). Execute's force
-        # path clears each lock in the same write as its outcome (#985). One commit.
-        repo.batch_update_decisions_and_lock(
-            manifest_path,
-            {p: decision_value for p in safe},
-            {p: False for p in locked},
-        )
     else:
-        repo.batch_update_decisions(manifest_path, {p: decision_value for p in safe})
+        writes = [DecisionWrite(path=p, decision=decision_value) for p in safe]
+        with repo.write_txn(manifest_path) as tx:
+            safe = apply_gated_writes(tx, writes, verdict)
 
     # Reload for the fresh post-mutation serialisation.
     vm2 = _load_vm(manifest_path)
@@ -309,9 +274,7 @@ def apply_best_copy(
             touch locked rows and neither override is set.
     """
     _require_manifest(manifest_path)
-
-    if force_locked and skip_locked:
-        raise ValueError("force_locked and skip_locked are mutually exclusive")
+    verdict = verdict_from_flags(force_locked, skip_locked)
 
     vm = _load_vm(manifest_path)
     group = next(
@@ -355,38 +318,23 @@ def apply_best_copy(
     non_keepers = non_keepers_for_aggressive_delete(scored, keepers)
     decisions, lock_states = build_auto_select_writes(keepers, non_keepers)
 
-    path_to_rec = {rec.file_path: rec for rec in items}
-    locked: list[str] = [
-        p for p in decisions if getattr(path_to_rec.get(p), "is_locked", False)
+    # The keeper is written with lock_after=True and every other row with None:
+    # a locked non-keeper is unlocked only when the user confirmed it (FORCE),
+    # and a locked keeper is refused like any other locked row in the write set.
+    writes = [
+        DecisionWrite(path=p, decision=v, lock_after=lock_states.get(p))
+        for p, v in decisions.items()
     ]
-
-    if skip_locked:
-        locked_set = set(locked)
-        decisions = {p: v for p, v in decisions.items() if p not in locked_set}
-        lock_states = {p: v for p, v in lock_states.items() if p not in locked_set}
-    elif locked and not force_locked:
-        # 409 carries the FULL targeted write-set size (before narrowing) —
-        # same contract as set_decisions / bulk_decide's 409.
-        raise ValueError("locked_paths", locked, len(decisions))
-    elif force_locked and locked:
-        # Force-unlock every previously-locked row that would otherwise
-        # refuse the write. A locked KEEPER already has lock_states[p]=True
-        # from build_auto_select_writes — setdefault leaves that alone, so
-        # it stays locked. A locked NON-keeper has no entry yet — it gets
-        # explicitly unlocked so the 'delete' decision write isn't blocked
-        # (mirrors set_decisions' Unlock & Apply All).
-        for p in locked:
-            lock_states.setdefault(p, False)
-
     repo = ManifestRepository()
-    repo.batch_update_decisions_and_lock(manifest_path, decisions, lock_states)
+    with repo.write_txn(manifest_path) as tx:
+        written = apply_gated_writes(tx, writes, verdict)
 
     vm2 = _load_vm(manifest_path)
     fresh_groups = serialize_groups(vm2.groups)
 
     return {
-        "matched": len(decisions),
-        "affected_paths": sorted(decisions),
+        "matched": len(written),
+        "affected_paths": sorted(written),
         "action_applied": "apply_best_copy",
         "groups": fresh_groups,
     }

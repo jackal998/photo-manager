@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from app.web.models import DecisionUpdate, LockUpdate
+from core.app_service.lock_gate import LockFlagsConflictError
 from core.app_service.review_service import load_review, set_decisions, set_locks
 
 router = APIRouter()
@@ -117,6 +118,9 @@ def patch_decision(body: DecisionUpdate) -> dict:
             force_locked=body.force_locked,
             skip_locked=body.skip_locked,
         )
+    except LockFlagsConflictError as exc:
+        # Both lock flags: refused for every verb (B-6), 422 as the action routes.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         args = exc.args
         if args and args[0] == "locked_paths":

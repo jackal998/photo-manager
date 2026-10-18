@@ -1,0 +1,1 @@
+Refuse decision writes on locked rows inside one transaction, so a lock set mid-write is honoured and a conflicting force/skip request gets 422.
