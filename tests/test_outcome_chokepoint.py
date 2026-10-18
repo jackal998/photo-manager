@@ -306,13 +306,24 @@ class TestStalePlanCannotWriteLockedRow:
              "user_decision": "ignore"},
             {"source_path": str(keeper), "group_id": "g1", "outcome": ""},
         ])
-        _lock_before_write(monkeypatch, manifest, str(ignored_row))
+        # The lock is committed on a SEPARATE connection, after the gate and
+        # before the skip batch's transaction. Locking on the batch's own
+        # connection would be rolled back with the refusal, which proves nothing.
+        real_transition = getattr(execute_module, "_transition_outcome", None)
+        if real_transition is not None:
+            def _lock_then_transition(*args, **kwargs):
+                _set_locked(manifest, str(ignored_row))
+                return real_transition(*args, **kwargs)
+
+            monkeypatch.setattr(
+                execute_module, "_transition_outcome", _lock_then_transition
+            )
 
         result = execute_decisions(str(manifest), recycle=False)
 
         assert str(ignored_row) not in result["ignored"]
         assert str(ignored_row) in [p for p, _reason in result["failed"]]
-        assert _read_row(manifest, str(ignored_row))[:2] == ("", 0)  # the write never ran
+        assert _read_row(manifest, str(ignored_row))[:3] == ("", 0, 1)
 
 
 class TestGuardedOutcomeSql:
