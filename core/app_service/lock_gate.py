@@ -116,3 +116,55 @@ def apply_gated_writes(
     kept = [w for w in writes if w.path in keep]
     tx.write_decisions(kept, confirmed=confirmed, matched_total=len(scope))
     return [w.path for w in kept]
+
+
+def _confirmed_for(
+    tx: ManifestTxn, paths: list[str], verdict: LockVerdict, outcome: str
+) -> frozenset[str]:
+    """The locked paths the verdict confirms, read inside the open transaction."""
+    _, confirmed = plan_locked_write(
+        paths,
+        tx.locked_paths(outcome=outcome),
+        verdict,
+        skip_allowed=False,
+    )
+    return confirmed
+
+
+def refuse_gated_outcome(
+    tx: ManifestTxn, paths: Iterable[str], verdict: LockVerdict, *, outcome: str
+) -> None:
+    """Refuse locked rows in ``outcome`` that the verdict does not confirm (A4).
+
+    Used by Execute's up-front gate, before any file is touched. The primitive
+    reads the locks itself, so a stale plan cannot switch the refusal off.
+    """
+    scope = list(paths)
+    confirmed = _confirmed_for(tx, scope, verdict, outcome)
+    tx.refuse_unconfirmed(scope, confirmed, outcome=outcome)
+
+
+def apply_gated_transition(
+    tx: ManifestTxn,
+    paths: Iterable[str],
+    verdict: LockVerdict,
+    *,
+    from_outcome: str,
+    to_outcome: str,
+    lock_after: bool = False,
+) -> int:
+    """Plan inside the open transaction, then transition. Returns rows changed.
+
+    Outcome writes have no SKIP here: a verb that skips locked rows narrows
+    its scope before calling this. ``transition`` refuses what the verdict
+    does not confirm (A4, design 2.2).
+    """
+    scope = list(paths)
+    confirmed = _confirmed_for(tx, scope, verdict, from_outcome)
+    return tx.transition(
+        scope,
+        from_outcome=from_outcome,
+        to_outcome=to_outcome,
+        confirmed=confirmed,
+        lock_after=lock_after,
+    )
