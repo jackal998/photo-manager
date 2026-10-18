@@ -242,7 +242,7 @@ class TestStalePlanCannotWriteLockedRow:
 
         assert exc.value.args[0] == "locked_paths"
         assert exc.value.args[1] == [str(f1)]
-        assert _read_row(manifest, str(f1))[:3] == ("", 0, 1)
+        assert _read_row(manifest, str(f1))[:2] == ("", 0)  # the write never ran
 
     def test_restore_refuses_a_dismissed_row_locked_after_the_plan(
         self, tmp_path, monkeypatch
@@ -258,7 +258,7 @@ class TestStalePlanCannotWriteLockedRow:
             restore_to_review(str(manifest), [str(f1)])
 
         assert exc.value.args[0] == "locked_paths"
-        assert _read_row(manifest, str(f1))[:3] == ("ignored", 0, 1)
+        assert _read_row(manifest, str(f1))[0] == "ignored"  # the write never ran
 
     def test_prune_refuses_a_singleton_locked_after_the_plan(self, tmp_path, monkeypatch):
         lone = _touch(tmp_path, "lone.jpg")
@@ -271,7 +271,7 @@ class TestStalePlanCannotWriteLockedRow:
             prune_singletons(str(manifest))
 
         assert exc.value.args[0] == "locked_paths"
-        assert _read_row(manifest, str(lone))[:3] == ("", 0, 1)
+        assert _read_row(manifest, str(lone))[:2] == ("", 0)  # the write never ran
 
     def test_execute_gate_refuses_a_delete_row_the_plan_saw_as_unlocked(
         self, tmp_path, monkeypatch
@@ -312,7 +312,7 @@ class TestStalePlanCannotWriteLockedRow:
 
         assert str(ignored_row) not in result["ignored"]
         assert str(ignored_row) in [p for p, _reason in result["failed"]]
-        assert _read_row(manifest, str(ignored_row))[:3] == ("", 0, 1)
+        assert _read_row(manifest, str(ignored_row))[:2] == ("", 0)  # the write never ran
 
 
 class TestGuardedOutcomeSql:

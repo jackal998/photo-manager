@@ -22,7 +22,7 @@ Save flow:
   Writes rec.user_decision for every record back to the manifest. Lock
   state is written by ``batch_update_lock_state`` separately — locking is
   a UI affordance, not a per-decision side-effect.
-  Outcome is written by ``finalize_outcome`` after execute operations run.
+  Outcome is written by ``ManifestTxn.transition`` / ``record_deleted`` after execute operations run.
 """
 
 from __future__ import annotations
@@ -176,6 +176,27 @@ UPDATE migration_manifest
                         ELSE is_locked END
  WHERE source_path = :path
    AND (is_locked = 0 OR :confirmed = 1)
+"""
+
+# A4 — an outcome transition (Skip now, restore, prune, Execute's skip batch).
+# The outcome condition and the lock condition sit in the statement itself: a
+# row that moved on, or that got locked after the plan and is not confirmed,
+# is left exactly as it is (design 2.3).
+_TRANSITION_SQL = """
+UPDATE migration_manifest
+   SET outcome = :to_outcome,
+       executed = :executed,
+       is_locked = :lock_after
+ WHERE source_path = :path
+   AND outcome = :from_outcome
+   AND (is_locked = 0 OR :confirmed = 1)
+"""
+
+# A4 — the per-file Execute write after a successful delete. It records a fact
+# (the file is already gone), so it carries no guard (design 2.3).
+_RECORD_DELETED_SQL = """
+UPDATE migration_manifest SET outcome = 'deleted', executed = 1, is_locked = 0
+ WHERE source_path = ?
 """
 
 _FINALIZE_OUTCOME_SQL = """
@@ -578,6 +599,48 @@ class ManifestTxn:
             for w in batch
         ]
         return self._conn.executemany(_WRITE_DECISION_SQL, params).rowcount
+
+    def transition(
+        self,
+        paths: Iterable[str],
+        *,
+        from_outcome: str,
+        to_outcome: str,
+        confirmed: Collection[str],
+        lock_after: bool = False,
+    ) -> int:
+        """Move rows from ``from_outcome`` to ``to_outcome``. Returns rows changed.
+
+        Refuses first: a locked row in ``from_outcome`` that is not confirmed
+        raises ``LockedRowsError``, and the transaction rolls back (BE-7: only
+        locks in ``from_outcome`` count). Then the guarded UPDATE runs, one
+        statement per row, with ``executed`` derived from the target outcome.
+        """
+        batch = list(paths)
+        confirmed_set = frozenset(confirmed)
+        self.refuse_unconfirmed(batch, confirmed_set, outcome=from_outcome)
+        if not batch:
+            return 0
+        executed = int(to_outcome == "deleted")
+        params = [
+            {
+                "to_outcome": to_outcome,
+                "executed": executed,
+                "lock_after": int(lock_after),
+                "from_outcome": from_outcome,
+                "confirmed": int(path in confirmed_set),
+                "path": path,
+            }
+            for path in batch
+        ]
+        return self._conn.executemany(_TRANSITION_SQL, params).rowcount
+
+    def record_deleted(self, path: str) -> None:
+        """Record that Execute deleted ``path``: outcome 'deleted', lock cleared.
+
+        Called after the file is gone, so it is a fact, not a guarded write.
+        """
+        self._conn.execute(_RECORD_DELETED_SQL, (path,))
 
 
 class ManifestRepository:
