@@ -200,31 +200,6 @@ UPDATE migration_manifest SET outcome = 'deleted', executed = 1, is_locked = 0
  WHERE source_path = ?
 """
 
-_FINALIZE_OUTCOME_SQL = """
-UPDATE migration_manifest SET outcome = ?, executed = ? WHERE source_path = ?
-"""
-
-# #985 — the same write, also clearing the lock. Used by execute so a locked
-# row loses its lock in the very statement that writes its outcome.
-_FINALIZE_OUTCOME_CLEAR_LOCK_SQL = """
-UPDATE migration_manifest SET outcome = ?, executed = ?, is_locked = 0
-WHERE source_path = ?
-"""
-
-# Skip now (#A2) — the same writes, guarded so only a row still in review
-# (outcome '') is touched. A 'deleted' or 'ignored' row is left exactly as it
-# is: same outcome, executed and lock. The guard sits in the statement itself,
-# so a row finalised between the service's read and this write is not rewritten.
-_FINALIZE_IN_REVIEW_SQL = """
-UPDATE migration_manifest SET outcome = ?, executed = ?
-WHERE source_path = ? AND outcome = ''
-"""
-
-_FINALIZE_IN_REVIEW_CLEAR_LOCK_SQL = """
-UPDATE migration_manifest SET outcome = ?, executed = ?, is_locked = 0
-WHERE source_path = ? AND outcome = ''
-"""
-
 # #821 — every in-review row, for the open-time skip-directory reconcile.
 # #982 — ``is_locked`` and ``group_id`` ride along so the reconcile can leave
 # every group that holds a locked row untouched (the group is the unit).
@@ -234,15 +209,13 @@ SELECT id, source_path, is_locked, group_id FROM migration_manifest
 """
 
 # #821 — the reconcile's own dismissal write. Two deliberate differences
-# from ``_FINALIZE_OUTCOME_SQL``:
+# from the unguarded outcome writes it was modelled on (deleted in A5):
 #
 #   * ``AND outcome = ''`` — the candidate rows are read on an earlier,
 #     already-closed connection, so between the SELECT and this UPDATE an
 #     execute batch may have finalised one of them as 'deleted'. The guard
 #     re-checks the SELECT's own predicate inside the writing statement, so
 #     this housekeeping write LOSES that race instead of winning it.
-#     ``finalize_outcome`` keeps its unguarded semantics for its own
-#     callers, which legitimately overwrite state they just read.
 #   * keyed on ``id`` (INTEGER PRIMARY KEY, i.e. rowid) rather than
 #     ``source_path``, which carries no index — measured on the author's
 #     40,774-row manifest, the same 3,952-row batch takes 36.0 s keyed by
@@ -264,15 +237,6 @@ UPDATE migration_manifest
           AND locked_peer.is_locked = 1
           AND locked_peer.outcome = ''
    )
-"""
-
-# #909 — the Undo of an immediate Skip. Guarded on ``outcome = 'ignored'``:
-# only a dismissal is reversible. A 'deleted' row's file is in the Recycle
-# Bin, so returning it to review would offer a delete of a file that is gone.
-_RESTORE_TO_REVIEW_SQL = """
-UPDATE migration_manifest
-   SET outcome = '', executed = 0
- WHERE source_path = ? AND outcome = 'ignored'
 """
 
 
@@ -729,7 +693,7 @@ class ManifestRepository:
         than frozen into a one-off migration, so a prefix added later is
         applied to manifests that were opened before it existed.
 
-        **Fail-soft, unlike ``finalize_outcome``.** This is housekeeping the
+        **Fail-soft.** This is housekeeping the
         user did not ask for, running inside someone else's ``load()``; a
         read-only manifest (or any other write failure) must not turn an
         openable manifest into an unopenable one. The write is delegated to
@@ -811,8 +775,8 @@ class ManifestRepository:
             and 0 is returned. A read-only manifest still opens.
 
         ``executed`` is written as 0 alongside, matching
-        ``finalize_outcome``'s ``ignored`` mapping so the redundant
-        cross-check stays coherent. (Measured on the author's live
+        the ``ignored`` mapping that ``ManifestTxn.transition`` uses, so the
+        redundant cross-check stays coherent. (Measured on the author's live
         manifest: 0 rows carry ``executed=1`` with ``outcome=''``, so no
         legacy pre-#584 state is lost by writing it.)
 
@@ -893,9 +857,9 @@ class ManifestRepository:
         # steady state after the first open. Do NOT add caching: a cache
         # would have to be invalidated by every writer of `outcome`,
         # including the execute routes in another thread. It stays out of
-        # ensure_schema(), which finalize_outcome
-        # calls per execute batch (and per deleted FILE in
-        # execute_service.py), where a full-table pass would be per-row I/O.
+        # ensure_schema(), which the execute write path calls per batch (and
+        # per deleted FILE in execute_service.py), where a full-table pass
+        # would be per-row I/O.
         # Fail-soft: a write failure logs a WARNING and leaves the rows.
         self.reconcile_skip_directory_rows(manifest_path)
         conn = _connect(manifest_path)
@@ -1072,111 +1036,3 @@ class ManifestRepository:
             conn.close()
         logger.info("Rescored {} rows in {}", len(updates), manifest_path)
         return len(updates)
-
-    def finalize_outcome(
-        self,
-        manifest_path: str,
-        file_paths: list[str],
-        outcome: str,
-        *,
-        clear_lock: bool = False,
-        in_review_only: bool = False,
-    ) -> int:
-        """Write the post-execute outcome for a batch of rows.
-
-        Sets ``outcome`` and the redundant ``executed`` cross-check in one
-        committed UPDATE per path.  The mapping is:
-          'deleted'  → outcome='deleted', executed=1
-          'ignored'  → outcome='ignored', executed=0
-          (any other value is written as-is with executed=0)
-
-        ``clear_lock=True`` also sets ``is_locked=0`` in that same statement
-        (#985): a locked row is unlocked if and only if its outcome is written.
-
-        ``in_review_only=True`` (Skip now, #A2) writes only rows whose outcome
-        is still '' at write time; any other row is left untouched.
-
-        Returns the number of rows the UPDATE changed.
-
-        Calls ensure_schema first so old manifests gain the outcome column
-        before the UPDATE runs (mirrors load()'s auto-migrate contract).
-
-        Fail-loud: exceptions from the UPDATE/commit propagate to the caller.
-        Do NOT wrap in a swallowing try/except — the caller decides how to
-        surface failures.
-        """
-        if not file_paths:
-            return 0
-        # Auto-migrate so old manifests gain the outcome column before the UPDATE.
-        self.ensure_schema(manifest_path)
-        executed_value = 1 if outcome == "deleted" else 0
-        params = [(outcome, executed_value, p) for p in file_paths]
-        if in_review_only:
-            sql = (
-                _FINALIZE_IN_REVIEW_CLEAR_LOCK_SQL if clear_lock
-                else _FINALIZE_IN_REVIEW_SQL
-            )
-        else:
-            sql = _FINALIZE_OUTCOME_CLEAR_LOCK_SQL if clear_lock else _FINALIZE_OUTCOME_SQL
-        conn = _connect(manifest_path)
-        try:
-            # sqlite3 sums the modified rows of an executemany DML into rowcount.
-            written = conn.executemany(sql, params).rowcount
-            conn.commit()
-        finally:
-            conn.close()
-        return written
-
-    def remove_from_review(
-        self, manifest_path: str, file_paths: list[str], *, clear_lock: bool = False
-    ) -> int:
-        """Mark rows still in review as dismissed (outcome='ignored').
-
-        Only rows whose outcome is '' are written (#A2); a deleted or already
-        dismissed row is left as it is. Returns the number of rows written.
-
-        Ignored rows are excluded from future load() calls so they do not
-        reappear when the manifest is reopened.  VACUUM is intentionally omitted:
-        rows are marked (UPDATE), not deleted, so SQLite has no freed pages to
-        reclaim and a VACUUM call would be a no-op at the cost of a full DB rewrite.
-        ``clear_lock=True`` unlocks the rows in the same write (#985).
-        """
-        return self.finalize_outcome(
-            manifest_path, file_paths, "ignored",
-            clear_lock=clear_lock, in_review_only=True,
-        )
-
-    def restore_to_review(
-        self,
-        manifest_path: str,
-        file_paths: list[str],
-        unlock_paths: list[str] | tuple[str, ...] = (),
-    ) -> int:
-        """Return dismissed rows to review (outcome 'ignored' → '') — #909.
-
-        The inverse of :meth:`remove_from_review`, which is what makes an
-        immediate Skip undoable: that write touches only ``outcome`` (and the
-        redundant ``executed``, already 0 for 'ignored'), so resetting both
-        restores the row exactly. Rows in any other state — still in review,
-        or 'deleted' — are left alone. Returns the number of rows changed.
-
-        ``unlock_paths`` (#981) are cleared in the SAME transaction, so a
-        forced restore of a locked row never lands half-done: either the row
-        is back in review and unlocked, or nothing changed.
-        """
-        if not file_paths:
-            return 0
-        self.ensure_schema(manifest_path)
-        conn = _connect(manifest_path)
-        try:
-            if unlock_paths:
-                conn.executemany(
-                    _UPDATE_LOCK_SQL, [(0, p) for p in unlock_paths]
-                )
-            cursor = conn.executemany(
-                _RESTORE_TO_REVIEW_SQL, [(p,) for p in file_paths]
-            )
-            conn.commit()
-            return cursor.rowcount
-        finally:
-            conn.close()

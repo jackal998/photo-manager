@@ -104,10 +104,7 @@ class TestBE15FileDeletedButOutcomeWriteFails:
         def _disk_full(*_args, **_kwargs):
             raise OSError("disk full")
 
-        # The per-file outcome write: finalize_outcome on master, record_deleted
-        # after A4. Both are patched so the pin does not depend on which one runs.
-        monkeypatch.setattr(ManifestRepository, "finalize_outcome", _disk_full, raising=False)
-
+        # The per-file outcome write is ManifestTxn.record_deleted (A4).
         monkeypatch.setattr(ManifestTxn, "record_deleted", _disk_full, raising=False)
 
         result = execute_decisions(str(manifest), recycle=False)
@@ -219,9 +216,6 @@ def _lock_before_write(monkeypatch, manifest: Path, path: str) -> None:
 
 
 _WRITE_METHODS = (
-    (ManifestRepository, "remove_from_review"),
-    (ManifestRepository, "restore_to_review"),
-    (ManifestRepository, "finalize_outcome"),
     (ManifestTxn, "transition"),
 )
 
