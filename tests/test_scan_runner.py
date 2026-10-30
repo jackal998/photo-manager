@@ -319,7 +319,7 @@ class TestAutoSelectPipeline:
         ONCE and assert it holds both facts at once: every scanned row
         AND the keeper's lock/decision. Before #651 these were two
         separate writes (write_manifest, then a standalone
-        apply_auto_select_decisions call) — a crash between them could
+        post-write auto-select call, removed in A5) — a crash between them could
         leave a manifest with all rows but no keeper lock. One coherent
         read proves that window is gone.
         """

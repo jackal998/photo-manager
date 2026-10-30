@@ -149,7 +149,7 @@ export function ContextMenu({
   function handleSetRemove() {
     // The result-tree Skip item FINALIZES outcome='ignored' — the rows
     // leave the review tree immediately, no Execute step — matching the desktop
-    // result-tree "Remove from List" (remove_from_review → finalize_outcome).
+    // result-tree "Remove from List" (remove_from_review → ManifestTxn.transition).
     // This closes the #694 parity gap (the web previously only STAGED
     // user_decision='ignore' here). removeFromList does the rest the desktop
     // does: on a 409 locked-paths conflict it feeds the LockConfirmDialog (the
