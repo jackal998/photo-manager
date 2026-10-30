@@ -8,6 +8,13 @@ from pathlib import Path
 
 from scanner.dedup import ManifestRow
 
+# Owned here since A5: the only user is the fresh temp DB write in
+# write_manifest, where nothing can be locked yet. Every other decision write
+# goes through ManifestTxn.write_decisions (infrastructure/manifest_repository.py).
+_UPDATE_DECISION_SQL = """
+UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
+"""
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS migration_manifest (
     id               INTEGER PRIMARY KEY,
@@ -163,7 +170,6 @@ def write_manifest(
         if keepers is not None:
             from core.services.auto_select import build_auto_select_writes
             from infrastructure.manifest_repository import (
-                _UPDATE_DECISION_SQL,
                 _UPDATE_LOCK_SQL,
                 migrate_manifest_schema,
             )

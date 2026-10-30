@@ -158,10 +158,6 @@ _POST_DROP_COLUMNS = (
     "subsec_time_original", "offset_time_original",
 )
 
-_UPDATE_DECISION_SQL = """
-UPDATE migration_manifest SET user_decision = ? WHERE source_path = ?
-"""
-
 _UPDATE_LOCK_SQL = """
 UPDATE migration_manifest SET is_locked = ? WHERE source_path = ?
 """

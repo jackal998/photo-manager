@@ -1067,11 +1067,6 @@ def _production_modules() -> dict[str, str]:
     return modules
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="A5: _UPDATE_DECISION_SQL is still defined in manifest_repository; "
-    "the constant-move commit makes this pass and removes the marker",
-)
 def test_probe_write_paths_are_guarded_or_allow_listed():
     """UPDATE migration_manifest of user_decision / outcome / is_locked, and any
     reference to _UPDATE_DECISION_SQL or _UPDATE_LOCK_SQL, is allowed only at an
