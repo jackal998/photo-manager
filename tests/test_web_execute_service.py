@@ -25,7 +25,7 @@ from core.app_service.execute_service import (
 from core.app_service.review_service import load_review
 from core.services.interfaces import DeleteResult
 from infrastructure.delete_service import DeleteService
-from infrastructure.manifest_repository import ManifestRepository
+from infrastructure.manifest_repository import ManifestRepository, ManifestTxn
 from scanner.manifest import _DDL as _MANIFEST_DDL
 
 
@@ -596,8 +596,8 @@ class TestLockedRowUnlockOnlyWhenApplied:
         ])
 
         with patch.object(
-            ManifestRepository,
-            "finalize_outcome",
+            ManifestTxn,
+            "transition",
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
             result = execute_decisions(str(manifest), recycle=False, force_locked=True)
@@ -1246,7 +1246,7 @@ class TestPruneSingletonsLockGate:
     def test_failed_write_keeps_lock(self, tmp_path):
         manifest, f1, _ = self._two_singletons(tmp_path, lock_f1=True, lock_f3=False)
         with patch.object(
-            ManifestRepository, "finalize_outcome", side_effect=OSError("disk")
+            ManifestTxn, "transition", side_effect=OSError("disk")
         ):
             with pytest.raises(OSError):
                 prune_singletons(str(manifest), paths=[str(f1)], force_locked=True)
@@ -1755,8 +1755,8 @@ class TestRemoveFromReviewLockedRows:
         ])
 
         with patch.object(
-            ManifestRepository,
-            "finalize_outcome",
+            ManifestTxn,
+            "transition",
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
             with pytest.raises(sqlite3.OperationalError):

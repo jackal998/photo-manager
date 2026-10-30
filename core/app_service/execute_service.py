@@ -26,6 +26,11 @@ from typing import Any
 
 from loguru import logger
 
+from core.app_service.lock_gate import (
+    LockVerdict,
+    apply_gated_transition,
+    refuse_gated_outcome,
+)
 from core.app_service.path_safety import is_under_roots
 from infrastructure.delete_service import DeleteService
 from infrastructure.logging import write_delete_log
@@ -138,6 +143,48 @@ def _connect(manifest_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _verdict(force_locked: bool) -> LockVerdict:
+    """The A4 verdict for a verb with no skip option: confirm all, or refuse."""
+    return LockVerdict.FORCE if force_locked else LockVerdict.ASK
+
+
+def _transition_outcome(
+    repo: ManifestRepository,
+    manifest_path: str,
+    paths: list[str],
+    verdict: LockVerdict,
+    *,
+    from_outcome: str,
+    to_outcome: str,
+) -> int:
+    """Plan, refuse and write one outcome transition in one IMMEDIATE txn (A4)."""
+    if not paths:
+        return 0
+    with repo.write_txn(manifest_path) as tx:
+        return apply_gated_transition(
+            tx, paths, verdict, from_outcome=from_outcome, to_outcome=to_outcome
+        )
+
+
+def _record_deleted(repo: ManifestRepository, manifest_path: str, path: str) -> None:
+    """Record a successful per-file delete (D7) in its own short txn (A4)."""
+    with repo.write_txn(manifest_path) as tx:
+        tx.record_deleted(path)
+
+
+def _gate_execute(
+    repo: ManifestRepository,
+    manifest_path: str,
+    paths: list[str],
+    verdict: LockVerdict,
+) -> None:
+    """Execute's up-front gate: refuse locked rows before any file is touched (A4)."""
+    if not paths:
+        return
+    with repo.write_txn(manifest_path) as tx:
+        refuse_gated_outcome(tx, paths, verdict, outcome="")
+
+
 def execute_decisions(
     manifest_path: str,
     scope_paths: list[str] | None = None,
@@ -204,17 +251,18 @@ def execute_decisions(
             locked_ignore_paths, allowed_roots, "ignore"
         )
 
-    # Locked gate — RE-READ from DB (never trust client state). #972: a locked
-    # Skip ('ignore') row is gated like a locked Delete, so one 409 covers both.
-    locked_paths = locked_delete_paths + locked_ignore_paths
-    if locked_paths and not force_locked:
-        raise ValueError("locked_paths", locked_paths)
-
     # #985: nothing is unlocked up front. A locked row joins the batch and
-    # keeps its lock until its outcome is written (clear_lock=True below), so
-    # a row whose action does not apply stays locked and in review.
+    # keeps its lock until its outcome is written, so a row whose action does
+    # not apply stays locked and in review. #972: a locked Skip ('ignore') row
+    # is gated like a locked Delete, so one 409 covers both.
     safe_delete_paths = delete_paths + locked_delete_paths
     safe_ignore_paths = ignore_paths + locked_ignore_paths
+
+    # Up-front gate (A4): the locks are re-read inside the primitive's own
+    # transaction, so a row locked after the plan is refused (409) before any
+    # file is touched.
+    verdict = _verdict(force_locked)
+    _gate_execute(repo, manifest_path, safe_delete_paths + safe_ignore_paths, verdict)
 
     # --- Per-file delete with D7 consistency ----------------------------
     svc = DeleteService()
@@ -237,9 +285,7 @@ def execute_decisions(
                 success_paths.append(path)
                 # D7: write outcome PER FILE immediately after success.
                 try:
-                    repo.finalize_outcome(
-                        manifest_path, [path], "deleted", clear_lock=True
-                    )
+                    _record_deleted(repo, manifest_path, path)
                 except Exception as exc:
                     # FIX 5: file IS gone from disk — keep it in success_paths,
                     # record the DB write failure separately.
@@ -254,9 +300,7 @@ def execute_decisions(
                 os.unlink(path)
                 success_paths.append(path)
                 try:
-                    repo.finalize_outcome(
-                        manifest_path, [path], "deleted", clear_lock=True
-                    )
+                    _record_deleted(repo, manifest_path, path)
                 except Exception as exc:
                     # FIX 5: file IS gone from disk — keep it in success_paths,
                     # record the DB write failure separately.
@@ -269,8 +313,9 @@ def execute_decisions(
     ignored: list[str] = []
     if safe_ignore_paths:
         try:
-            repo.finalize_outcome(
-                manifest_path, safe_ignore_paths, "ignored", clear_lock=True
+            _transition_outcome(
+                repo, manifest_path, safe_ignore_paths, verdict,
+                from_outcome="", to_outcome="ignored",
             )
             ignored = safe_ignore_paths
         except Exception as exc:
@@ -341,18 +386,6 @@ def remove_from_review(
     repo = ManifestRepository()
     repo.ensure_schema(manifest_path)
 
-    # RE-READ lock state from DB — never trust client.
-    conn = _connect(manifest_path)
-    try:
-        placeholders = ",".join("?" for _ in file_paths)
-        rows = conn.execute(
-            f"SELECT source_path, is_locked FROM migration_manifest "
-            f"WHERE source_path IN ({placeholders}) AND outcome = ''",
-            file_paths,
-        ).fetchall()
-    finally:
-        conn.close()
-
     # --- Path-safety filter (#985: BEFORE the lock gate) -----------------
     # An out-of-root locked row is not gated, not unlocked, and keeps its lock.
     if allowed_roots:
@@ -360,17 +393,13 @@ def remove_from_review(
     else:
         safe_paths = file_paths
 
-    safe_set = set(safe_paths)
-    locked_paths = [p for p, locked in rows if locked and p in safe_set]
-
-    if locked_paths and not force_locked:
-        raise ValueError("locked_paths", locked_paths)
-
-    # #985: nothing is unlocked up front. Locked rows keep their lock until the
-    # ignored write clears it in the same statement (clear_lock=True).
-    # #A2: the write itself is guarded to rows still in review; rows already
-    # deleted or dismissed are left as they are and are not counted.
-    written = repo.remove_from_review(manifest_path, safe_paths, clear_lock=True)
+    # A4: plan, refuse and write in one IMMEDIATE txn. The lock is re-read there,
+    # so a row locked after any earlier read is refused (409). Only rows still in
+    # review are written (#A2); the rest are left as they are and not counted.
+    written = _transition_outcome(
+        repo, manifest_path, safe_paths, _verdict(force_locked),
+        from_outcome="", to_outcome="ignored",
+    )
 
     from core.app_service.review_service import load_review
     try:
@@ -381,28 +410,6 @@ def remove_from_review(
         groups = []
 
     return {"removed": written, "groups": groups}
-
-
-def _locked_skipped_paths(manifest_path: str, file_paths: list[str]) -> list[str]:
-    """Return the paths in ``file_paths`` that are locked AND dismissed (#981).
-
-    Only 'ignored' rows are gated: restore changes nothing else, so a locked
-    row still in review is not something this write would touch.
-    """
-    if not file_paths:
-        return []
-    conn = _connect(manifest_path)
-    try:
-        placeholders = ",".join("?" for _ in file_paths)
-        rows = conn.execute(
-            f"SELECT source_path FROM migration_manifest "
-            f"WHERE source_path IN ({placeholders}) "
-            f"AND outcome = 'ignored' AND is_locked = 1",
-            file_paths,
-        ).fetchall()
-    finally:
-        conn.close()
-    return [r[0] for r in rows]
 
 
 def restore_to_review(
@@ -450,12 +457,12 @@ def restore_to_review(
 
     repo = ManifestRepository()
     repo.ensure_schema(manifest_path)
-    locked_paths = _locked_skipped_paths(manifest_path, safe_paths)
-    if locked_paths and not force_locked:
-        raise ValueError("locked_paths", locked_paths)
-
-    restored = repo.restore_to_review(
-        manifest_path, safe_paths, unlock_paths=locked_paths
+    # A4: only 'ignored' rows are gated (BE-7). A locked row that is still in
+    # review is not something this write touches, and a row locked after any
+    # earlier read is refused inside the transaction.
+    restored = _transition_outcome(
+        repo, manifest_path, safe_paths, _verdict(force_locked),
+        from_outcome="ignored", to_outcome="",
     )
 
     from core.app_service.review_service import load_review
@@ -601,8 +608,8 @@ def prune_singletons(
     # Scope first, then the lock gate (the #985 order): out-of-root rows are
     # dropped before the gate, so a locked out-of-root row is neither gated nor
     # pruned.
-    selected: list[tuple[str, bool]] = []
-    for source_path, user_decision, is_locked_val, _group_id in rows:
+    selected: list[str] = []
+    for source_path, user_decision, _is_locked, _group_id in rows:
         # Explicit mode (#686): consider only the caller-named singletons. A
         # requested path that is no longer a singleton simply never appears in
         # `rows`, so it is dropped — never pruned.
@@ -623,19 +630,16 @@ def prune_singletons(
             )
             continue
 
-        selected.append((source_path, bool(is_locked_val)))
+        selected.append(source_path)
 
-    # #983: a locked singleton in scope is refused like every other write — the
-    # whole call raises before anything is written — unless the caller confirmed
-    # the lock gate (force_locked).
-    locked_in_scope = [p for p, locked in selected if locked]
-    if locked_in_scope and not force_locked:
-        raise ValueError("locked_paths", locked_in_scope)
-
-    # Each locked row is unlocked in the same write as its ignored outcome (#985).
-    to_prune = [p for p, _locked in selected]
-    if to_prune:
-        repo.finalize_outcome(manifest_path, to_prune, "ignored", clear_lock=True)
+    # #983: a locked singleton in scope is refused like every other write, and
+    # the whole call writes nothing (A4). Each confirmed locked row is unlocked
+    # in the same statement as its ignored outcome (#985).
+    to_prune = selected
+    _transition_outcome(
+        repo, manifest_path, to_prune, _verdict(force_locked),
+        from_outcome="", to_outcome="ignored",
+    )
 
     from core.app_service.review_service import load_review
     try:
