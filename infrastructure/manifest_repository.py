@@ -18,10 +18,11 @@ Load flow:
   outcome='ignored' at the same point — see
   ``reconcile_skip_directory_rows`` (#821).
 
-Save flow:
-  Writes rec.user_decision for every record back to the manifest. Lock
-  state is written by ``batch_update_lock_state`` separately — locking is
-  a UI affordance, not a per-decision side-effect.
+Decision flow:
+  Decisions are written only by ``ManifestTxn.write_decisions`` inside
+  ``write_txn``, which refuses locked rows. Lock state is written by
+  ``batch_update_lock_state`` separately — locking is a UI affordance,
+  not a per-decision side-effect.
   Outcome is written by ``ManifestTxn.transition`` / ``record_deleted`` after execute operations run.
 """
 
@@ -657,10 +658,10 @@ class ManifestRepository:
         (e.g. ``is_locked``, ``score``, ``user_decision``) MUST call
         this first when the manifest may have been produced by a
         scanner that doesn't know about those columns. ``load()`` calls
-        it automatically; post-scan writers (#393's
-        ``apply_auto_select_decisions``) call it explicitly because
-        ``scanner.manifest.write_manifest`` writes only the original
-        DDL and the migrated columns are added on first read.
+        it automatically; a writer that does not go through ``load()``
+        must call it explicitly, because ``scanner.manifest.write_manifest``
+        writes only the original DDL and the migrated columns are added on
+        first read.
 
         Order matters: the additive ADD-COLUMN migrations run FIRST so
         every modern column exists, THEN the #433 drop-move structural
@@ -952,46 +953,6 @@ class ManifestRepository:
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)
 
-    # ------------------------------------------------------------------ save
-
-    def save(self, manifest_path: str, groups: Iterable[PhotoGroup]) -> int:
-        """Write user_decision for every record back to the manifest."""
-        params = [
-            (rec.user_decision, rec.file_path)
-            for group in groups
-            for rec in group.items
-        ]
-        if not params:
-            return 0
-        conn = _connect(manifest_path)
-        try:
-            conn.executemany(_UPDATE_DECISION_SQL, params)
-            conn.commit()
-        finally:
-            conn.close()
-        logger.info("Manifest decisions saved: {} rows updated", len(params))
-        return len(params)
-
-    def update_decision(self, manifest_path: str, file_path: str, decision: str) -> None:
-        """Update user_decision for a single row (right-click set action)."""
-        conn = _connect(manifest_path)
-        try:
-            conn.execute(_UPDATE_DECISION_SQL, (decision, file_path))
-            conn.commit()
-        finally:
-            conn.close()
-
-    def batch_update_decisions(self, manifest_path: str, decisions: dict[str, str]) -> None:
-        """Update user_decision for multiple rows in a single transaction."""
-        if not decisions:
-            return
-        conn = _connect(manifest_path)
-        try:
-            conn.executemany(_UPDATE_DECISION_SQL, [(v, k) for k, v in decisions.items()])
-            conn.commit()
-        finally:
-            conn.close()
-
     def batch_update_lock_state(self, manifest_path: str, lock_states: dict[str, bool]) -> None:
         """Update is_locked for multiple rows in a single transaction.
 
@@ -1007,40 +968,6 @@ class ManifestRepository:
                 _UPDATE_LOCK_SQL,
                 [(1 if v else 0, k) for k, v in lock_states.items()],
             )
-            conn.commit()
-        finally:
-            conn.close()
-
-    def batch_update_decisions_and_lock(
-        self,
-        manifest_path: str,
-        decisions: dict[str, str],
-        lock_states: dict[str, bool],
-    ) -> None:
-        """Combined batch — both updates under one connection + commit.
-
-        Same semantics as calling :meth:`batch_update_decisions` followed
-        by :meth:`batch_update_lock_state`, but issues one ``COMMIT`` (one
-        fsync) instead of two. Used by the post-scan auto-select write
-        path (:func:`core.services.auto_select.apply_auto_select_decisions`,
-        #393): negligible on local SSD, meaningful over SMB/NAS where the
-        per-commit round-trip dominates. Empty dicts on either side are
-        skipped; both empty short-circuits before opening the connection.
-        """
-        if not decisions and not lock_states:
-            return
-        conn = _connect(manifest_path)
-        try:
-            if decisions:
-                conn.executemany(
-                    _UPDATE_DECISION_SQL,
-                    [(v, k) for k, v in decisions.items()],
-                )
-            if lock_states:
-                conn.executemany(
-                    _UPDATE_LOCK_SQL,
-                    [(1 if v else 0, k) for k, v in lock_states.items()],
-                )
             conn.commit()
         finally:
             conn.close()
