@@ -33,9 +33,11 @@ Authoring guide: `docs/testing.md` — "Probe layer — authoring a new probe".
 from __future__ import annotations
 
 import ast
+import os
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
@@ -841,3 +843,338 @@ def test_probe_transport_catches_class_method_on_plain_transport():
     )
     findings = _find_plain_transport_findings(fixture)
     assert len(findings) == 1 and findings[0].startswith("Api reaches")
+# ---------------------------------------------------------------------------
+# A5 — write-path probe: no unguarded UPDATE of user_decision / outcome / is_locked
+# ---------------------------------------------------------------------------
+# design 2.3 (rev 3). Scope: UPDATE only. INSERT OR REPLACE and REPLACE INTO are
+# out of scope; the only INSERT ... SELECT is the schema rebuild in
+# migrate_manifest_schema, which copies rows and sets no decision.
+#
+# The probe reads the AST, never raw text. Limit: SQL assembled from a variable
+# at runtime (a concatenation with a non-literal part) is not seen.
+
+_PROBE_EXCLUDED_DIRS = frozenset(
+    {"tests", ".venv", "venv", "node_modules", ".claude", ".git", "__pycache__"}
+)
+
+_GUARDED_CONSTANT_NAMES = frozenset({"_UPDATE_DECISION_SQL", "_UPDATE_LOCK_SQL"})
+
+# (module, qualified name) of every constant whose SQL may set a protected
+# column. The three ManifestTxn statements are guarded in their own WHERE; the
+# reconcile dismiss is guarded in its own statement (R-LOCK-6); the lock verb is
+# the lock toggle itself; the scanner's fresh-DB write is the one _UPDATE_DECISION_SQL
+# user with nothing to guard.
+_ALLOWED_SQL_CONSTANTS = frozenset({
+    ("infrastructure.manifest_repository", "_WRITE_DECISION_SQL"),   # ManifestTxn.write_decisions
+    ("infrastructure.manifest_repository", "_TRANSITION_SQL"),       # ManifestTxn.transition
+    ("infrastructure.manifest_repository", "_RECORD_DELETED_SQL"),   # ManifestTxn.record_deleted
+    ("infrastructure.manifest_repository", "_RECONCILE_DISMISS_SQL"),  # R-LOCK-6 system write
+    ("infrastructure.manifest_repository", "_UPDATE_LOCK_SQL"),      # lock verb
+    ("scanner.manifest", "_UPDATE_DECISION_SQL"),                    # fresh temp DB (moved by A5)
+})
+
+# constant name -> (module, qualified function) allowed to reference it by name.
+_ALLOWED_CONSTANT_USERS: dict[str, frozenset[tuple[str, str]]] = {
+    "_UPDATE_DECISION_SQL": frozenset({("scanner.manifest", "write_manifest")}),
+    "_UPDATE_LOCK_SQL": frozenset({
+        ("infrastructure.manifest_repository", "ManifestRepository.batch_update_lock_state"),
+        ("scanner.manifest", "write_manifest"),
+    }),
+}
+
+_UPDATE_HEAD = re.compile(
+    r"\bupdate\s+migration_manifest(?:\s+as)?(?:\s+(?!set\b)\w+)?\s+set\b"
+)
+_PROTECTED_ASSIGN = re.compile(
+    r"(?<![\w.])(?:\w+\.)?(user_decision|outcome|is_locked)\s*=(?!=)"
+)
+
+
+def _protected_update_columns(sql: str) -> set[str]:
+    """Protected columns assigned by any UPDATE migration_manifest in ``sql``.
+
+    Whitespace and case are normalised first. The SET clause runs up to the
+    first WHERE, so a WHERE that mentions ``outcome`` does not count.
+    """
+    norm = re.sub(r"\s+", " ", sql).lower()
+    hits: set[str] = set()
+    for head in _UPDATE_HEAD.finditer(norm):
+        rest = norm[head.end():]
+        where = rest.find(" where ")
+        clause = rest if where < 0 else rest[:where]
+        hits.update(_PROTECTED_ASSIGN.findall(clause))
+    return hits
+
+
+class _ScopedStrings(ast.NodeVisitor):
+    """Collect (scope, SQL-text) and (scope, guarded-name) pairs from one module.
+
+    A module-level ``NAME = ...`` gives its own scope the name, so a constant's
+    SQL is keyed by the constant. An f-string is joined from its literal parts,
+    with each placeholder shown as a space. Implicit concatenation is already a
+    single ``Constant`` in the AST.
+    """
+
+    def __init__(self) -> None:
+        self.scope: list[str] = []
+        self.sql: list[tuple[str, str]] = []
+        self.refs: list[tuple[str, str]] = []
+
+    def _qual(self) -> str:
+        return ".".join(self.scope) or "<module>"
+
+    def _in_scope(self, name: str, node: ast.AST) -> None:
+        self.scope.append(name)
+        self.generic_visit(node)
+        self.scope.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._in_scope(node.name, node)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._in_scope(node.name, node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if (not self.scope and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            self._in_scope(node.targets[0].id, node)
+        else:
+            self.generic_visit(node)
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        if isinstance(node.value, str):
+            self.sql.append((self._qual(), node.value))
+
+    def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
+        text = "".join(
+            part.value if isinstance(part, ast.Constant) else " "
+            for part in node.values
+        )
+        self.sql.append((self._qual(), text))
+        for part in node.values:
+            if isinstance(part, ast.FormattedValue):
+                self.visit(part.value)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Load) and node.id in _GUARDED_CONSTANT_NAMES:
+            self.refs.append((self._qual(), node.id))
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr in _GUARDED_CONSTANT_NAMES:
+            self.refs.append((self._qual(), node.attr))
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            if alias.name in _GUARDED_CONSTANT_NAMES:
+                self.refs.append((self._qual(), alias.name))
+
+
+def _definitions(tree: ast.Module, module: str) -> set[tuple[str, str]]:
+    """Module-level constants and (methods of) top-level functions and classes."""
+    defined: set[tuple[str, str]] = set()
+
+    def walk(body: list[ast.stmt], prefix: str) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defined.add((module, prefix + node.name))
+            elif isinstance(node, ast.ClassDef):
+                defined.add((module, prefix + node.name))
+                walk(node.body, prefix + node.name + ".")
+            elif not prefix and isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        defined.add((module, target.id))
+
+    walk(tree.body, "")
+    return defined
+
+
+def _probe_violations(modules: dict[str, str]) -> tuple[list[str], int]:
+    """Unallowed protected UPDATE sites and unallowed guarded-name references.
+
+    Returns (violations, UPDATE sites seen). Fixtures call this directly.
+    """
+    violations: list[str] = []
+    update_sites = 0
+    for module, src in sorted(modules.items()):
+        collector = _ScopedStrings()
+        collector.visit(ast.parse(src))
+        for scope, text in collector.sql:
+            columns = _protected_update_columns(text)
+            if not columns:
+                continue
+            update_sites += 1
+            if (module, scope) not in _ALLOWED_SQL_CONSTANTS:
+                violations.append(
+                    f"{module}:{scope} sets {sorted(columns)} in an UPDATE "
+                    "migration_manifest that is not on the allow-list"
+                )
+        for scope, name in collector.refs:
+            allowed = _ALLOWED_CONSTANT_USERS.get(name, frozenset())
+            if (module, scope) not in allowed:
+                violations.append(
+                    f"{module}:{scope} references {name}, which is not allow-listed"
+                )
+    return violations, update_sites
+
+
+def _probe_allow_list_gaps(modules: dict[str, str]) -> list[str]:
+    """Fail closed: every allow-list entry must be found by name in the scan,
+    and every allowed SQL constant must match the probe.
+    """
+    defined: set[tuple[str, str]] = set()
+    sql_seen: set[tuple[str, str]] = set()
+    refs_seen: set[tuple[str, str, str]] = set()
+    for module, src in modules.items():
+        tree = ast.parse(src)
+        defined |= _definitions(tree, module)
+        collector = _ScopedStrings()
+        collector.visit(tree)
+        for scope, text in collector.sql:
+            if _protected_update_columns(text):
+                sql_seen.add((module, scope))
+        for scope, name in collector.refs:
+            refs_seen.add((name, module, scope))
+    gaps: list[str] = []
+    for module, name in sorted(_ALLOWED_SQL_CONSTANTS):
+        if (module, name) not in defined:
+            gaps.append(f"allow-list entry {module}.{name} is not defined")
+        elif (module, name) not in sql_seen:
+            gaps.append(f"allow-list entry {module}.{name} matches no UPDATE the probe can see")
+    for name, users in sorted(_ALLOWED_CONSTANT_USERS.items()):
+        for module, scope in sorted(users):
+            if (module, scope) not in defined:
+                gaps.append(f"user entry {module}.{scope} is not defined")
+            elif (name, module, scope) not in refs_seen:
+                gaps.append(f"user entry {module}.{scope} no longer references {name}")
+    return gaps
+
+
+def _production_modules() -> dict[str, str]:
+    """Every production *.py under the repo: no tests/, venv, node_modules or worktrees."""
+    modules: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(REPO):
+        dirnames[:] = [d for d in dirnames if d not in _PROBE_EXCLUDED_DIRS]
+        for filename in filenames:
+            if not filename.endswith(".py"):
+                continue
+            path = Path(dirpath) / filename
+            rel = path.relative_to(REPO).with_suffix("")
+            modules[".".join(rel.parts)] = path.read_text(encoding="utf-8")
+    return modules
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="A5: _UPDATE_DECISION_SQL is still defined in manifest_repository; "
+    "the constant-move commit makes this pass and removes the marker",
+)
+def test_probe_write_paths_are_guarded_or_allow_listed():
+    """UPDATE migration_manifest of user_decision / outcome / is_locked, and any
+    reference to _UPDATE_DECISION_SQL or _UPDATE_LOCK_SQL, is allowed only at an
+    allow-listed site. UPDATE only: INSERT OR REPLACE / REPLACE INTO are out of
+    scope (design 2.3, rev 3).
+    """
+    modules = _production_modules()
+    violations, update_sites = _probe_violations(modules)
+    gaps = _probe_allow_list_gaps(modules)
+    assert update_sites > 0, "the probe sees zero UPDATE sites; it cannot guard anything"
+    assert not gaps, "allow-list drifted (fail closed): " + "; ".join(gaps)
+    assert not violations, (
+        "unguarded write path to a decision / outcome / lock column. Route it "
+        "through ManifestTxn (write_decisions / transition / record_deleted) or "
+        "allow-list it with a reason. " + "; ".join(violations)
+    )
+
+
+# Must-FAIL fixtures: each is a whole module source, scanned as "fixture.bad".
+_MUST_FAIL_WRITE_FIXTURES = {
+    "plain_new_update": (
+        "def f(conn):\n"
+        "    conn.execute('UPDATE migration_manifest SET outcome = ? WHERE source_path = ?')\n"
+    ),
+    "lowercase_update": (
+        "def f(conn):\n"
+        "    conn.execute('update migration_manifest set user_decision = ?')\n"
+    ),
+    "split_across_lines": (
+        "SQL = '''\n"
+        "UPDATE migration_manifest\n"
+        "   SET is_locked = ?\n"
+        " WHERE source_path = ?\n"
+        "'''\n"
+    ),
+    "table_alias": (
+        "SQL = 'UPDATE migration_manifest AS m SET m.outcome = ? WHERE m.source_path = ?'\n"
+    ),
+    "table_alias_without_as": (
+        "SQL = 'UPDATE migration_manifest m SET is_locked = 0 WHERE m.source_path = ?'\n"
+    ),
+    "extra_whitespace": (
+        "SQL = 'UPDATE   migration_manifest\\t SET   outcome   =  ?'\n"
+    ),
+    "implicit_concat_splits_table": (
+        "SQL = ('UPDATE migration_' 'manifest SET is_locked = ? '\n"
+        "       'WHERE source_path = ?')\n"
+    ),
+    "fstring_literal_parts": (
+        "def f(x):\n"
+        "    return f'UPDATE migration_manifest SET outcome = {x} WHERE source_path = ?'\n"
+    ),
+    "percent_template": (
+        "def f(x):\n"
+        "    return 'UPDATE migration_manifest SET user_decision = %s' % x\n"
+    ),
+    "new_reference_decision_sql": (
+        "from infrastructure.manifest_repository import _UPDATE_DECISION_SQL\n"
+        "def f(conn):\n"
+        "    conn.execute(_UPDATE_DECISION_SQL, ('delete', '/a.jpg'))\n"
+    ),
+    "new_reference_lock_sql_attribute": (
+        "import infrastructure.manifest_repository as repo\n"
+        "def f(conn):\n"
+        "    conn.execute(repo._UPDATE_LOCK_SQL, (1, '/a.jpg'))\n"
+    ),
+}
+
+# Must-PASS fixtures: the same probe must stay silent on each.
+_MUST_PASS_WRITE_FIXTURES = {
+    "update_sets_only_score": (
+        "def f(conn):\n"
+        "    conn.execute('UPDATE migration_manifest SET score = ? WHERE source_path = ?')\n"
+    ),
+    "update_where_mentions_outcome_only": (
+        "SQL = \"UPDATE migration_manifest SET score = ? WHERE outcome = ''\"\n"
+    ),
+    "select_mentioning_is_locked": (
+        "SQL = \"SELECT source_path, is_locked FROM migration_manifest WHERE outcome = ''\"\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_MUST_FAIL_WRITE_FIXTURES))
+def test_probe_write_fixture_must_fail(name):
+    violations, _ = _probe_violations({"fixture.bad": _MUST_FAIL_WRITE_FIXTURES[name]})
+    assert violations, f"probe missed the must-fail fixture {name!r}"
+
+
+@pytest.mark.parametrize("name", sorted(_MUST_PASS_WRITE_FIXTURES))
+def test_probe_write_fixture_must_pass(name):
+    violations, _ = _probe_violations({"fixture.ok": _MUST_PASS_WRITE_FIXTURES[name]})
+    assert not violations, f"probe flagged the must-pass fixture {name!r}: {violations}"
+
+
+def test_probe_fails_closed_when_allow_list_entries_are_gone():
+    """A tree that defines none of the allow-listed names reports every entry as a gap."""
+    gaps = _probe_allow_list_gaps({"fixture.empty": "x = 1\n"})
+    assert len(gaps) == len(_ALLOWED_SQL_CONSTANTS) + sum(
+        len(users) for users in _ALLOWED_CONSTANT_USERS.values()
+    )
+
+
+def test_probe_fails_closed_when_it_sees_no_update_sites():
+    _, update_sites = _probe_violations({"fixture.empty": "x = 1\n"})
+    assert update_sites == 0
