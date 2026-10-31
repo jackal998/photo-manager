@@ -700,33 +700,20 @@ describe("LockConfirmDialog — Unlock & Apply weight by fate (#984, F5)", () =>
       render(<LockConfirmDialog />);
       await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCKED_ONLY));
       expect(undoMock).toHaveBeenCalledWith({
-        confirmedLocked: [],
         excludePaths: ["/photos/peer.jpg"],
       });
       expect(useAppStore.getState().execute.lockConflict).toBeNull();
     });
 
-    // A7 H1 (accumulation): a second 409 must not forget the first round. Each
-    // round re-sends every row earlier rounds confirmed, plus its own.
-    it("Unlock & Apply accumulates the rows earlier rounds confirmed", async () => {
+    // A7 H1 (accumulation): the store lists rows earlier rounds confirmed in
+    // paths, so Unlock & Apply names all of them, not just the newest round.
+    it("Unlock & Apply names every row in paths, including earlier rounds' confirmed rows", async () => {
       const user = userEvent.setup();
-      act(() => {
-        useAppStore.setState((s) => ({
-          execute: {
-            ...s.execute,
-            lockConflict: {
-              paths: ["/photos/c.jpg"],
-              op: "undo",
-              originalPaths: ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"],
-              confirmedLocked: ["/photos/keeper.jpg", "/photos/peer.jpg"],
-            },
-          },
-        }) as never);
-      });
+      seedLockConflict("undo", ["/photos/peer.jpg", "/photos/c.jpg"], ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"]);
       render(<LockConfirmDialog />);
       await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
       expect(undoMock).toHaveBeenCalledWith({
-        confirmedLocked: ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"],
+        confirmedLocked: ["/photos/peer.jpg", "/photos/c.jpg"],
       });
     });
 

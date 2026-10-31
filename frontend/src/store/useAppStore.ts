@@ -447,9 +447,19 @@ export const useAppStore = create<AppStore>()(
           });
         }
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          // H1: rows the user already confirmed stay in the reopened dialog, so
+          // the next Unlock & Apply re-sends them with the new ones. The server
+          // names only the unconfirmed rows, so without this a second lock makes
+          // the re-send drop the first and the loop never ends.
+          const priorConfirmed = (opts.confirmedLocked ?? []).filter((p) =>
+            paths.includes(p)
+          );
+          const newlyLocked = (err.lockedPaths ?? []).filter(
+            (p) => !priorConfirmed.includes(p)
+          );
           set((state) => {
             state.execute.lockConflict = {
-              paths: err.lockedPaths ?? [],
+              paths: [...priorConfirmed, ...newlyLocked],
               op: "decision",
               // Preserve the original path list so "Unlocked Only" can filter
               // out the locked paths and re-apply the decision to the rest.
@@ -1757,15 +1767,21 @@ export const useAppStore = create<AppStore>()(
         });
       } catch (err) {
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
-          // A lock set after the toast (or a D10 keeper): ask, keep the toast,
-          // and carry the confirmed set so the next round accumulates it.
+          // A lock set after the toast (or a D10 keeper): ask, keep the toast.
+          // As in the decision 409 (H1), rows the user already confirmed stay in
+          // the reopened dialog, so the next Unlock & Apply re-sends them too.
+          const priorConfirmed = (opts.confirmedLocked ?? []).filter((p) =>
+            rows.some((row) => row.file_path === p)
+          );
+          const newlyLocked = (err.lockedPaths ?? []).filter(
+            (p) => !priorConfirmed.includes(p)
+          );
           set((state) => {
             if (state.toast !== null) state.toast.undoing = false;
             state.execute.lockConflict = {
-              paths: err.lockedPaths ?? [],
+              paths: [...priorConfirmed, ...newlyLocked],
               op: "undo",
               originalPaths: rows.map((row) => row.file_path),
-              confirmedLocked: confirmed,
             };
           });
           return;

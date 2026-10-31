@@ -122,11 +122,10 @@ export function LockConfirmDialog() {
       return;
     }
     if (rawOp === "undo") {
-      // A7: add this round's rows to every row earlier rounds confirmed, so a
-      // second 409 accumulates instead of forgetting the first.
-      const soFar = lockConflict?.confirmedLocked ?? [];
+      // A7: the store already lists earlier rounds' confirmed rows in paths
+      // (H1), so naming paths confirms everything the user has agreed to.
       clearConflict();
-      void undoKeepBest({ confirmedLocked: [...soFar, ...lockedPaths] });
+      void undoKeepBest({ confirmedLocked: lockedPaths });
       return;
     }
     // Capture the ORIGINAL scope before clearConflict() nulls the store field.
@@ -170,11 +169,10 @@ export function LockConfirmDialog() {
       return;
     }
     if (rawOp === "undo") {
-      // A7: this round's rows are left out; the rest of the Undo proceeds, with
-      // the rows earlier rounds confirmed still named.
-      const soFar = lockConflict?.confirmedLocked ?? [];
+      // A7: every locked row in paths is left out, as "Unlocked only" means
+      // everywhere else; the rest of the Undo proceeds.
       clearConflict();
-      void undoKeepBest({ confirmedLocked: soFar, excludePaths: lockedPaths });
+      void undoKeepBest({ excludePaths: lockedPaths });
       return;
     }
     // Capture before clearConflict() nulls the store field.

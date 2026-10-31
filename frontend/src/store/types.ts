@@ -288,13 +288,6 @@ export interface LockConflict {
   paths: string[];
   op: "execute" | "remove" | "prune" | "decision" | "apply-best-copy" | "restore" | "undo";
   /**
-   * op="undo" only (A7): every row the Undo has confirmed so far (its
-   * actionLocked plus the rows of earlier dialogs). The dialog passes it back
-   * with its own rows, so a second 409 accumulates instead of forgetting the
-   * first. Cancel clears the conflict, and with it this list.
-   */
-  confirmedLocked?: string[];
-  /**
    * The original path list that triggered the conflict.
    * - execute: all decided paths that were in scope at call time (null means
    *   "all decided" — the store derives the list from manifest.groups).
