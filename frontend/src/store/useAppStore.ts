@@ -1564,13 +1564,24 @@ export const useAppStore = create<AppStore>()(
               locked: before.get(path)?.locked ?? false,
             });
           }
-          // A7 (#999): the locks THIS action created. A row unlocked before
-          // and locked by the write is the only lock Undo may confirm; a row
-          // that was already locked (D10 (a)) is not in this list.
+          // A7 (#999): the locks THIS call's write created. Derived from this
+          // call's own pre-write state (`before`) and the rows it wrote
+          // (`affected`), never from the carried snapshot: a carried row that
+          // the user locked between two applies must not be confirmed. A row
+          // already locked before this call (D10 (a)) is not in this list.
           const lockedAfter = new Map(after.map((row) => [row.file_path, row.is_locked]));
-          const actionLocked = snapshot
-            .filter((row) => !row.locked && lockedAfter.get(row.file_path) === true)
-            .map((row) => row.file_path);
+          const createdNow = [...affected].filter(
+            (path) =>
+              !(before.get(path)?.locked ?? false) &&
+              lockedAfter.get(path) === true
+          );
+          const priorActionLocked =
+            state.toast !== null && state.toast.groupNumber === groupNumber
+              ? (state.toast.actionLocked ?? [])
+              : [];
+          const actionLocked = Array.from(
+            new Set([...priorActionLocked, ...createdNow])
+          );
           _toastSeq += 1;
           state.toast = {
             id: _toastSeq,

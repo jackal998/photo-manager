@@ -1750,6 +1750,58 @@ describe("applyBestCopy – a repeat on the same group must not cost the undo", 
     expect(useAppStore.getState().toast).toBeNull();
   });
 
+  // #999 (A7 review, HIGH): a row the user locks between two applies on the same
+  // group is in the carried snapshot as unlocked. The second apply must not
+  // count it as a lock the action created, so Undo never confirms it.
+  it("a row locked between two applies is NOT confirmed by the second apply's Undo", async () => {
+    const K = "/photos/k.jpg";
+    const X = "/photos/x.jpg";
+    const Y = "/photos/y.jpg";
+    seedManifest([makeGroup(1, [K, X, Y])]);
+    const after1 = makeGroup(1, [K, X, Y]);
+    after1.items[0].is_locked = true; // keeper, locked by apply #1
+    after1.items[1].user_decision = "delete";
+    after1.items[2].user_decision = "delete";
+    const after2 = makeGroup(1, [K, X, Y]);
+    after2.items[0].is_locked = true;
+    after2.items[1].is_locked = true; // X: locked by the user, skipped by apply #2
+    after2.items[2].user_decision = "delete";
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        ok200({
+          matched: 3,
+          affected_paths: [K, X, Y],
+          action_applied: "apply_best_copy",
+          groups: [after1],
+        })
+      )
+      .mockResolvedValueOnce(
+        ok200({
+          matched: 1,
+          affected_paths: [Y],
+          action_applied: "apply_best_copy",
+          groups: [after2],
+        })
+      );
+
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+    // The user locks X between the two applies, through the ungated lock PATCH.
+    useAppStore.setState((s) => {
+      s.manifest.groups[0].items[1].is_locked = true;
+    });
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+
+    const toast = useAppStore.getState().toast!;
+    expect(toast.actionLocked).toEqual([K]);
+    expect(toast.actionLocked).not.toContain(X);
+
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 3 });
+    await useAppStore.getState().undoKeepBest();
+    const calls = vi.mocked(client.patchDecisions).mock.calls;
+    const confirmed = calls[calls.length - 1][2]!.confirmedLocked;
+    expect(confirmed).not.toContain(X);
+  });
+
   it("a DIFFERENT group still replaces the snapshot", async () => {
     const a = makeGroup(1, ["/photos/a0.jpg", "/photos/a1.jpg"]);
     const b = makeGroup(2, ["/photos/b0.jpg", "/photos/b1.jpg"]);
