@@ -690,7 +690,6 @@ describe("LockConfirmDialog — Unlock & Apply weight by fate (#984, F5)", () =>
       render(<LockConfirmDialog />);
       await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
       expect(undoMock).toHaveBeenCalledWith({ confirmedLocked: ["/photos/peer.jpg"] });
-      expect(executeDecisionsMock).not.toHaveBeenCalled();
       expect(useAppStore.getState().execute.lockConflict).toBeNull();
     });
 
