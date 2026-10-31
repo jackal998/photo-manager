@@ -699,8 +699,35 @@ describe("LockConfirmDialog — Unlock & Apply weight by fate (#984, F5)", () =>
       seedLockConflict("undo", ["/photos/peer.jpg"], ["/photos/keeper.jpg", "/photos/peer.jpg"]);
       render(<LockConfirmDialog />);
       await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCKED_ONLY));
-      expect(undoMock).toHaveBeenCalledWith({ excludePaths: ["/photos/peer.jpg"] });
+      expect(undoMock).toHaveBeenCalledWith({
+        confirmedLocked: [],
+        excludePaths: ["/photos/peer.jpg"],
+      });
       expect(useAppStore.getState().execute.lockConflict).toBeNull();
+    });
+
+    // A7 H1 (accumulation): a second 409 must not forget the first round. Each
+    // round re-sends every row earlier rounds confirmed, plus its own.
+    it("Unlock & Apply accumulates the rows earlier rounds confirmed", async () => {
+      const user = userEvent.setup();
+      act(() => {
+        useAppStore.setState((s) => ({
+          execute: {
+            ...s.execute,
+            lockConflict: {
+              paths: ["/photos/c.jpg"],
+              op: "undo",
+              originalPaths: ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"],
+              confirmedLocked: ["/photos/keeper.jpg", "/photos/peer.jpg"],
+            },
+          },
+        }) as never);
+      });
+      render(<LockConfirmDialog />);
+      await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+      expect(undoMock).toHaveBeenCalledWith({
+        confirmedLocked: ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"],
+      });
     });
 
     it("Cancel clears the dialog and writes nothing", async () => {

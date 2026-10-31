@@ -1586,6 +1586,62 @@ describe("undoKeepBest – named confirmation (A7, #999, design 3.3)", () => {
     expect(useAppStore.getState().toast).toBeNull();
   });
 
+  // A7 H1: two consecutive 409s. Each round's dialog re-sends everything the
+  // earlier rounds confirmed, so the third PATCH succeeds and names all of them.
+  it("two consecutive 409s accumulate: the third PATCH names every confirmed row", async () => {
+    const g = makeGroup(1, ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"]);
+    g.items[1].user_decision = "ignore";
+    seedManifest([g]);
+    const after = makeGroup(1, ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"]);
+    after.items[0].is_locked = true;
+    after.items[1].user_decision = "delete";
+    after.items[2].user_decision = "delete";
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200({
+        matched: 3,
+        affected_paths: ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"],
+        action_applied: "apply_best_copy",
+        groups: [after],
+      })
+    );
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+
+    vi.mocked(client.patchDecisions)
+      .mockRejectedValueOnce(
+        new client.ApiConflictError("locked_paths", ["/photos/peer.jpg"], 3)
+      )
+      .mockRejectedValueOnce(
+        new client.ApiConflictError("locked_paths", ["/photos/c.jpg"], 3)
+      )
+      .mockResolvedValueOnce({ updated: 3 });
+
+    // Round 1: the user confirms peer in the dialog (its Unlock & Apply).
+    await useAppStore.getState().undoKeepBest();
+    await useAppStore.getState().undoKeepBest({
+      confirmedLocked: [...(useAppStore.getState().execute.lockConflict!.confirmedLocked ?? []), "/photos/peer.jpg"],
+    });
+    // Round 2: the 409 for c carries peer and the action's keeper forward.
+    expect(useAppStore.getState().execute.lockConflict!.confirmedLocked).toEqual([
+      "/photos/keeper.jpg",
+      "/photos/peer.jpg",
+    ]);
+    await useAppStore.getState().undoKeepBest({
+      confirmedLocked: [...(useAppStore.getState().execute.lockConflict!.confirmedLocked ?? []), "/photos/c.jpg"],
+    });
+
+    expect(client.patchDecisions).toHaveBeenCalledTimes(3);
+    expect(client.patchDecisions).toHaveBeenLastCalledWith(
+      "/data/scan.db",
+      [
+        { file_path: "/photos/keeper.jpg", decision: "", locked: false },
+        { file_path: "/photos/peer.jpg", decision: "ignore", locked: false },
+        { file_path: "/photos/c.jpg", decision: "", locked: false },
+      ],
+      { confirmedLocked: ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"] }
+    );
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
   it("Unlocked only undoes the rest and leaves the excluded row exactly as it was", async () => {
     await stage();
     vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 1 });
