@@ -202,6 +202,40 @@ describe("Toast", () => {
     expect(useAppStore.getState().toast).toBeNull();
   });
 
+  // A7: a lock refused on Undo opens the dialog over this toast. The toast must
+  // not time out under the user's decision, and after Cancel it gets a full
+  // budget again, so Cancel leaves it up.
+  it("waits while an undo lock dialog is open, and gets a full budget after Cancel", () => {
+    seedToast();
+    render(<Toast />);
+    act(() => {
+      useAppStore.setState((s) => ({
+        execute: {
+          ...s.execute,
+          lockConflict: { paths: ["/photos/peer.jpg"], op: "undo", originalPaths: null },
+        },
+      }) as never);
+    });
+    act(() => {
+      vi.advanceTimersByTime(TOAST_TIMEOUT_MS * 3);
+    });
+    expect(useAppStore.getState().toast).not.toBeNull();
+
+    act(() => {
+      useAppStore.setState((s) => ({
+        execute: { ...s.execute, lockConflict: null },
+      }) as never);
+    });
+    act(() => {
+      vi.advanceTimersByTime(TOAST_TIMEOUT_MS - 1);
+    });
+    expect(useAppStore.getState().toast).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(2);
+    });
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
   it("a NEW keep-best replaces the toast and restarts the clock", () => {
     seedToast({ id: 1, groupNumber: 12 });
     render(<Toast />);

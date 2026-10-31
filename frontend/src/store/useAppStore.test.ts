@@ -1397,35 +1397,26 @@ describe("undoKeepBest – restores the snapshot and dismisses the toast", () =>
     await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
   }
 
-  it("PATCHes the prior decisions with the snapshot confirmed, then the prior locks", async () => {
+  it("sends ONE decision PATCH, each row with its prior lock, naming only the locks the action created", async () => {
+    // A7 (#999, design 3.3). The keeper was unlocked before the action and
+    // locked BY it, so it is the one lock Undo confirms (actionLocked). The
+    // peer was never locked and is restored unlocked. The second, separate
+    // lock PATCH of the old Undo is gone: the lock rides in the same request.
     await stage();
     vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
-    vi.mocked(client.patchLocks).mockResolvedValue({ updated: 2 });
 
     await useAppStore.getState().undoKeepBest();
 
-    // The confirmation matters: apply-best-copy LOCKED the keeper, so without
-    // it the undo is refused by the lock the action itself had just created.
+    expect(client.patchDecisions).toHaveBeenCalledTimes(1);
     expect(client.patchDecisions).toHaveBeenCalledWith(
       "/data/scan.db",
-      expect.arrayContaining([
-        { file_path: "/photos/keeper.jpg", decision: "" },
-        { file_path: "/photos/peer.jpg", decision: "ignore" },
-      ]),
-      {
-        confirmedLocked: expect.arrayContaining([
-          "/photos/keeper.jpg",
-          "/photos/peer.jpg",
-        ]),
-      }
+      [
+        { file_path: "/photos/keeper.jpg", decision: "", locked: false },
+        { file_path: "/photos/peer.jpg", decision: "ignore", locked: false },
+      ],
+      { confirmedLocked: ["/photos/keeper.jpg"] }
     );
-    expect(client.patchLocks).toHaveBeenCalledWith(
-      "/data/scan.db",
-      expect.arrayContaining([
-        { file_path: "/photos/keeper.jpg", locked: false },
-        { file_path: "/photos/peer.jpg", locked: false },
-      ])
-    );
+    expect(client.patchLocks).not.toHaveBeenCalled();
   });
 
   it("puts the rows back and clears the toast", async () => {
@@ -1460,6 +1451,158 @@ describe("undoKeepBest – restores the snapshot and dismisses the toast", () =>
     seedManifest([makeGroup(1, ["/photos/a.jpg"])]);
     await useAppStore.getState().undoKeepBest();
     expect(client.patchDecisions).not.toHaveBeenCalled();
+  });
+});
+
+describe("undoKeepBest – named confirmation (A7, #999, design 3.3)", () => {
+  async function stage() {
+    seedKeepBestGroup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200(keepBestResponse())
+    );
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+  }
+
+  function lockAfterToast(path: string) {
+    useAppStore.setState((s) => {
+      for (const group of s.manifest.groups) {
+        for (const item of group.items) {
+          if (item.file_path === path) item.is_locked = true;
+        }
+      }
+    });
+  }
+
+  // #999 — the lock the user set AFTER the toast appeared. The old Undo forced
+  // it away silently; A7 refuses the write and asks, and the toast stays up.
+  it("#999: a lock set after the toast gets a 409 naming it, the dialog opens on op undo, the toast stays", async () => {
+    await stage();
+    lockAfterToast("/photos/peer.jpg");
+    vi.mocked(client.patchDecisions).mockRejectedValue(
+      new client.ApiConflictError("locked_paths", ["/photos/peer.jpg"], 2)
+    );
+
+    await useAppStore.getState().undoKeepBest();
+
+    const { toast, execute, manifest } = useAppStore.getState();
+    expect(execute.lockConflict).toEqual(
+      expect.objectContaining({ op: "undo", paths: ["/photos/peer.jpg"] })
+    );
+    expect(toast).not.toBeNull();
+    expect(toast!.undoing).toBe(false);
+    // Nothing was restored locally: the refused write did not happen.
+    expect(manifest.groups[0].items[1].user_decision).toBe("delete");
+    expect(client.patchLocks).not.toHaveBeenCalled();
+  });
+
+  it("sends ONE PATCH whose keeper lock is confirmed, and no separate lock PATCH", async () => {
+    await stage();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().undoKeepBest();
+
+    expect(client.patchDecisions).toHaveBeenCalledTimes(1);
+    expect(client.patchDecisions).toHaveBeenLastCalledWith(
+      "/data/scan.db",
+      [
+        { file_path: "/photos/keeper.jpg", decision: "", locked: false },
+        { file_path: "/photos/peer.jpg", decision: "ignore", locked: false },
+      ],
+      { confirmedLocked: ["/photos/keeper.jpg"] }
+    );
+    expect(client.patchLocks).not.toHaveBeenCalled();
+  });
+
+  it("a toolbar Undo of unlocked rows succeeds: one PATCH, locked:false on unlocked rows is not refused", async () => {
+    seedBulkSelection();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
+
+    await useAppStore.getState().applyBulkDecision("delete");
+    await useAppStore.getState().undoKeepBest();
+
+    expect(client.patchDecisions).toHaveBeenLastCalledWith(
+      "/data/scan.db",
+      [
+        { file_path: "/photos/a.jpg", decision: "", locked: false },
+        { file_path: "/photos/b.jpg", decision: "", locked: false },
+      ],
+      { confirmedLocked: [] }
+    );
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
+  it("D10(a): a keeper already locked BEFORE the action is not named, so Undo asks again", async () => {
+    seedKeepBestGroup();
+    useAppStore.setState((s) => {
+      s.manifest.groups[0].items[0].is_locked = true;
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      ok200(keepBestResponse())
+    );
+    await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
+    // The toast records the keeper as locked before the action: not action-made.
+    const keeper = useAppStore
+      .getState()
+      .toast!.snapshot.find((r) => r.file_path === "/photos/keeper.jpg");
+    expect(keeper!.locked).toBe(true);
+    vi.mocked(client.patchDecisions).mockRejectedValue(
+      new client.ApiConflictError("locked_paths", ["/photos/keeper.jpg"], 2)
+    );
+
+    await useAppStore.getState().undoKeepBest();
+
+    expect(client.patchDecisions).toHaveBeenLastCalledWith(
+      "/data/scan.db",
+      expect.any(Array),
+      { confirmedLocked: [] }
+    );
+    expect(useAppStore.getState().execute.lockConflict).toEqual(
+      expect.objectContaining({ op: "undo", paths: ["/photos/keeper.jpg"] })
+    );
+    expect(useAppStore.getState().toast).not.toBeNull();
+  });
+
+  it("Unlock & Apply re-sends with the dialog's rows added to the action's confirmed set", async () => {
+    await stage();
+    vi.mocked(client.patchDecisions)
+      .mockRejectedValueOnce(
+        new client.ApiConflictError("locked_paths", ["/photos/peer.jpg"], 2)
+      )
+      .mockResolvedValueOnce({ updated: 2 });
+
+    await useAppStore.getState().undoKeepBest();
+    await useAppStore
+      .getState()
+      .undoKeepBest({ confirmedLocked: ["/photos/peer.jpg"] });
+
+    expect(client.patchDecisions).toHaveBeenLastCalledWith(
+      "/data/scan.db",
+      [
+        { file_path: "/photos/keeper.jpg", decision: "", locked: false },
+        { file_path: "/photos/peer.jpg", decision: "ignore", locked: false },
+      ],
+      { confirmedLocked: ["/photos/keeper.jpg", "/photos/peer.jpg"] }
+    );
+    expect(useAppStore.getState().toast).toBeNull();
+  });
+
+  it("Unlocked only undoes the rest and leaves the excluded row exactly as it was", async () => {
+    await stage();
+    vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 1 });
+
+    await useAppStore
+      .getState()
+      .undoKeepBest({ excludePaths: ["/photos/peer.jpg"] });
+
+    expect(client.patchDecisions).toHaveBeenLastCalledWith(
+      "/data/scan.db",
+      [{ file_path: "/photos/keeper.jpg", decision: "", locked: false }],
+      { confirmedLocked: ["/photos/keeper.jpg"] }
+    );
+    const items = useAppStore.getState().manifest.groups[0].items;
+    expect(items[0].is_locked).toBe(false);
+    expect(items[1].user_decision).toBe("delete");
+    expect(useAppStore.getState().toast).toBeNull();
   });
 });
 
