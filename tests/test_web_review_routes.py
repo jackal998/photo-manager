@@ -103,6 +103,19 @@ def _read_field(manifest: Path, field: str) -> dict[str, object]:
     return dict(rows)
 
 
+def _set_locked(manifest: Path, source_path: str) -> None:
+    """Lock one row directly, to model a lock set after the dialog opened."""
+    conn = sqlite3.connect(str(manifest))
+    try:
+        conn.execute(
+            "UPDATE migration_manifest SET is_locked = 1 WHERE source_path = ?",
+            (source_path,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _make_real_file_manifest(tmp_path: Path) -> tuple[Path, Path, Path]:
     """Create two real JPEG files in a sub-directory and a manifest pointing to them.
 
@@ -310,17 +323,79 @@ class TestPatchDecisionLockedRowGate:
         # DB must be UNCHANGED.
         assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == ""
 
-    def test_force_locked_applies_decision_and_unlocks(self, client, tmp_path):
+    def test_confirmed_locked_applies_decision_and_unlocks(self, client, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/ref.jpg", "decision": "delete"}],
+            "confirmed_locked": ["/photos/ref.jpg"],
+        })
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["updated"] == 1
+        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == "delete"
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 0
+
+    def test_force_locked_alone_never_writes_a_locked_row(self, client, tmp_path):
+        """DecisionUpdate no longer offers force_locked. Pydantic ignores the
+        unknown field, so the request runs unforced: 409, nothing written."""
         manifest = _make_pair_with_lock(tmp_path)
         resp = client.patch("/api/decision", json={
             "manifest_path": str(manifest),
             "decisions": [{"file_path": "/photos/ref.jpg", "decision": "delete"}],
             "force_locked": True,
         })
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["locked_paths"] == ["/photos/ref.jpg"]
+        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == ""
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 1
+
+    def test_row_locked_after_the_dialog_gets_a_second_409(self, client, tmp_path):
+        """D7 / B-2: the dialog named ref.jpg. dup.jpg was locked after the
+        dialog opened, so it is not named and answers a second 409 for itself
+        only. Nothing is written, not even the named row."""
+        manifest = _make_pair_with_lock(tmp_path)
+        _set_locked(manifest, "/photos/dup.jpg")
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [
+                {"file_path": "/photos/ref.jpg", "decision": "delete"},
+                {"file_path": "/photos/dup.jpg", "decision": "delete"},
+            ],
+            "confirmed_locked": ["/photos/ref.jpg"],
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "locked_paths"
+        assert detail["locked_paths"] == ["/photos/dup.jpg"]
+        assert _read_field(manifest, "user_decision") == {
+            "/photos/ref.jpg": "", "/photos/dup.jpg": "",
+        }
+        assert _read_field(manifest, "is_locked") == {
+            "/photos/ref.jpg": 1, "/photos/dup.jpg": 1,
+        }
+
+    def test_confirmed_locked_and_skip_locked_is_422(self, client, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/ref.jpg", "decision": "delete"}],
+            "confirmed_locked": ["/photos/ref.jpg"],
+            "skip_locked": True,
+        })
+        assert resp.status_code == 422, resp.text
+        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == ""
+
+    def test_confirmed_locked_naming_an_unlocked_row_is_harmless(self, client, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/dup.jpg", "decision": "delete"}],
+            "confirmed_locked": ["/photos/dup.jpg"],
+        })
         assert resp.status_code == 200, resp.text
         assert resp.json()["updated"] == 1
-        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == "delete"
-        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 0
+        assert _read_field(manifest, "user_decision")["/photos/dup.jpg"] == "delete"
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 1
 
     def test_skip_locked_writes_unlocked_only(self, client, tmp_path):
         manifest = _make_pair_with_lock(tmp_path)
