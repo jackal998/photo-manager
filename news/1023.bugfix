@@ -1,0 +1,1 @@
+Lock confirmation names rows by list on bulk decide, apply best copy, execute, remove, restore and prune, so a row locked after the dialog opened is confirmed again (#1023)
