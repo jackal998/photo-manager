@@ -8,8 +8,8 @@
 //             "execute", "remove", "prune", "decision", or "apply-best-copy".
 //
 // Three outcomes:
-//   Unlock & Apply  → re-run the original op with forceLocked:true
-//                     (op "decision" names its rows: confirmedLocked, A6)
+//   Unlock & Apply  → re-run the original op naming the rows this dialog
+//                     showed (confirmedLocked, A6/A8; never a boolean force)
 //   Unlocked Only   → re-run the original op with the locked paths excluded
 //   Cancel          → clear lockConflict, do nothing
 //   op "undo" (A7, #999): Unlock & Apply → undoKeepBest({confirmedLocked}),
@@ -144,7 +144,9 @@ export function LockConfirmDialog() {
     const groupNumber = lockConflict?.groupNumber;
     clearConflict();
     if (op === "execute") {
-      void executeDecisions({ scopePaths: original, forceLocked: true });
+      // A8: name the rows this dialog showed. A row locked after it opened is
+      // not named, so the server answers a second 409 for it alone.
+      void executeDecisions({ scopePaths: original, confirmedLocked: lockedPaths });
     } else if (op === "decision") {
       // A6: name the rows this dialog showed. A row locked after it opened is
       // not in lockedPaths, so the server answers a second 409 for it alone.
@@ -153,12 +155,12 @@ export function LockConfirmDialog() {
       });
     } else if (op === "apply-best-copy") {
       if (groupNumber !== undefined) {
-        void applyBestCopy(groupNumber, { forceLocked: true });
+        void applyBestCopy(groupNumber, { confirmedLocked: lockedPaths });
       }
     } else if (op === "restore") {
-      void restoreToReview(original, { forceLocked: true });
+      void restoreToReview(original, { confirmedLocked: lockedPaths });
     } else {
-      void removeFromList(original, true);
+      void removeFromList(original, lockedPaths);
     }
   }
 
@@ -203,7 +205,7 @@ export function LockConfirmDialog() {
       void restoreToReview(unlockedPaths);
     } else {
       // Re-run remove with only the unlocked subset.
-      void removeFromList(unlockedPaths, false);
+      void removeFromList(unlockedPaths);
     }
   }
 

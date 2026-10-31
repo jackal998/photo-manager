@@ -34,6 +34,23 @@ from scanner.manifest import _DDL as _MANIFEST_DDL
 # ---------------------------------------------------------------------------
 
 
+def _locked_paths(manifest: Path) -> list[str]:
+    """Every locked source_path in the manifest: the names a confirmation sends.
+
+    The unlock-mechanics tests below confirm all locked rows by name, which is
+    what the old boolean force did; the naming contract itself is pinned in
+    test_web_action_routes.py and test_web_execute_routes.py (A8).
+    """
+    conn = sqlite3.connect(str(manifest))
+    try:
+        rows = conn.execute(
+            "SELECT source_path FROM migration_manifest WHERE is_locked = 1"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+
+
 def _make_manifest(tmp_path: Path, rows: list[dict]) -> Path:
     manifest = tmp_path / "manifest.sqlite"
     conn = sqlite3.connect(str(manifest))
@@ -185,7 +202,7 @@ class TestExecuteDecisions:
         ])
 
         with pytest.raises(ValueError) as exc_info:
-            execute_decisions(str(manifest), recycle=False, force_locked=False)
+            execute_decisions(str(manifest), recycle=False, confirmed_locked=())
 
         args = exc_info.value.args
         assert args[0] == "locked_paths"
@@ -194,8 +211,8 @@ class TestExecuteDecisions:
         assert f1.exists()
         assert f2.exists()
 
-    def test_force_locked_unlocks_and_deletes(self, tmp_path):
-        """force_locked=True clears is_locked and deletes the file."""
+    def test_named_lock_unlocks_and_deletes(self, tmp_path):
+        """Naming the locked row clears is_locked and deletes the file."""
         files = _make_real_files(tmp_path, 2)
         f1, f2 = files
 
@@ -220,7 +237,7 @@ class TestExecuteDecisions:
             },
         ])
 
-        result = execute_decisions(str(manifest), recycle=False, force_locked=True)
+        result = execute_decisions(str(manifest), recycle=False, confirmed_locked=_locked_paths(manifest))
 
         assert str(f1) in result["success_paths"]
         assert str(f2) in result["success_paths"]
@@ -415,13 +432,13 @@ class TestExecuteLockedSkipRows:
         assert _read_col(manifest, str(f1), "is_locked") == 1
 
     @pytest.mark.parametrize("scope", [None, "both"], ids=["all_scope", "selected_scope"])
-    def test_force_locked_skip_row_unlocks_and_finalises_ignored(self, tmp_path, scope):
-        """force_locked → the locked Skip row is unlocked and finalised ignored."""
+    def test_named_lock_skip_row_unlocks_and_finalises_ignored(self, tmp_path, scope):
+        """A named locked Skip row is unlocked and finalised ignored."""
         manifest, f1, f2 = self._locked_skip_and_free_skip(tmp_path)
         scope_paths = None if scope is None else [str(f1), str(f2)]
 
         result = execute_decisions(
-            str(manifest), scope_paths=scope_paths, recycle=False, force_locked=True
+            str(manifest), scope_paths=scope_paths, recycle=False, confirmed_locked=_locked_paths(manifest)
         )
 
         assert set(result["ignored"]) == {str(f1), str(f2)}
@@ -445,8 +462,8 @@ class TestLockedRowUnlockOnlyWhenApplied:
     keeps its lock and stays in review.
     """
 
-    @pytest.mark.parametrize("force", [False, True], ids=["no_force", "force_locked"])
-    def test_locked_delete_outside_roots_is_not_gated_and_keeps_lock(self, tmp_path, force):
+    @pytest.mark.parametrize("confirm", [False, True], ids=["no_confirm", "confirmed"])
+    def test_locked_delete_outside_roots_is_not_gated_and_keeps_lock(self, tmp_path, confirm):
         manifest_dir = tmp_path / "allowed"
         manifest_dir.mkdir()
         outside_dir = tmp_path / "outside"
@@ -477,10 +494,11 @@ class TestLockedRowUnlockOnlyWhenApplied:
             },
         ])
 
-        # No 409 for the out-of-root locked row, with or without force_locked
+        # No 409 for the out-of-root locked row, with or without a confirmation
         # (the in-root row is unlocked, so the gate has nothing to block).
         result = execute_decisions(
-            str(manifest), recycle=False, force_locked=force,
+            str(manifest), recycle=False,
+            confirmed_locked=_locked_paths(manifest) if confirm else (),
             allowed_roots=[str(manifest_dir)],
         )
 
@@ -523,7 +541,7 @@ class TestLockedRowUnlockOnlyWhenApplied:
         ])
 
         result = execute_decisions(
-            str(manifest), recycle=False, force_locked=True,
+            str(manifest), recycle=False, confirmed_locked=_locked_paths(manifest),
             allowed_roots=[str(manifest_dir)],
         )
 
@@ -561,7 +579,7 @@ class TestLockedRowUnlockOnlyWhenApplied:
 
         with patch("infrastructure.delete_service.send2trash", side_effect=_trash):
             result = execute_decisions(
-                str(manifest), recycle=True, force_locked=True,
+                str(manifest), recycle=True, confirmed_locked=_locked_paths(manifest),
             )
 
         failed = {p: r for p, r in result["failed"]}
@@ -600,7 +618,7 @@ class TestLockedRowUnlockOnlyWhenApplied:
             "transition",
             side_effect=sqlite3.OperationalError("database is locked"),
         ):
-            result = execute_decisions(str(manifest), recycle=False, force_locked=True)
+            result = execute_decisions(str(manifest), recycle=False, confirmed_locked=_locked_paths(manifest))
 
         failed = {p for p, _ in result["failed"]}
         assert {str(f_skip), str(f_other)} <= failed
@@ -632,7 +650,7 @@ class TestLockedRowUnlockOnlyWhenApplied:
         ])
         f_gone.unlink()
 
-        result = execute_decisions(str(manifest), recycle=False, force_locked=True)
+        result = execute_decisions(str(manifest), recycle=False, confirmed_locked=_locked_paths(manifest))
 
         assert str(f_gone) in result["missing"]
         assert _read_col(manifest, str(f_gone), "is_locked") == 1
@@ -763,7 +781,7 @@ class TestRemoveFromReview:
         ])
 
         with pytest.raises(ValueError) as exc_info:
-            remove_from_review(str(manifest), [str(f1), str(f2)], force_locked=False)
+            remove_from_review(str(manifest), [str(f1), str(f2)], confirmed_locked=())
 
         assert exc_info.value.args[0] == "locked_paths"
 
@@ -811,7 +829,7 @@ class TestRemoveFromReview:
         ])
 
         result = remove_from_review(
-            str(manifest), [str(f)], force_locked=True, allowed_roots=[str(tmp_path)],
+            str(manifest), [str(f)], confirmed_locked=_locked_paths(manifest), allowed_roots=[str(tmp_path)],
         )
 
         assert result["removed"] == 0
@@ -959,11 +977,11 @@ class TestRestoreToReview:
         assert _read_col(manifest, str(f0), "outcome") == "ignored"
         assert _read_col(manifest, str(f1), "outcome") == "ignored"
 
-    def test_force_locked_unlocks_and_restores_in_one_write(self, tmp_path):
+    def test_named_lock_unlocks_and_restores_in_one_write(self, tmp_path):
         manifest, (f0, f1) = self._locked_skipped_manifest(tmp_path)
 
         result = restore_to_review(
-            str(manifest), [str(f0), str(f1)], force_locked=True
+            str(manifest), [str(f0), str(f1)], confirmed_locked=_locked_paths(manifest)
         )
 
         assert result["restored"] == 2
@@ -1183,9 +1201,9 @@ class TestPruneSingletons:
 
 
 class TestPruneSingletonsLockGate:
-    """#983: prune joins the lock flow. A locked singleton in scope without
-    force_locked refuses the whole call (nothing written); with force_locked
-    each locked singleton is ignored AND unlocked in the same write."""
+    """#983: prune joins the lock flow. A locked singleton in scope not named in
+    confirmed_locked refuses the whole call (nothing written); when named, each
+    such singleton is ignored AND unlocked in the same write."""
 
     def _two_singletons(self, tmp_path: Path, lock_f1: bool, lock_f3: bool):
         f1, f2, f3, f4 = _make_real_files(tmp_path, 4)
@@ -1222,17 +1240,17 @@ class TestPruneSingletonsLockGate:
         assert _read_col(manifest, str(f1), "outcome") == ""  # unlocked one NOT pruned
         assert _read_col(manifest, str(f3), "is_locked") == 1
 
-    def test_force_locked_prunes_and_unlocks_in_same_write(self, tmp_path):
+    def test_named_lock_prunes_and_unlocks_in_same_write(self, tmp_path):
         manifest, f1, _ = self._two_singletons(tmp_path, lock_f1=True, lock_f3=False)
-        result = prune_singletons(str(manifest), paths=[str(f1)], force_locked=True)
+        result = prune_singletons(str(manifest), paths=[str(f1)], confirmed_locked=_locked_paths(manifest))
         assert result["pruned"] == [str(f1)]
         assert _read_col(manifest, str(f1), "outcome") == "ignored"
         assert _read_col(manifest, str(f1), "is_locked") == 0
 
-    def test_force_locked_mixed_scope_prunes_both(self, tmp_path):
+    def test_named_lock_mixed_scope_prunes_both(self, tmp_path):
         manifest, f1, f3 = self._two_singletons(tmp_path, lock_f1=False, lock_f3=True)
         result = prune_singletons(
-            str(manifest), paths=[str(f1), str(f3)], force_locked=True
+            str(manifest), paths=[str(f1), str(f3)], confirmed_locked=_locked_paths(manifest)
         )
         assert sorted(result["pruned"]) == sorted([str(f1), str(f3)])
         assert _read_col(manifest, str(f3), "outcome") == "ignored"
@@ -1250,7 +1268,7 @@ class TestPruneSingletonsLockGate:
             ManifestTxn, "transition", side_effect=OSError("disk")
         ):
             with pytest.raises(OSError):
-                prune_singletons(str(manifest), paths=[str(f1)], force_locked=True)
+                prune_singletons(str(manifest), paths=[str(f1)], confirmed_locked=_locked_paths(manifest))
         assert _read_col(manifest, str(f1), "is_locked") == 1
         assert _read_col(manifest, str(f1), "outcome") == ""
 
@@ -1635,7 +1653,7 @@ class TestExecuteRecycleLockedRow:
             os.unlink(path)
 
         with patch("infrastructure.delete_service.send2trash", side_effect=_trash):
-            result = execute_decisions(str(manifest), recycle=True, force_locked=True)
+            result = execute_decisions(str(manifest), recycle=True, confirmed_locked=_locked_paths(manifest))
 
         assert str(f1) in result["success_paths"]
         assert not f1.exists()
@@ -1710,7 +1728,7 @@ class TestRemoveFromReviewLockedRows:
 
         result = remove_from_review(
             str(manifest), [str(outside_file)],
-            force_locked=True, allowed_roots=[str(manifest_dir)],
+            confirmed_locked=_locked_paths(manifest), allowed_roots=[str(manifest_dir)],
         )
 
         assert result["removed"] == 0
@@ -1733,7 +1751,7 @@ class TestRemoveFromReviewLockedRows:
         ])
 
         result = remove_from_review(
-            str(manifest), [str(f)], force_locked=True, allowed_roots=[str(tmp_path)],
+            str(manifest), [str(f)], confirmed_locked=_locked_paths(manifest), allowed_roots=[str(tmp_path)],
         )
 
         assert result["removed"] == 1
@@ -1763,7 +1781,7 @@ class TestRemoveFromReviewLockedRows:
             with pytest.raises(sqlite3.OperationalError):
                 remove_from_review(
                     str(manifest), [str(f)],
-                    force_locked=True, allowed_roots=[str(tmp_path)],
+                    confirmed_locked=_locked_paths(manifest), allowed_roots=[str(tmp_path)],
                 )
 
         assert _read_col(manifest, str(f), "is_locked") == 1

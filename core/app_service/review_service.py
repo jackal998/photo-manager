@@ -12,12 +12,7 @@ from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
-from core.app_service.lock_gate import (
-    LockFlagsConflictError,
-    LockVerdict,
-    apply_gated_writes,
-    verdict_from_flags,
-)
+from core.app_service.lock_gate import apply_gated_writes, verdict_from_named
 from infrastructure.manifest_repository import DecisionWrite, ManifestRepository
 from infrastructure.settings import load_settings
 from app.viewmodels.main_vm import MainVM
@@ -166,7 +161,7 @@ def set_decisions(
     # The lock gate runs inside one IMMEDIATE transaction: the locked set is
     # read from the same connection that writes, and the primitive refuses
     # any unconfirmed locked row (hidden rows included, B-5). No load() here.
-    verdict, named = _decision_verdict(confirmed_locked, skip_locked)
+    verdict, named = verdict_from_named(confirmed_locked, skip_locked)
     locks = lock_after or {}
     writes = [
         DecisionWrite(path=p, decision=v, lock_after=locks.get(p))
@@ -174,20 +169,6 @@ def set_decisions(
     ]
     with ManifestRepository().write_txn(manifest_path) as tx:
         return len(apply_gated_writes(tx, writes, verdict, named=named))
-
-
-def _decision_verdict(
-    confirmed_locked: Collection[str], skip_locked: bool
-) -> tuple[LockVerdict, list[str] | None]:
-    """Map the decision request to a verdict; a non-empty list means FORCE (A6)."""
-    named = list(confirmed_locked)
-    if named and skip_locked:
-        raise LockFlagsConflictError(
-            "confirmed_locked and skip_locked are mutually exclusive"
-        )
-    if named:
-        return LockVerdict.FORCE, named
-    return verdict_from_flags(False, skip_locked), None
 
 
 def set_locks(manifest_path: str, locks: dict[str, bool]) -> int:

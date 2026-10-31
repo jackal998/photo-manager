@@ -39,10 +39,9 @@ class LockedRowsError(ValueError):
 
 
 class LockFlagsConflictError(ValueError):
-    """``force_locked`` and ``skip_locked`` were both set (B-6).
+    """``confirmed_locked`` and ``skip_locked`` were both set (B-6).
 
-    Plain ``ValueError`` for every verb; the review route maps it to 422 like
-    the action and execute routes already do.
+    Plain ``ValueError`` for every verb; the routes map it to 422.
     """
 
 
@@ -52,17 +51,26 @@ class LockVerdict(Enum):
     SKIP = "skip"    # drop the locked rows from the write
 
 
-def verdict_from_flags(force_locked: bool, skip_locked: bool) -> LockVerdict:
-    """Map the two request flags to one verdict; both set is refused for every verb."""
-    if force_locked and skip_locked:
+def verdict_from_named(
+    confirmed_locked: Collection[str], skip_locked: bool
+) -> tuple[LockVerdict, list[str] | None]:
+    """Map a request's named confirmation to one verdict (A6, A8).
+
+    A non-empty ``confirmed_locked`` is FORCE with those paths as the named
+    set; nothing is confirmed by a boolean. Naming and ``skip_locked`` together
+    is refused for every verb (B-6). Returns ``(verdict, named)``, where
+    ``named`` is None unless the verdict is FORCE.
+    """
+    named = list(confirmed_locked)
+    if named and skip_locked:
         raise LockFlagsConflictError(
-            "force_locked and skip_locked are mutually exclusive"
+            "confirmed_locked and skip_locked are mutually exclusive"
         )
-    if force_locked:
-        return LockVerdict.FORCE
+    if named:
+        return LockVerdict.FORCE, named
     if skip_locked:
-        return LockVerdict.SKIP
-    return LockVerdict.ASK
+        return LockVerdict.SKIP, None
+    return LockVerdict.ASK, None
 
 
 def plan_locked_write(
@@ -76,7 +84,7 @@ def plan_locked_write(
     """Return ``(paths to write, confirmed locked paths)``. It does NOT refuse.
 
     ASK   -> (scope, {})                          the primitive refuses any locked path
-    FORCE -> (scope, named or locked_now & scope) a boolean force confirms what it finds
+    FORCE -> (scope, named)                       only the NAMED locked paths are confirmed
     SKIP  -> (scope - locked_now, {})             only where ``skip_allowed``
     """
     scope_list = list(scope)
@@ -86,8 +94,7 @@ def plan_locked_write(
             raise ValueError("skip_locked is not allowed for this write")
         return [p for p in scope_list if p not in locked_in_scope], frozenset()
     if verdict is LockVerdict.FORCE:
-        confirmed = frozenset(named) if named is not None else locked_in_scope
-        return scope_list, confirmed
+        return scope_list, frozenset(named or ())
     return scope_list, frozenset()
 
 
@@ -119,7 +126,11 @@ def apply_gated_writes(
 
 
 def _confirmed_for(
-    tx: ManifestTxn, paths: list[str], verdict: LockVerdict, outcome: str
+    tx: ManifestTxn,
+    paths: list[str],
+    verdict: LockVerdict,
+    outcome: str,
+    named: Collection[str] | None,
 ) -> frozenset[str]:
     """The locked paths the verdict confirms, read inside the open transaction."""
     _, confirmed = plan_locked_write(
@@ -127,12 +138,18 @@ def _confirmed_for(
         tx.locked_paths(outcome=outcome),
         verdict,
         skip_allowed=False,
+        named=named,
     )
     return confirmed
 
 
 def refuse_gated_outcome(
-    tx: ManifestTxn, paths: Iterable[str], verdict: LockVerdict, *, outcome: str
+    tx: ManifestTxn,
+    paths: Iterable[str],
+    verdict: LockVerdict,
+    *,
+    outcome: str,
+    named: Collection[str] | None = None,
 ) -> None:
     """Refuse locked rows in ``outcome`` that the verdict does not confirm (A4).
 
@@ -140,7 +157,7 @@ def refuse_gated_outcome(
     reads the locks itself, so a stale plan cannot switch the refusal off.
     """
     scope = list(paths)
-    confirmed = _confirmed_for(tx, scope, verdict, outcome)
+    confirmed = _confirmed_for(tx, scope, verdict, outcome, named)
     tx.refuse_unconfirmed(scope, confirmed, outcome=outcome)
 
 
@@ -152,15 +169,17 @@ def apply_gated_transition(
     from_outcome: str,
     to_outcome: str,
     lock_after: bool = False,
+    named: Collection[str] | None = None,
 ) -> int:
     """Plan inside the open transaction, then transition. Returns rows changed.
 
     Outcome writes have no SKIP here: a verb that skips locked rows narrows
     its scope before calling this. ``transition`` refuses what the verdict
-    does not confirm (A4, design 2.2).
+    does not confirm (A4, design 2.2); under FORCE only the ``named`` rows
+    are confirmed (A8).
     """
     scope = list(paths)
-    confirmed = _confirmed_for(tx, scope, verdict, from_outcome)
+    confirmed = _confirmed_for(tx, scope, verdict, from_outcome, named)
     return tx.transition(
         scope,
         from_outcome=from_outcome,

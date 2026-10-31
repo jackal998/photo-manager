@@ -477,10 +477,10 @@ describe("ActionDialog", () => {
 
   // 14. 409 locked_paths shows lock confirm overlay AND retries with force.
   // The first apply rejects with the conflict; the retry (default mock)
-  // resolves — proving the whole 409 → Unlock & Apply → force_locked path,
+  // resolves — proving the whole 409 → Unlock & Apply → confirmed_locked path,
   // not just that the overlay appears (adversarial-review: the old test only
-  // asserted the overlay, never the force retry).
-  it("409 locked_paths surfaces the overlay and Unlock & Apply retries with force", async () => {
+  // asserted the overlay, never the named retry).
+  it("409 locked_paths surfaces the overlay and Unlock & Apply retries naming the rows", async () => {
     const user = userEvent.setup();
     const conflictError = new ApiConflictError("locked_paths", ["/photos/a.jpg"]);
     applyMock.mockRejectedValueOnce(conflictError);
@@ -505,10 +505,10 @@ describe("ActionDialog", () => {
     // First attempt was unforced.
     expect(applyMock).toHaveBeenCalledWith({});
 
-    // Click Unlock & Apply → retry WITH forceLocked=true.
+    // Click Unlock & Apply → retry naming the row the dialog showed (A8).
     await user.click(unlockBtn);
     await waitFor(() => {
-      expect(applyMock).toHaveBeenCalledWith({ forceLocked: true });
+      expect(applyMock).toHaveBeenCalledWith({ confirmedLocked: ["/photos/a.jpg"] });
     });
   });
 

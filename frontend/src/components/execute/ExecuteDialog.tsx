@@ -188,7 +188,7 @@ export function ExecuteDialog() {
     string[] | null
   >(null);
   // Pending execute opts queued while the delete-confirm dialog is open.
-  const pendingExecOptsRef = useRef<{ scopePaths?: string[]; forceLocked?: boolean } | null>(null);
+  const pendingExecOptsRef = useRef<{ scopePaths?: string[]; confirmedLocked?: string[] } | null>(null);
 
   const treeRef = useRef<ExecuteTreeHandle>(null);
 

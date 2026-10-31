@@ -792,7 +792,7 @@ ACTION_LOCK_CONFIRM_DIALOG = "action-lock-confirm-dialog"
 """Wrapper for the ActionDialog inline lock-conflict dialog (bulk-decide 409)."""
 
 ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY = "action-lock-confirm-btn-unlock-apply"
-"""'Unlock & Apply' — re-POST bulk-decide with force_locked=true."""
+"""'Unlock & Apply' — re-POST bulk-decide naming the locked rows in confirmed_locked."""
 
 ACTION_LOCK_CONFIRM_BTN_UNLOCKED_ONLY = "action-lock-confirm-btn-unlocked-only"
 """'Apply to Unlocked Only' — re-POST bulk-decide with skip_locked=true.

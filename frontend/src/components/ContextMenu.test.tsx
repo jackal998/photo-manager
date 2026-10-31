@@ -6,7 +6,7 @@
 //   3. Lock/Unlock item shown conditionally based on isLocked prop.
 //   4. Clicking Keep calls store.setDecisions(targetPaths, "") and onClose.
 //   5. Clicking Delete calls store.setDecisions(targetPaths, "delete") and onClose.
-//   6. Clicking Remove calls store.removeFromList(targetPaths, false,
+//   6. Clicking Remove calls store.removeFromList(targetPaths, [],
 //      { undoable: true }) and onClose (#694 finalize — NOT a staged
 //      setDecisions(..., "ignore"); #909 — `undoable` raises the undo toast).
 //   7. Clicking Lock calls store.setLocks(targetPaths, true) and onClose.
@@ -157,7 +157,7 @@ describe("ContextMenu", () => {
     // it must NOT stage a 'ignore' decision. So removeFromList fires and
     // setDecisions must NOT be called. #909: flagged `undoable`, so the skip
     // raises the undo toast — the Execute dialog's confirmed Skip does not.
-    expect(removeFromListMock).toHaveBeenCalledWith([FILE_PATH], false, {
+    expect(removeFromListMock).toHaveBeenCalledWith([FILE_PATH], [], {
       undoable: true,
     });
     expect(setDecisionsMock).not.toHaveBeenCalled();
@@ -229,7 +229,7 @@ describe("ContextMenu", () => {
     const many = ["/a.jpg", "/b.jpg", "/c.jpg"];
     const { onClose } = renderMenu(false, many);
     await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
-    expect(removeFromListMock).toHaveBeenCalledWith(many, false, {
+    expect(removeFromListMock).toHaveBeenCalledWith(many, [], {
       undoable: true,
     });
     expect(onClose).toHaveBeenCalledOnce();
@@ -341,7 +341,7 @@ describe("ContextMenu", () => {
       const user = userEvent.setup();
       const { onClose } = renderMenu(false, GROUP_PATHS, { variant: "group" });
       await user.click(screen.getByTestId(CTX_SET_ACTION_REMOVE));
-      expect(removeFromListMock).toHaveBeenCalledWith(GROUP_PATHS, false, {
+      expect(removeFromListMock).toHaveBeenCalledWith(GROUP_PATHS, [], {
         undoable: true,
       });
       expect(setDecisionsMock).not.toHaveBeenCalled();

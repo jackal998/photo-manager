@@ -5,18 +5,19 @@
 //   2. Rendered with correct testid when lockConflict is set.
 //   3. All three button testids present when open.
 //   4. Cancel clears lockConflict and does NOT call execute/remove.
-//   5. Unlock & Apply (execute op) re-runs the ORIGINAL scope with forceLocked
-//      (must NOT broaden to the whole manifest — over-deletion guard).
-//   6. Unlock & Apply (remove op) removes the full ORIGINAL list with force
-//      (must NOT narrow to just the locked subset — under-action guard).
-//   7. Unlocked Only (execute op) calls executeDecisions({forceLocked:false}).
-//   8. Unlocked Only (remove op) calls removeFromList([], false).
+//   5. Unlock & Apply (execute op) re-runs the ORIGINAL scope, naming the locked
+//      rows it showed (confirmedLocked; must NOT broaden to the whole manifest —
+//      over-deletion guard).
+//   6. Unlock & Apply (remove op) removes the full ORIGINAL list, naming the
+//      locked rows (must NOT narrow to just the locked subset — under-action guard).
+//   7. Unlocked Only (execute op) calls executeDecisions({scopePaths}) with no name.
+//   8. Unlocked Only (remove op) calls removeFromList(unlockedPaths).
 //   9. Body text is context-sensitive (IMMEDIATE for execute, DEFERRED for remove).
 //  10. Locked path list is rendered.
 //  11. op="decision" (#733): Unlock & Apply / Unlocked Only re-run setDecisions
 //      with the pending decision; Unlock & Apply is NOT the destructive variant.
 //  12. op="apply-best-copy" (#744): Unlock & Apply / Unlocked Only re-run
-//      applyBestCopy(groupNumber, {forceLocked|skipLocked}); NOT destructive.
+//      applyBestCopy(groupNumber, {confirmedLocked|skipLocked}); NOT destructive.
 
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -127,7 +128,7 @@ describe("LockConfirmDialog", () => {
     expect(removeFromListMock).not.toHaveBeenCalled();
   });
 
-  it("Unlock & Apply (execute) re-runs the ORIGINAL scope with force, not the whole manifest", async () => {
+  it("Unlock & Apply (execute) re-runs the ORIGINAL scope naming the locked rows, not the whole manifest", async () => {
     const user = userEvent.setup();
     // Simulate a SCOPED execute ("Execute selected"): the conflict's original
     // scope is a subset of the manifest. Re-running unscoped would delete files
@@ -139,12 +140,12 @@ describe("LockConfirmDialog", () => {
     await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
     expect(executeDecisionsMock).toHaveBeenCalledWith({
       scopePaths: originalPaths,
-      forceLocked: true,
+      confirmedLocked: lockedPaths,
     });
     expect(removeFromListMock).not.toHaveBeenCalled();
   });
 
-  it("Unlock & Apply (remove) removes the full ORIGINAL list with force, not just the locked subset", async () => {
+  it("Unlock & Apply (remove) removes the full ORIGINAL list naming the locked rows, not just the locked subset", async () => {
     const user = userEvent.setup();
     const lockedPaths = ["/photos/locked.jpg"];
     const originalPaths = ["/photos/ok.jpg", "/photos/locked.jpg"];
@@ -153,7 +154,7 @@ describe("LockConfirmDialog", () => {
     await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
     // Removes the FULL original list (force-unlocking the locked one), so the
     // user's unlocked files are not silently dropped from the operation.
-    expect(removeFromListMock).toHaveBeenCalledWith(originalPaths, true);
+    expect(removeFromListMock).toHaveBeenCalledWith(originalPaths, lockedPaths);
     expect(executeDecisionsMock).not.toHaveBeenCalled();
   });
 
@@ -179,7 +180,7 @@ describe("LockConfirmDialog", () => {
     render(<LockConfirmDialog />);
     await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCKED_ONLY));
     // Must pass only the non-locked paths so removeFromList removes them.
-    expect(removeFromListMock).toHaveBeenCalledWith(["/photos/ok.jpg"], false);
+    expect(removeFromListMock).toHaveBeenCalledWith(["/photos/ok.jpg"]);
     expect(executeDecisionsMock).not.toHaveBeenCalled();
   });
 
@@ -348,7 +349,7 @@ describe("LockConfirmDialog", () => {
   // #744 — op="apply-best-copy" (POST /api/action/apply-best-copy 409 locked_paths)
   // ---------------------------------------------------------------------------
 
-  it("Unlock & Apply (apply-best-copy) re-runs applyBestCopy(groupNumber, {forceLocked:true})", async () => {
+  it("Unlock & Apply (apply-best-copy) re-runs applyBestCopy(groupNumber, {confirmedLocked})", async () => {
     const user = userEvent.setup();
     seedLockConflict(
       "apply-best-copy",
@@ -359,7 +360,7 @@ describe("LockConfirmDialog", () => {
     );
     render(<LockConfirmDialog />);
     await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
-    expect(applyBestCopyMock).toHaveBeenCalledWith(3, { forceLocked: true });
+    expect(applyBestCopyMock).toHaveBeenCalledWith(3, { confirmedLocked: ["/photos/peer.jpg"] });
     expect(executeDecisionsMock).not.toHaveBeenCalled();
     expect(removeFromListMock).not.toHaveBeenCalled();
     expect(setDecisionsMock).not.toHaveBeenCalled();
@@ -495,7 +496,7 @@ describe("LockConfirmDialog — Execute copy by locked-row fate (#972)", () => {
     ).toBeInTheDocument();
   });
 
-  it("Unlock & Apply still re-runs the original scope with forceLocked for Skip-only", async () => {
+  it("Unlock & Apply still re-runs the original scope, naming the locked row, for Skip-only", async () => {
     const executeDecisionsMock = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ executeDecisions: executeDecisionsMock } as never);
     seedGroupDecisions({ "/a.jpg": "ignore" });
@@ -504,7 +505,7 @@ describe("LockConfirmDialog — Execute copy by locked-row fate (#972)", () => {
     await userEvent.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
     expect(executeDecisionsMock).toHaveBeenCalledWith({
       scopePaths: ["/a.jpg", "/z.jpg"],
-      forceLocked: true,
+      confirmedLocked: ["/a.jpg"],
     });
   });
 });
@@ -560,14 +561,14 @@ describe("LockConfirmDialog — op restore (#981)", () => {
     ).toBeInTheDocument();
   });
 
-  it("Unlock & Apply (restore) re-runs restoreToReview over the ORIGINAL list with forceLocked:true", async () => {
+  it("Unlock & Apply (restore) re-runs restoreToReview over the ORIGINAL list naming the locked rows", async () => {
     const user = userEvent.setup();
     const lockedPaths = ["/photos/locked.jpg"];
     const originalPaths = ["/photos/ok.jpg", "/photos/locked.jpg"];
     seedLockConflict("restore", lockedPaths, originalPaths);
     render(<LockConfirmDialog />);
     await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
-    expect(restoreMock).toHaveBeenCalledWith(originalPaths, { forceLocked: true });
+    expect(restoreMock).toHaveBeenCalledWith(originalPaths, { confirmedLocked: lockedPaths });
     expect(executeDecisionsMock).not.toHaveBeenCalled();
     expect(removeFromListMock).not.toHaveBeenCalled();
     expect(useAppStore.getState().execute.lockConflict).toBeNull();

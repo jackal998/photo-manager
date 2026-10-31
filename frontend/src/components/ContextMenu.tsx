@@ -166,7 +166,7 @@ export function ContextMenu({
     // `web.decision_long.remove_from_list` (review round 2): the row control
     // stages and is reversible until Execute, this finalizes on the spot, and
     // one word for both would make them read identically.
-    void removeFromList(targetPaths, false, { undoable: true });
+    void removeFromList(targetPaths, [], { undoable: true });
     onClose();
   }
 
