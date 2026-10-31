@@ -540,7 +540,7 @@ class TestBulkDecideRootFilter:
 
 
 class TestBulkDecideLockedRowGate:
-    """Decision on locked rows with force_locked=False → 409; True → 200 + applied."""
+    """Decision on locked rows, not named in confirmed_locked → 409; named → 200 + applied."""
 
     def test_locked_row_without_force_returns_409(self, client_with_roots, tmp_path):
         client, root = client_with_roots
@@ -579,7 +579,7 @@ class TestBulkDecideLockedRowGate:
             "field": "File Name",
             "pattern": "locked",  # matches only fa
             "action": "delete",
-            "force_locked": False,
+            "confirmed_locked": [],
         })
         assert resp.status_code == 409, resp.text
         body = resp.json()
@@ -594,7 +594,7 @@ class TestBulkDecideLockedRowGate:
         # DB must be UNCHANGED.
         assert _read_user_decision(manifest, str(fa)) == ""
 
-    def test_locked_row_with_force_true_applies_decision(self, client_with_roots, tmp_path):
+    def test_locked_row_named_in_confirmed_locked_applies_decision(self, client_with_roots, tmp_path):
         client, root = client_with_roots
         files_dir = tmp_path / "files"
         files_dir.mkdir()
@@ -629,7 +629,7 @@ class TestBulkDecideLockedRowGate:
             "field": "File Name",
             "pattern": "locked",  # matches only fa
             "action": "delete",
-            "force_locked": True,
+            "confirmed_locked": [str(fa)],
         })
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -680,7 +680,7 @@ class TestBulkDecideLockedRowGate:
             "field": "File Name",
             "pattern": "locked",  # matches the locked row
             "action": "delete",
-            "force_locked": False,
+            "confirmed_locked": [],
             "preview": True,
         })
         assert resp.status_code == 200, resp.text
@@ -688,6 +688,68 @@ class TestBulkDecideLockedRowGate:
         assert str(fa) in body["affected_paths"]
         # No write — the locked row stays undecided after a preview.
         assert _read_user_decision(manifest, str(fa)) == ""
+
+
+class TestBulkDecideNamedConfirmation:
+    """A8 (D7): the 409 names only the locked rows the dialog did not confirm.
+    A row locked after the dialog opened is refused again and stays locked."""
+
+    def _two_locked_rows(self, tmp_path):
+        files_dir = tmp_path / "files"
+        files_dir.mkdir()
+        fa = files_dir / "shot_01.jpg"
+        fb = files_dir / "shot_02.jpg"
+        fa.write_bytes(b"\x00" * 64)
+        fb.write_bytes(b"\x00" * 64)
+        rows = [
+            {
+                "source_path": str(f), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 1, "file_size_bytes": 64,
+            }
+            for f in (fa, fb)
+        ]
+        return _make_manifest(tmp_path, rows), fa, fb
+
+    def test_row_locked_after_the_dialog_gets_a_second_409(
+        self, client_with_roots, tmp_path
+    ):
+        """The dialog named fa only; fb was locked after it opened. The 409 names
+        fb alone, nothing is written, and fb stays locked."""
+        client, root = client_with_roots
+        manifest, fa, fb = self._two_locked_rows(tmp_path)
+
+        resp = client.post("/api/action/bulk-decide", json={
+            "manifest_path": str(manifest),
+            "field": "File Name",
+            "pattern": "shot",
+            "action": "delete",
+            "confirmed_locked": [str(fa)],
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json().get("detail", {})
+        assert detail.get("code") == "locked_paths"
+        assert detail.get("locked_paths") == [str(fb)]
+        assert _read_user_decision(manifest, str(fa)) == ""
+        assert _read_user_decision(manifest, str(fb)) == ""
+        assert _read_is_locked(manifest, str(fb)) is True
+
+    def test_named_rows_apply_and_unlock_in_one_write(self, client_with_roots, tmp_path):
+        client, root = client_with_roots
+        manifest, fa, fb = self._two_locked_rows(tmp_path)
+
+        resp = client.post("/api/action/bulk-decide", json={
+            "manifest_path": str(manifest),
+            "field": "File Name",
+            "pattern": "shot",
+            "action": "delete",
+            "confirmed_locked": [str(fa), str(fb)],
+        })
+        assert resp.status_code == 200, resp.text
+        assert _read_user_decision(manifest, str(fa)) == "delete"
+        assert _read_user_decision(manifest, str(fb)) == "delete"
+        assert _read_is_locked(manifest, str(fa)) is False
+        assert _read_is_locked(manifest, str(fb)) is False
 
 
 # ---------------------------------------------------------------------------
@@ -818,10 +880,10 @@ class TestBulkDecideSkipLocked:
         assert _read_user_decision(manifest, str(fa)) == ""
         assert _read_is_locked(manifest, str(fa)) is True
 
-    def test_force_and_skip_both_true_returns_422(
+    def test_confirmed_and_skip_both_set_returns_422(
         self, client_with_roots, tmp_path
     ):
-        """force_locked AND skip_locked are contradictory write intents — the
+        """confirmed_locked AND skip_locked are contradictory write intents — the
         public HTTP boundary rejects the incoherent body with 422 and mutates
         nothing. (The 3-button FE can never send both; this guards raw clients.)
         """
@@ -833,7 +895,7 @@ class TestBulkDecideSkipLocked:
             "field": "File Name",
             "pattern": "shot",
             "action": "delete",
-            "force_locked": True,
+            "confirmed_locked": [str(fa)],
             "skip_locked": True,
         })
         assert resp.status_code == 422, resp.text
@@ -961,14 +1023,14 @@ class TestApplyBestCopy:
         })
         assert resp.status_code == 404, resp.text
 
-    def test_force_and_skip_both_true_returns_422(self, client_with_roots, tmp_path):
+    def test_confirmed_and_skip_both_set_returns_422(self, client_with_roots, tmp_path):
         client, root = client_with_roots
         manifest, fa, fb, fc = self._three_row_group(tmp_path)
 
         resp = client.post("/api/action/apply-best-copy", json={
             "manifest_path": str(manifest),
             "group_number": 1,
-            "force_locked": True,
+            "confirmed_locked": [str(fb)],
             "skip_locked": True,
         })
         assert resp.status_code == 422, resp.text
@@ -1003,11 +1065,11 @@ class TestApplyBestCopy:
         assert _read_user_decision(manifest, str(fb)) == ""
         assert _read_is_locked(manifest, str(fb)) is True
 
-    def test_force_locked_unlocks_locked_peer_and_applies(
+    def test_named_lock_unlocks_locked_peer_and_applies(
         self, client_with_roots, tmp_path
     ):
-        """force_locked=True writes anyway and force-unlocks the previously
-        locked delete-target (Qt 'Unlock & Apply All' parity)."""
+        """A named locked delete-target is written and unlocked in the same
+        write (Qt 'Unlock & Apply All' parity, by name)."""
         client, root = client_with_roots
         manifest, fa, fb, fc = self._three_row_group(tmp_path)
         conn = sqlite3.connect(str(manifest))
@@ -1023,7 +1085,7 @@ class TestApplyBestCopy:
         resp = client.post("/api/action/apply-best-copy", json={
             "manifest_path": str(manifest),
             "group_number": 1,
-            "force_locked": True,
+            "confirmed_locked": [str(fb)],
         })
         assert resp.status_code == 200, resp.text
         assert _read_user_decision(manifest, str(fb)) == "delete"
@@ -1031,11 +1093,11 @@ class TestApplyBestCopy:
         assert _read_user_decision(manifest, str(fa)) == ""
         assert _read_is_locked(manifest, str(fa)) is True
 
-    def test_force_locked_keeper_already_locked_stays_locked(
+    def test_named_keeper_already_locked_stays_locked(
         self, client_with_roots, tmp_path
     ):
         """The keeper (fa) is ALREADY locked when apply-best-copy re-selects
-        it as the keeper; force_locked must not accidentally unlock it — the
+        it as the keeper; naming it must not accidentally unlock it — the
         keeper's own lock write (True) from build_auto_select_writes wins."""
         client, root = client_with_roots
         manifest, fa, fb, fc = self._three_row_group(tmp_path)
@@ -1052,14 +1114,45 @@ class TestApplyBestCopy:
         resp = client.post("/api/action/apply-best-copy", json={
             "manifest_path": str(manifest),
             "group_number": 1,
-            "force_locked": True,
+            "confirmed_locked": [str(fa), str(fb)],
         })
         assert resp.status_code == 200, resp.text
-        # Keeper stays locked (it's supposed to be); peer gets force-unlocked.
+        # Keeper stays locked (it's supposed to be); peer gets unlocked.
         assert _read_is_locked(manifest, str(fa)) is True
         assert _read_user_decision(manifest, str(fa)) == ""
         assert _read_is_locked(manifest, str(fb)) is False
         assert _read_user_decision(manifest, str(fb)) == "delete"
+
+    def test_keeper_locked_after_the_dialog_gets_a_second_409(
+        self, client_with_roots, tmp_path
+    ):
+        """D7: the dialog named the peer fb. The keeper fa was locked after the
+        dialog opened, so it is refused again: 409 naming fa alone, nothing
+        written, and both rows stay locked."""
+        client, root = client_with_roots
+        manifest, fa, fb, fc = self._three_row_group(tmp_path)
+        conn = sqlite3.connect(str(manifest))
+        try:
+            conn.execute(
+                "UPDATE migration_manifest SET is_locked = 1 WHERE source_path IN (?, ?)",
+                (str(fa), str(fb)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+            "confirmed_locked": [str(fb)],
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json().get("detail", {})
+        assert detail.get("code") == "locked_paths"
+        assert detail.get("locked_paths") == [str(fa)]
+        assert _read_user_decision(manifest, str(fb)) == ""
+        assert _read_is_locked(manifest, str(fa)) is True
+        assert _read_is_locked(manifest, str(fb)) is True
 
     def test_skip_locked_leaves_locked_peer_untouched(
         self, client_with_roots, tmp_path

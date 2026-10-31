@@ -37,7 +37,9 @@ class ExecuteRequest(BaseModel):
     manifest_path: str
     scope_paths: list[str] | None = None
     recycle: bool = True
-    force_locked: bool = False
+    # A8: the locked rows the user confirmed by name (no boolean force). A
+    # locked row in scope that is not named answers 409 locked_paths.
+    confirmed_locked: list[str] = []
 
 
 class RemoveRequest(BaseModel):
@@ -45,7 +47,7 @@ class RemoveRequest(BaseModel):
 
     manifest_path: str
     file_paths: list[str]
-    force_locked: bool = False
+    confirmed_locked: list[str] = []
 
 
 class RestoreRequest(BaseModel):
@@ -53,7 +55,7 @@ class RestoreRequest(BaseModel):
 
     manifest_path: str
     file_paths: list[str]
-    force_locked: bool = False
+    confirmed_locked: list[str] = []
 
 
 class PruneRequest(BaseModel):
@@ -70,9 +72,9 @@ class PruneRequest(BaseModel):
     # original category behaviour (all plain + optionally all actioned).
     paths: list[str] | None = None
     # #983: a locked singleton in scope is refused (409 locked_paths) unless the
-    # client confirmed the lock gate and sends force_locked=True. Each such row
-    # is pruned and unlocked in the same write.
-    force_locked: bool = False
+    # client names it in confirmed_locked (A8, no boolean force). Each named
+    # row is pruned and unlocked in the same write.
+    confirmed_locked: list[str] = []
 
 
 class SaveRequest(BaseModel):
@@ -213,7 +215,7 @@ class BulkDecideRequest(BaseModel):
     field: str
     pattern: str
     action: str
-    force_locked: bool = False
+    confirmed_locked: list[str] = []
     skip_locked: bool = False
     preview: bool = False
 
@@ -232,7 +234,7 @@ class ApplyBestCopyRequest(BaseModel):
 
     manifest_path: str
     group_number: int
-    force_locked: bool = False
+    confirmed_locked: list[str] = []
     skip_locked: bool = False
 
 

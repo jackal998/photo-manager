@@ -22,6 +22,7 @@ import os
 import shutil
 import sqlite3
 from pathlib import Path
+from collections.abc import Collection
 from typing import Any
 
 from loguru import logger
@@ -30,6 +31,7 @@ from core.app_service.lock_gate import (
     LockVerdict,
     apply_gated_transition,
     refuse_gated_outcome,
+    verdict_from_named,
 )
 from core.app_service.path_safety import is_under_roots
 from infrastructure.delete_service import DeleteService
@@ -143,9 +145,14 @@ def _connect(manifest_path: str) -> sqlite3.Connection:
     return conn
 
 
-def _verdict(force_locked: bool) -> LockVerdict:
-    """The A4 verdict for a verb with no skip option: confirm all, or refuse."""
-    return LockVerdict.FORCE if force_locked else LockVerdict.ASK
+def _verdict(confirmed_locked: Collection[str]) -> tuple[LockVerdict, list[str] | None]:
+    """The verdict for a verb with no skip option (A8): name rows, or refuse.
+
+    A non-empty ``confirmed_locked`` confirms exactly those locked rows; empty
+    refuses every locked row in scope (ASK).
+    """
+    verdict, named = verdict_from_named(confirmed_locked, skip_locked=False)
+    return verdict, named
 
 
 def _transition_outcome(
@@ -156,13 +163,19 @@ def _transition_outcome(
     *,
     from_outcome: str,
     to_outcome: str,
+    named: Collection[str] | None = None,
 ) -> int:
     """Plan, refuse and write one outcome transition in one IMMEDIATE txn (A4)."""
     if not paths:
         return 0
     with repo.write_txn(manifest_path) as tx:
         return apply_gated_transition(
-            tx, paths, verdict, from_outcome=from_outcome, to_outcome=to_outcome
+            tx,
+            paths,
+            verdict,
+            from_outcome=from_outcome,
+            to_outcome=to_outcome,
+            named=named,
         )
 
 
@@ -177,19 +190,20 @@ def _gate_execute(
     manifest_path: str,
     paths: list[str],
     verdict: LockVerdict,
+    named: Collection[str] | None,
 ) -> None:
     """Execute's up-front gate: refuse locked rows before any file is touched (A4)."""
     if not paths:
         return
     with repo.write_txn(manifest_path) as tx:
-        refuse_gated_outcome(tx, paths, verdict, outcome="")
+        refuse_gated_outcome(tx, paths, verdict, outcome="", named=named)
 
 
 def execute_decisions(
     manifest_path: str,
     scope_paths: list[str] | None = None,
     recycle: bool = True,
-    force_locked: bool = False,
+    confirmed_locked: Collection[str] = (),
     allowed_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Execute all decided rows in the manifest.
@@ -199,11 +213,11 @@ def execute_decisions(
         scope_paths: Optional subset of paths to execute (None = every
             decided row the review shows; see _load_decided_rows).
         recycle: True = send2trash; False = os.unlink.
-        force_locked: If True, execute locked rows decided delete or ignore
-            (#972).  Each is unlocked in the same write as its outcome, so a
-            row whose action does not apply keeps its lock (#985).  If False
-            and any such rows exist, raises ValueError with the locked paths,
-            and nothing is written.
+        confirmed_locked: Locked rows decided delete or ignore (#972) that the
+            user confirmed by name (A8). Each named row is unlocked in the same
+            write as its outcome, so a row whose action does not apply keeps its
+            lock (#985). A locked row in scope that is not named raises
+            ValueError with the locked paths, and nothing is written.
         allowed_roots: Trusted root directories.  Every candidate source_path
             is checked against this list before any deletion or ignore.  Rows
             whose resolved path escapes all roots are collected into the
@@ -218,7 +232,7 @@ def execute_decisions(
     Raises:
         FileNotFoundError: If manifest_path does not exist.
         ValueError: If any locked row (decided delete or ignore) is in scope
-            and force_locked is False.
+            and not named in confirmed_locked.
             The exception's args[1] carries the list of locked paths.
     """
     _require_manifest(manifest_path)
@@ -261,8 +275,8 @@ def execute_decisions(
     # Up-front gate (A4): the locks are re-read inside the primitive's own
     # transaction, so a row locked after the plan is refused (409) before any
     # file is touched.
-    verdict = _verdict(force_locked)
-    _gate_execute(repo, manifest_path, safe_delete_paths + safe_ignore_paths, verdict)
+    verdict, named = _verdict(confirmed_locked)
+    _gate_execute(repo, manifest_path, safe_delete_paths + safe_ignore_paths, verdict, named)
 
     # --- Per-file delete with D7 consistency ----------------------------
     svc = DeleteService()
@@ -315,7 +329,7 @@ def execute_decisions(
         try:
             _transition_outcome(
                 repo, manifest_path, safe_ignore_paths, verdict,
-                from_outcome="", to_outcome="ignored",
+                from_outcome="", to_outcome="ignored", named=named,
             )
             ignored = safe_ignore_paths
         except Exception as exc:
@@ -364,7 +378,7 @@ def execute_decisions(
 def remove_from_review(
     manifest_path: str,
     file_paths: list[str],
-    force_locked: bool = False,
+    confirmed_locked: Collection[str] = (),
     allowed_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Remove files from the review manifest (outcome='ignored', files untouched).
@@ -373,9 +387,9 @@ def remove_from_review(
         manifest_path: Absolute path to the manifest sqlite.
         file_paths: Paths to mark as ignored. Only rows still in review are
             written; deleted or already-dismissed rows are left as they are.
-        force_locked: If True, remove locked rows anyway; each is unlocked in
-            the same write as its ignored outcome (#985). If False and any
-            in-root rows are locked, raises ValueError with the locked paths.
+        confirmed_locked: Locked rows the user confirmed by name; each is
+            unlocked in the same write as its ignored outcome (#985). A locked
+            in-root row that is not named raises ValueError with the locked paths.
         allowed_roots: Trusted root directories.  Out-of-root rows in
             ``file_paths`` are silently skipped (not marked ignored).
 
@@ -396,9 +410,10 @@ def remove_from_review(
     # A4: plan, refuse and write in one IMMEDIATE txn. The lock is re-read there,
     # so a row locked after any earlier read is refused (409). Only rows still in
     # review are written (#A2); the rest are left as they are and not counted.
+    verdict, named = _verdict(confirmed_locked)
     written = _transition_outcome(
-        repo, manifest_path, safe_paths, _verdict(force_locked),
-        from_outcome="", to_outcome="ignored",
+        repo, manifest_path, safe_paths, verdict,
+        from_outcome="", to_outcome="ignored", named=named,
     )
 
     from core.app_service.review_service import load_review
@@ -416,7 +431,7 @@ def restore_to_review(
     manifest_path: str,
     file_paths: list[str],
     allowed_roots: list[str] | None = None,
-    force_locked: bool = False,
+    confirmed_locked: Collection[str] = (),
 ) -> dict[str, Any]:
     """Undo an immediate Skip: put dismissed rows back in review (#909).
 
@@ -427,22 +442,23 @@ def restore_to_review(
 
     A locked dismissed row is gated like every other locked action (#981): it
     is refused with ``ValueError("locked_paths", ...)`` and nothing is written,
-    unless ``force_locked`` — then it is unlocked and restored in one write.
+    unless it is named in ``confirmed_locked`` — then it is unlocked and
+    restored in one write.
 
     Args:
         manifest_path: Absolute path to the manifest sqlite.
         file_paths: Paths to return to review.
         allowed_roots: Trusted root directories.  Out-of-root rows in
             ``file_paths`` are skipped (not restored), as in remove.
-        force_locked: If True, unlock locked dismissed rows and restore them.
-            If False and any are locked, raises ValueError with the paths.
+        confirmed_locked: Locked dismissed rows the user confirmed by name.
+            A locked dismissed row that is not named raises ValueError.
 
     Returns:
         Dict with keys: restored (rows changed), groups.
 
     Raises:
         ValueError: ``("locked_paths", [...])`` when a locked dismissed row is
-            in scope and ``force_locked`` is False.
+            in scope and not named in ``confirmed_locked``.
     """
     _require_manifest(manifest_path)
     if allowed_roots:
@@ -460,9 +476,10 @@ def restore_to_review(
     # A4: only 'ignored' rows are gated (BE-7). A locked row that is still in
     # review is not something this write touches, and a row locked after any
     # earlier read is refused inside the transaction.
+    verdict, named = _verdict(confirmed_locked)
     restored = _transition_outcome(
-        repo, manifest_path, safe_paths, _verdict(force_locked),
-        from_outcome="ignored", to_outcome="",
+        repo, manifest_path, safe_paths, verdict,
+        from_outcome="ignored", to_outcome="", named=named,
     )
 
     from core.app_service.review_service import load_review
@@ -553,7 +570,7 @@ def prune_singletons(
     include_actioned: bool = False,
     paths: list[str] | None = None,
     allowed_roots: list[str] | None = None,
-    force_locked: bool = False,
+    confirmed_locked: Collection[str] = (),
 ) -> dict[str, Any]:
     """Remove singleton groups from the review manifest.
 
@@ -581,17 +598,17 @@ def prune_singletons(
         paths: Explicit-mode prune set (#686).  None = category mode.
         allowed_roots: Trusted root directories.  Out-of-root singleton rows
             are silently skipped (not pruned) and never lock-gated.
-        force_locked: If True, prune locked singletons in scope too; each is
-            unlocked in the same write as its ignored outcome (#983). If False
-            and any locked singleton is in scope, raises
-            ``ValueError("locked_paths", [...])`` and nothing is written.
+        confirmed_locked: Locked singletons in scope that the user confirmed by
+            name (A8, B-2/B-3). Each is pruned and unlocked in the same write as
+            its ignored outcome (#983). A locked singleton in scope that is not
+            named raises ``ValueError("locked_paths", [...])`` and nothing is written.
 
     Returns:
         Dict with keys: pruned, locked_skipped (always empty since #983), groups.
 
     Raises:
         ValueError: ``("locked_paths", [...])`` when a locked singleton is in
-            scope and force_locked is False.
+            scope and not named in ``confirmed_locked``.
     """
     requested: set[str] | None = set(paths) if paths is not None else None
     _require_manifest(manifest_path)
@@ -636,9 +653,10 @@ def prune_singletons(
     # the whole call writes nothing (A4). Each confirmed locked row is unlocked
     # in the same statement as its ignored outcome (#985).
     to_prune = selected
+    verdict, named = _verdict(confirmed_locked)
     _transition_outcome(
-        repo, manifest_path, to_prune, _verdict(force_locked),
-        from_outcome="", to_outcome="ignored",
+        repo, manifest_path, to_prune, verdict,
+        from_outcome="", to_outcome="ignored", named=named,
     )
 
     from core.app_service.review_service import load_review

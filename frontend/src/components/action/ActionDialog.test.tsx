@@ -477,10 +477,10 @@ describe("ActionDialog", () => {
 
   // 14. 409 locked_paths shows lock confirm overlay AND retries with force.
   // The first apply rejects with the conflict; the retry (default mock)
-  // resolves — proving the whole 409 → Unlock & Apply → force_locked path,
+  // resolves — proving the whole 409 → Unlock & Apply → confirmed_locked path,
   // not just that the overlay appears (adversarial-review: the old test only
-  // asserted the overlay, never the force retry).
-  it("409 locked_paths surfaces the overlay and Unlock & Apply retries with force", async () => {
+  // asserted the overlay, never the named retry).
+  it("409 locked_paths surfaces the overlay and Unlock & Apply retries naming the rows", async () => {
     const user = userEvent.setup();
     const conflictError = new ApiConflictError("locked_paths", ["/photos/a.jpg"]);
     applyMock.mockRejectedValueOnce(conflictError);
@@ -505,10 +505,49 @@ describe("ActionDialog", () => {
     // First attempt was unforced.
     expect(applyMock).toHaveBeenCalledWith({});
 
-    // Click Unlock & Apply → retry WITH forceLocked=true.
+    // Click Unlock & Apply → retry naming the row the dialog showed (A8).
     await user.click(unlockBtn);
     await waitFor(() => {
-      expect(applyMock).toHaveBeenCalledWith({ forceLocked: true });
+      expect(applyMock).toHaveBeenCalledWith({ confirmedLocked: ["/photos/a.jpg"] });
+    });
+  });
+
+  // A8 (M1): a second 409 keeps the row the dialog already confirmed, so the next
+  // Unlock & Apply names both. Naming only the new row would loop forever.
+  it("a second 409 after Unlock & Apply keeps the confirmed row and names both on the retry", async () => {
+    const user = userEvent.setup();
+    const B = "/photos/b.jpg";
+    const A = "/photos/a.jpg";
+    applyMock
+      .mockRejectedValueOnce(new ApiConflictError("locked_paths", [B]))
+      .mockRejectedValueOnce(new ApiConflictError("locked_paths", [A]));
+    useAppStore.setState({ applyBulkDecide: applyMock } as never);
+
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          pattern: "IMG",
+          action: "__ignore__",
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+
+    render(<ActionDialog />);
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+
+    // Round 1: B is locked, the dialog names it. Unlock & Apply sends [B].
+    await user.click(await screen.findByTestId(ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    await waitFor(() => {
+      expect(applyMock).toHaveBeenNthCalledWith(2, { confirmedLocked: [B] });
+    });
+
+    // Round 2: A locked after the dialog opened; the reopened dialog keeps B.
+    await user.click(await screen.findByTestId(ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    await waitFor(() => {
+      expect(applyMock).toHaveBeenNthCalledWith(3, { confirmedLocked: [B, A] });
     });
   });
 

@@ -83,6 +83,23 @@ let _bulkDecideSeq = 0;
 // remainder of the first one's.
 let _toastSeq = 0;
 
+/**
+ * A8 (D7, H1): the confirmed set a 409 re-opens the lock dialog with. Rows the
+ * request already confirmed (within its scope) stay confirmed, then the rows
+ * locked since are added. The next Unlock & Apply re-sends all of them by name,
+ * so two rows do not loop, and a row locked after the dialog opened answers a
+ * second 409 that names only itself.
+ */
+function accumulateConfirmed(
+  confirmed: readonly string[],
+  scope: readonly string[],
+  lockedPaths: readonly string[]
+): string[] {
+  const prior = confirmed.filter((p) => scope.includes(p));
+  const fresh = lockedPaths.filter((p) => !prior.includes(p));
+  return [...prior, ...fresh];
+}
+
 // The classifier values apply-best-copy treats as a positively-identified
 // duplicate, i.e. the rows it may write `delete` onto. Mirrors the server's
 // allowlist (core.services.auto_select.non_keepers_for_aggressive_delete) —
@@ -856,7 +873,7 @@ export const useAppStore = create<AppStore>()(
           manifest_path: manifestPath,
           scope_paths: opts.scopePaths ?? null,
           recycle: true,
-          force_locked: opts.forceLocked ?? false,
+          confirmed_locked: opts.confirmedLocked ?? [],
         });
 
         set((state) => {
@@ -877,7 +894,11 @@ export const useAppStore = create<AppStore>()(
             set((state) => {
               state.execute.executeRunning = false;
               state.execute.lockConflict = {
-                paths: err.lockedPaths ?? [],
+                paths: accumulateConfirmed(
+                  opts.confirmedLocked ?? [],
+                  scopedPaths,
+                  err.lockedPaths ?? []
+                ),
                 op: "execute",
                 originalPaths: scopedPaths,
               };
@@ -899,7 +920,7 @@ export const useAppStore = create<AppStore>()(
       }
     },
 
-    async removeFromList(paths, forceLocked = false, opts = {}) {
+    async removeFromList(paths, confirmedLocked = [], opts = {}) {
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
@@ -933,7 +954,7 @@ export const useAppStore = create<AppStore>()(
         const result = await postRemove({
           manifest_path: manifestPath,
           file_paths: paths,
-          force_locked: forceLocked,
+          confirmed_locked: confirmedLocked,
         });
 
         let undoToastId: number | undefined;
@@ -970,7 +991,11 @@ export const useAppStore = create<AppStore>()(
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
           set((state) => {
             state.execute.lockConflict = {
-              paths: err.lockedPaths ?? [],
+              paths: accumulateConfirmed(
+                confirmedLocked,
+                paths,
+                err.lockedPaths ?? []
+              ),
               op: "remove",
               // Preserve the original path list so "Unlocked Only" can filter
               // out the locked paths and remove the rest.
@@ -1066,7 +1091,7 @@ export const useAppStore = create<AppStore>()(
       });
     },
 
-    async applyPrune(paths, undoToastId, forceLocked) {
+    async applyPrune(paths, undoToastId, confirmedLocked) {
       // Read before anything clears the prompt: the dialog resolves the prompt
       // its flow opened, so an omitted owner is the one recorded there.
       const prompt = get().execute.prunePrompt;
@@ -1074,12 +1099,13 @@ export const useAppStore = create<AppStore>()(
         undoToastId !== undefined
           ? undoToastId
           : prompt?.undoToastId ?? null;
-      // #983: force_locked only for lock-confirmed singletons. The gate's verdict
-      // passes it explicitly; otherwise the open prompt's lockedToPrune decides.
-      // A locked path that was never confirmed is never force-pruned.
-      const force =
-        forceLocked ??
-        (prompt?.lockedToPrune ?? []).some((p) => paths.includes(p));
+      // #983 / A8 (B-3): name only the lock-confirmed singletons. The gate's
+      // verdict passes them explicitly; otherwise the open prompt's lockedToPrune
+      // decides. A locked singleton that was never confirmed is never named, so
+      // one locked after the classify read answers a 409 instead of being pruned.
+      const confirmed =
+        confirmedLocked ??
+        (prompt?.lockedToPrune ?? []).filter((p) => paths.includes(p));
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
@@ -1097,7 +1123,7 @@ export const useAppStore = create<AppStore>()(
         const result = await postPrune({
           manifest_path: manifestPath,
           paths,
-          ...(force ? { force_locked: true } : {}),
+          confirmed_locked: confirmed,
         });
 
         set((state) => {
@@ -1133,7 +1159,12 @@ export const useAppStore = create<AppStore>()(
           );
           if (lockedNow.length > 0) {
             const promptActioned = new Set(prompt?.actioned ?? []);
-            const unlocked = paths.filter((p) => !lockedNow.includes(p));
+            // A8 (H1): rows already confirmed stay confirmed in the reopened gate,
+            // so they are neither re-offered as unlocked nor dropped from the re-send.
+            const confirmedNow = confirmed.filter((p) => paths.includes(p));
+            const unlocked = paths.filter(
+              (p) => !lockedNow.includes(p) && !confirmedNow.includes(p)
+            );
             const actioned = unlocked.filter((p) => promptActioned.has(p));
             const plain = unlocked.filter((p) => !promptActioned.has(p));
             const pref = normalizePrunePref(
@@ -1149,7 +1180,7 @@ export const useAppStore = create<AppStore>()(
                 late: true,
               };
               state.execute.lockConflict = {
-                paths: lockedNow,
+                paths: accumulateConfirmed(confirmed, paths, lockedNow),
                 op: "prune",
                 originalPaths: null,
               };
@@ -1198,19 +1229,18 @@ export const useAppStore = create<AppStore>()(
       let lockedToPrune: string[] = [];
       if (verdict === "unlock-apply") {
         // #983: no separate unlock request (that was unlock-before-apply, the
-        // #985 bug class). The locked singletons join the prune request with
-        // force_locked, and the server unlocks each in the same write as its
+        // #985 bug class). The locked singletons join the prune request, named
+        // in confirmed_locked, and the server unlocks each in the same write as its
         // ignored outcome. A failed write leaves every row locked and un-pruned.
         lockedToPrune = locked;
       }
       // "unlocked-only" / "cancel": hold the locked singletons (lockedToPrune=[]).
 
-      const forceLocked = lockedToPrune.length > 0;
       if (pref === "always") {
         await get().applyPrune(
           [...plain, ...actioned, ...lockedToPrune],
           owner,
-          forceLocked
+          lockedToPrune
         );
         return;
       }
@@ -1220,7 +1250,7 @@ export const useAppStore = create<AppStore>()(
       // buckets are empty there is nothing to ask — prune the already-decided
       // set (just lockedToPrune, possibly empty) directly.
       if (plain.length === 0 && actioned.length === 0) {
-        await get().applyPrune(lockedToPrune, owner, forceLocked);
+        await get().applyPrune(lockedToPrune, owner, lockedToPrune);
         return;
       }
       set((state) => {
@@ -1408,7 +1438,7 @@ export const useAppStore = create<AppStore>()(
     },
 
     async applyBulkDecide(opts = {}) {
-      const { forceLocked = false, skipLocked = false } = opts;
+      const { confirmedLocked = [], skipLocked = false } = opts;
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
       const { field, pattern, action: actionValue } = get().action;
@@ -1428,7 +1458,7 @@ export const useAppStore = create<AppStore>()(
           field,
           pattern,
           action: actionValue,
-          force_locked: forceLocked,
+          confirmed_locked: confirmedLocked,
           skip_locked: skipLocked,
           preview: false,
         });
@@ -1450,7 +1480,7 @@ export const useAppStore = create<AppStore>()(
           state.action.actionRunning = false;
         });
         // RE-THROW the locked-rows conflict so the component can open the
-        // lock-confirm dialog (and retry with force_locked=true). Swallowing
+        // lock-confirm dialog (and retry with the rows it showed, named). Swallowing
         // it here made the 409 → Unlock & Apply flow unreachable in production
         // (adversarial-review ship-blocker, masked by a store-mocking test).
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
@@ -1470,7 +1500,7 @@ export const useAppStore = create<AppStore>()(
     },
 
     async applyBestCopy(groupNumber, opts = {}) {
-      const { forceLocked = false, skipLocked = false } = opts;
+      const { confirmedLocked = [], skipLocked = false } = opts;
       const manifestPath = get().manifest.path;
       if (manifestPath === null) return;
 
@@ -1503,7 +1533,7 @@ export const useAppStore = create<AppStore>()(
         const result = await apiApplyBestCopy({
           manifest_path: manifestPath,
           group_number: groupNumber,
-          force_locked: forceLocked,
+          confirmed_locked: confirmedLocked,
           skip_locked: skipLocked,
         });
 
@@ -1523,7 +1553,7 @@ export const useAppStore = create<AppStore>()(
         // never "skipped" by anything. Count only rows the classifier
         // positively identified as duplicates — the same allowlist the server
         // uses to build the write-set (core.services.auto_select.
-        // non_keepers_for_aggressive_delete). Under forceLocked those rows ARE
+        // non_keepers_for_aggressive_delete). Under a named confirmation those rows ARE
         // in `affected`, so the count is correctly 0.
         let lockedCount = 0;
         for (const row of after) {
@@ -1599,7 +1629,11 @@ export const useAppStore = create<AppStore>()(
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
           set((state) => {
             state.execute.lockConflict = {
-              paths: err.lockedPaths ?? [],
+              paths: accumulateConfirmed(
+                confirmedLocked,
+                [...before.keys()],
+                err.lockedPaths ?? []
+              ),
               op: "apply-best-copy",
               // Retry re-runs by groupNumber, not a path list.
               originalPaths: null,
@@ -1887,7 +1921,7 @@ export const useAppStore = create<AppStore>()(
         const result = await postRestore({
           manifest_path: manifestPath,
           file_paths: paths,
-          force_locked: opts.forceLocked ?? false,
+          confirmed_locked: opts.confirmedLocked ?? [],
         });
         set((state) => {
           // Same guard as undoSkipNow: a manifest opened meanwhile keeps its groups.
@@ -1901,7 +1935,11 @@ export const useAppStore = create<AppStore>()(
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
           set((state) => {
             state.execute.lockConflict = {
-              paths: err.lockedPaths ?? [],
+              paths: accumulateConfirmed(
+                opts.confirmedLocked ?? [],
+                paths,
+                err.lockedPaths ?? []
+              ),
               op: "restore",
               originalPaths: [...paths],
             };

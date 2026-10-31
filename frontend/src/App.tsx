@@ -252,7 +252,7 @@ export default function App() {
     const store = useAppStore.getState();
     const selected = store.selection.selectedPaths;
     if (selected.length === 0) return;
-    void store.removeFromList(selected, false, { undoable: true });
+    void store.removeFromList(selected, [], { undoable: true });
   }, []);
 
   const handleManifestOpen = useCallback(() => {

@@ -100,7 +100,7 @@ async def post_execute(body: ExecuteRequest, request: Request) -> ExecuteResult:
         400 bad path
         403 path outside allowed roots
         404 manifest not found
-        409 locked_paths (when locked rows decided delete or skip exist and force_locked=False)
+        409 locked_paths (a locked row decided delete or skip is in scope and not named in confirmed_locked)
         409 execute_already_running (concurrent execute in progress)
         422 on unexpected error
     """
@@ -136,7 +136,7 @@ async def post_execute(body: ExecuteRequest, request: Request) -> ExecuteResult:
                 body.manifest_path,
                 body.scope_paths,
                 body.recycle,
-                body.force_locked,
+                body.confirmed_locked,
                 [str(r) for r in roots],
             )
         except FileNotFoundError as exc:
@@ -159,7 +159,7 @@ def _run_execute(
     manifest_path: str,
     scope_paths: list[str] | None,
     recycle: bool,
-    force_locked: bool,
+    confirmed_locked: list[str],
     allowed_roots: list[str],
 ) -> dict:
     """Blocking worker — runs in the default thread pool."""
@@ -168,7 +168,7 @@ def _run_execute(
         manifest_path=manifest_path,
         scope_paths=scope_paths,
         recycle=recycle,
-        force_locked=force_locked,
+        confirmed_locked=confirmed_locked,
         allowed_roots=allowed_roots,
     )
 
@@ -202,7 +202,7 @@ def post_remove(body: RemoveRequest, request: Request) -> RemoveResult:
         result = _run_remove(
             body.manifest_path,
             body.file_paths,
-            body.force_locked,
+            body.confirmed_locked,
             [str(r) for r in roots],
         )
     except FileNotFoundError as exc:
@@ -224,14 +224,14 @@ def post_remove(body: RemoveRequest, request: Request) -> RemoveResult:
 def _run_remove(
     manifest_path: str,
     file_paths: list[str],
-    force_locked: bool,
+    confirmed_locked: list[str],
     allowed_roots: list[str],
 ) -> dict:
     from core.app_service.execute_service import remove_from_review
     return remove_from_review(
         manifest_path=manifest_path,
         file_paths=file_paths,
-        force_locked=force_locked,
+        confirmed_locked=confirmed_locked,
         allowed_roots=allowed_roots,
     )
 
@@ -248,7 +248,7 @@ def post_restore(body: RestoreRequest, request: Request) -> RestoreResult:
         400 bad path
         403 path outside allowed roots
         404 manifest not found
-        409 locked_paths (a locked dismissed row is in scope and force_locked=False)
+        409 locked_paths (a locked dismissed row is in scope and not named in confirmed_locked)
         422 on unexpected error
     """
     roots = _allowed_roots(request)
@@ -266,7 +266,7 @@ def post_restore(body: RestoreRequest, request: Request) -> RestoreResult:
             manifest_path=body.manifest_path,
             file_paths=body.file_paths,
             allowed_roots=[str(r) for r in roots],
-            force_locked=body.force_locked,
+            confirmed_locked=body.confirmed_locked,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -295,7 +295,7 @@ def post_prune(body: PruneRequest, request: Request) -> PruneResult:
         400 bad path
         403 path outside allowed roots
         404 manifest not found
-        409 locked_paths (a locked singleton is in scope and force_locked=False;
+        409 locked_paths (a locked singleton is in scope and not named in confirmed_locked;
             nothing is written)
         422 on unexpected error
     """
@@ -311,7 +311,7 @@ def post_prune(body: PruneRequest, request: Request) -> PruneResult:
             body.include_actioned,
             body.paths,
             [str(r) for r in roots],
-            body.force_locked,
+            body.confirmed_locked,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -334,7 +334,7 @@ def _run_prune(
     include_actioned: bool,
     paths: list[str] | None,
     allowed_roots: list[str],
-    force_locked: bool = False,
+    confirmed_locked: list[str],
 ) -> dict:
     from core.app_service.execute_service import prune_singletons
     return prune_singletons(
@@ -342,7 +342,7 @@ def _run_prune(
         include_actioned=include_actioned,
         paths=paths,
         allowed_roots=allowed_roots,
-        force_locked=force_locked,
+        confirmed_locked=confirmed_locked,
     )
 
 

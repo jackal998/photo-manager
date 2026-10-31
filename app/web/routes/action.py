@@ -50,7 +50,7 @@ async def post_bulk_decide(body: BulkDecideRequest, request: Request) -> BulkDec
         200 BulkDecideResult
         400 invalid_pattern (bad regex)
         404 manifest not found
-        409 locked_paths (locked rows exist and force_locked=False)
+        409 locked_paths (a locked row is in scope and not named in confirmed_locked)
         422 unknown action or other validation error
     """
     roots = _allowed_roots(request)
@@ -73,7 +73,7 @@ async def post_bulk_decide(body: BulkDecideRequest, request: Request) -> BulkDec
             body.field,
             body.pattern,
             body.action,
-            body.force_locked,
+            body.confirmed_locked,
             body.skip_locked,
             body.preview,
             [str(r) for r in roots],
@@ -107,14 +107,14 @@ def _run_bulk_decide(
     field: str,
     pattern: str,
     action: str,
-    force_locked: bool,
+    confirmed_locked: list[str],
     skip_locked: bool,
     preview: bool,
     allowed_roots: list[str],
 ) -> dict:
     """Blocking worker — runs in the default thread pool.
 
-    ``skip_locked`` sits between ``force_locked`` and ``preview`` in BOTH this
+    ``skip_locked`` sits between ``confirmed_locked`` and ``preview`` in BOTH this
     signature and the positional ``run_in_executor`` call above; keep the two in
     lock-step (a positional mismatch would silently default-False skip_locked —
     the route test asserts it actually reaches the service).
@@ -127,7 +127,7 @@ def _run_bulk_decide(
         pattern=pattern,
         action=action,
         allowed_roots=allowed_roots,
-        force_locked=force_locked,
+        confirmed_locked=confirmed_locked,
         skip_locked=skip_locked,
         preview=preview,
     )
@@ -149,9 +149,10 @@ async def post_apply_best_copy(body: ApplyBestCopyRequest) -> BulkDecideResult:
     Returns:
         200 BulkDecideResult (action_applied="apply_best_copy")
         404 manifest not found, or group_number not found in the manifest
-        409 locked_paths (locked rows would be written and force_locked=False
-            and skip_locked=False) — same detail shape as bulk-decide's 409
-        422 force_locked and skip_locked both set, or other validation error
+        409 locked_paths (a locked row that would be written is not named in
+            confirmed_locked, and skip_locked=False) — same detail shape as
+            bulk-decide's 409
+        422 confirmed_locked and skip_locked both set, or other validation error
     """
     try:
         result = await asyncio.get_running_loop().run_in_executor(
@@ -159,7 +160,7 @@ async def post_apply_best_copy(body: ApplyBestCopyRequest) -> BulkDecideResult:
             _run_apply_best_copy,
             body.manifest_path,
             body.group_number,
-            body.force_locked,
+            body.confirmed_locked,
             body.skip_locked,
         )
     except FileNotFoundError as exc:
@@ -186,7 +187,7 @@ async def post_apply_best_copy(body: ApplyBestCopyRequest) -> BulkDecideResult:
 def _run_apply_best_copy(
     manifest_path: str,
     group_number: int,
-    force_locked: bool,
+    confirmed_locked: list[str],
     skip_locked: bool,
 ) -> dict:
     """Blocking worker — runs in the default thread pool."""
@@ -195,6 +196,6 @@ def _run_apply_best_copy(
     return apply_best_copy(
         manifest_path=manifest_path,
         group_number=group_number,
-        force_locked=force_locked,
+        confirmed_locked=confirmed_locked,
         skip_locked=skip_locked,
     )

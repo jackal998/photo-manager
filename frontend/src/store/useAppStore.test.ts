@@ -751,7 +751,7 @@ describe("removeFromList(undoable) – an immediate Skip raises the undo toast",
 
     await useAppStore
       .getState()
-      .removeFromList(["/p/a.jpg", "/p/b.jpg"], false, { undoable: true });
+      .removeFromList(["/p/a.jpg", "/p/b.jpg"], [], { undoable: true });
 
     const { toast } = useAppStore.getState();
     expect(toast).not.toBeNull();
@@ -786,7 +786,7 @@ describe("removeFromList(undoable) – an immediate Skip raises the undo toast",
 
     await useAppStore
       .getState()
-      .removeFromList(["/p/a.jpg", "/p/b.jpg"], false, { undoable: true });
+      .removeFromList(["/p/a.jpg", "/p/b.jpg"], [], { undoable: true });
 
     expect(useAppStore.getState().toast).toBeNull();
     expect(useAppStore.getState().execute.lockConflict!.op).toBe("remove");
@@ -873,7 +873,7 @@ describe("undoSkipNow – puts the skipped rows back in the review", () => {
 });
 
 describe("restoreToReview – the lock-confirm retry for op=restore (#981)", () => {
-  it("forceLocked sends force_locked:true, replaces the groups and clears the skip toast", async () => {
+  it("confirmedLocked names the row, replaces the groups and clears the skip toast", async () => {
     seedManifest([]);
     useAppStore.setState({
       toast: {
@@ -895,13 +895,13 @@ describe("restoreToReview – the lock-confirm retry for op=restore (#981)", () 
 
     await useAppStore
       .getState()
-      .restoreToReview(["/p/a.jpg"], { forceLocked: true });
+      .restoreToReview(["/p/a.jpg"], { confirmedLocked: ["/p/a.jpg"] });
 
     expect(fetchSpy.mock.calls[0][0]).toBe("/api/restore");
     expect(fetchBody(fetchSpy, 0)).toEqual({
       manifest_path: "/data/scan.db",
       file_paths: ["/p/a.jpg"],
-      force_locked: true,
+      confirmed_locked: ["/p/a.jpg"],
     });
     const state = useAppStore.getState();
     expect(state.manifest.groups).toEqual([restored]);
@@ -955,7 +955,7 @@ describe("immediate Skip + singleton prune – Undo reverses both", () => {
 
     await useAppStore
       .getState()
-      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+      .removeFromList(["/p/a.jpg"], [], { undoable: true });
     expect(useAppStore.getState().toast!.prunedPaths).toEqual(["/p/b.jpg"]);
 
     await useAppStore.getState().undoSkipNow();
@@ -994,7 +994,7 @@ describe("immediate Skip + singleton prune – Undo reverses both", () => {
 
     await useAppStore
       .getState()
-      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+      .removeFromList(["/p/a.jpg"], [], { undoable: true });
     preferAlwaysPrune(["/p/b.jpg"]);
     await useAppStore.getState().executeDecisions();
 
@@ -1049,11 +1049,11 @@ describe("immediate Skip + singleton prune – Undo reverses both", () => {
 
     const first = useAppStore
       .getState()
-      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+      .removeFromList(["/p/a.jpg"], [], { undoable: true });
     await vi.waitFor(() => expect(pruneCalls).toBe(1));
     await useAppStore
       .getState()
-      .removeFromList(["/p/c.jpg"], false, { undoable: true });
+      .removeFromList(["/p/c.jpg"], [], { undoable: true });
     releaseFirstPrune(
       ok200({ pruned: ["/p/b.jpg"], locked_skipped: [], groups: [] })
     );
@@ -1089,7 +1089,7 @@ describe("immediate Skip + singleton prune – Undo reverses both", () => {
 
     await useAppStore
       .getState()
-      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+      .removeFromList(["/p/a.jpg"], [], { undoable: true });
     expect(useAppStore.getState().execute.prunePrompt).not.toBeNull();
     // What PruneConfirmDialog's Remove does.
     await useAppStore.getState().applyPrune(["/p/b.jpg"]);
@@ -1113,7 +1113,7 @@ describe("loadManifest – a new manifest takes the undo toast with it", () => {
       );
     await useAppStore
       .getState()
-      .removeFromList(["/p/a.jpg"], false, { undoable: true });
+      .removeFromList(["/p/a.jpg"], [], { undoable: true });
     expect(useAppStore.getState().toast).not.toBeNull();
 
     vi.mocked(client.getManifest).mockResolvedValueOnce({
@@ -1963,7 +1963,7 @@ describe("applyPrune – a late 409 locked_paths opens the prune lock gate (#100
     expect(manifest.error).toBeNull();
   });
 
-  it("Unlock & Apply re-sends once with force_locked, carrying the confirmed row", async () => {
+  it("Unlock & Apply re-sends once naming the confirmed row in confirmed_locked", async () => {
     seedLatePrune("always");
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -1979,7 +1979,7 @@ describe("applyPrune – a late 409 locked_paths opens the prune lock gate (#100
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     const body = JSON.parse((fetchSpy.mock.calls[1][1] as { body: string }).body);
-    expect(body.force_locked).toBe(true);
+    expect(body.confirmed_locked).toEqual(["/p/lock.jpg"]);
     expect(body.paths).toEqual(["/p/plain.jpg", "/p/lock.jpg"]);
     expect(useAppStore.getState().execute.lockConflict).toBeNull();
   });
@@ -2172,7 +2172,7 @@ describe("resolvePruneLock", () => {
   });
 
   it("unlock-apply on ask → no separate unlock; the dialog carries lockedToPrune", async () => {
-    // #983: the lock is cleared by the prune write itself (force_locked), never
+    // #983: the lock is cleared by the prune write itself (confirmed_locked), never
     // by a PATCH /api/lock issued before the prune.
     seedGate("ask", { plain: [], actioned: ["/p/x.jpg"] });
     await useAppStore.getState().resolvePruneLock("unlock-apply");
@@ -2181,7 +2181,7 @@ describe("resolvePruneLock", () => {
     expect(p!.lockedToPrune).toEqual(["/p/lock.jpg"]);
   });
 
-  it("unlock-apply on always → one prune POST carries force_locked and the locked path", async () => {
+  it("unlock-apply on always → one prune POST names the locked path in confirmed_locked", async () => {
     seedGate("always", { plain: ["/p/a.jpg"], actioned: [] });
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -2193,7 +2193,7 @@ describe("resolvePruneLock", () => {
       (fetchSpy.mock.calls[0][1] as { body: string }).body
     );
     expect([...body.paths].sort()).toEqual(["/p/a.jpg", "/p/lock.jpg"]);
-    expect(body.force_locked).toBe(true);
+    expect(body.confirmed_locked).toEqual(["/p/lock.jpg"]);
     expect(useAppStore.getState().execute.prunePrompt).toBeNull();
   });
 
@@ -2210,9 +2210,9 @@ describe("resolvePruneLock", () => {
     expect(body.paths).toEqual(["/p/a.jpg"]); // locked NOT included
   });
 
-  it("applyPrune forces only the lock-confirmed path the open prompt carries", async () => {
-    // Dialog path (Remove): applyPrune gets no explicit flag, so only a path the
-    // open prompt's lockedToPrune confirmed may ride with force_locked (#983).
+  it("applyPrune names only the lock-confirmed path the open prompt carries", async () => {
+    // Dialog path (Remove): applyPrune gets no explicit list, so only a path the
+    // open prompt's lockedToPrune confirmed may be named in confirmed_locked (#983).
     seedManifest([makeGroup(1, ["/p/a.jpg", "/p/sibling.jpg"])]);
     useAppStore.setState((s) => ({
       execute: {
@@ -2229,17 +2229,17 @@ describe("resolvePruneLock", () => {
       .mockResolvedValueOnce(ok200({ pruned: [], locked_skipped: [], groups: [] }));
     await useAppStore.getState().applyPrune(["/p/a.jpg", "/p/lock.jpg"]);
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as { body: string }).body);
-    expect(body.force_locked).toBe(true);
+    expect(body.confirmed_locked).toEqual(["/p/lock.jpg"]);
   });
 
-  it("applyPrune does not force when no locked path is confirmed", async () => {
+  it("applyPrune names nothing when no locked path is confirmed", async () => {
     seedManifest([makeGroup(1, ["/p/a.jpg", "/p/sibling.jpg"])]);
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(ok200({ pruned: [], locked_skipped: [], groups: [] }));
     await useAppStore.getState().applyPrune(["/p/a.jpg"]);
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as { body: string }).body);
-    expect(body.force_locked).toBeUndefined();
+    expect(body.confirmed_locked).toEqual([]);
   });
 });
 
@@ -2301,7 +2301,7 @@ describe("revealInExplorer – 403/501 is non-fatal: surfaces executeError, does
 describe("useAppStore action slice (bulk-decide)", () => {
   it("applyBulkDecide re-throws a 409 locked_paths conflict (does not swallow it)", async () => {
     // The component relies on this throw to open the lock-confirm dialog +
-    // retry with force_locked. A swallowed error made that flow dead.
+    // retry naming the rows. A swallowed error made that flow dead.
     useAppStore.setState((s) => ({
       manifest: { ...s.manifest, path: "/m/test.db" },
       action: { ...s.action, field: "File Name", pattern: "IMG", action: "delete" },
@@ -3126,5 +3126,100 @@ describe("setDensity", () => {
 
     useAppStore.getState().setDensity("comfortable");
     expect(loadDensity()).toBe("comfortable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A8 (M1, D7): a second 409 re-opens the dialog with the rows already confirmed
+// (within the request's scope) plus the newly locked ones. Naming only the new
+// rows loops forever: [B] is refused for A, then [A] is refused for B. Each
+// test sends round 2 with round 1's confirmed row and pins the next list.
+// ---------------------------------------------------------------------------
+
+describe("a second 409 accumulates the confirmed rows (A8, M1)", () => {
+  const A = "/p/a.jpg";
+  const B = "/p/b.jpg";
+
+  it("execute: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    const group = makeGroup(1, [A, B]);
+    group.items[0].user_decision = "delete";
+    group.items[1].user_decision = "delete";
+    seedManifest([group]);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [A] }))
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [B] }));
+
+    await useAppStore.getState().executeDecisions({ scopePaths: [A, B] });
+    await useAppStore
+      .getState()
+      .executeDecisions({ scopePaths: [A, B], confirmedLocked: [A] });
+
+    expect(fetchBody(fetchSpy, 1)).toMatchObject({ confirmed_locked: [A] });
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("remove: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    seedManifest([makeGroup(1, [A, B])]);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [A] }))
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [B] }));
+
+    await useAppStore.getState().removeFromList([A, B]);
+    await useAppStore.getState().removeFromList([A, B], [A]);
+
+    expect(fetchBody(fetchSpy, 1)).toMatchObject({ confirmed_locked: [A] });
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("restore: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    seedManifest([makeGroup(1, [A, B])]);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [A] }))
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [B] }));
+
+    await useAppStore.getState().restoreToReview([A, B]);
+    await useAppStore.getState().restoreToReview([A, B], { confirmedLocked: [A] });
+
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("apply best copy: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    seedManifest([makeGroup(1, [A, B])]);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [A] }))
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [B] }));
+
+    await useAppStore.getState().applyBestCopy(1);
+    await useAppStore.getState().applyBestCopy(1, { confirmedLocked: [A] });
+
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("prune: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    seedManifest([]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: [B] })
+    );
+
+    await useAppStore.getState().applyPrune([A, B], undefined, [A]);
+
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("prune: a row already confirmed is not re-offered as unlocked in the reopened gate", async () => {
+    seedManifest([]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: [B] })
+    );
+
+    await useAppStore.getState().applyPrune([A, B], undefined, [A]);
+
+    // A is confirmed (named, so it stays in the re-send) and must not also sit
+    // in the unlocked buckets; B is the refused row and is in neither bucket.
+    const pending = useAppStore.getState().execute.prunePending;
+    expect(pending?.plain).toEqual([]);
+    expect(pending?.actioned).toEqual([]);
   });
 });

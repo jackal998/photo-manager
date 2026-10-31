@@ -471,7 +471,7 @@ class TestExecuteLockedGate:
     def test_locked_delete_row_without_force_returns_409(
         self, client_with_roots, tmp_path
     ):
-        """A locked delete-decided row without force_locked=True → 409 locked_paths."""
+        """A locked delete-decided row not named in confirmed_locked → 409 locked_paths."""
         client, root = client_with_roots
         files = _make_real_files(tmp_path, 2)
         f1, f2 = files
@@ -500,7 +500,7 @@ class TestExecuteLockedGate:
         resp = client.post("/api/execute", json={
             "manifest_path": str(manifest),
             "recycle": False,
-            "force_locked": False,
+            "confirmed_locked": [],
         })
         assert resp.status_code == 409, resp.text
         body = resp.json()
@@ -511,8 +511,8 @@ class TestExecuteLockedGate:
         assert f1.exists()
         assert f2.exists()
 
-    def test_force_locked_unlocks_and_deletes(self, client_with_roots, tmp_path):
-        """force_locked=True unlocks the locked row and proceeds with deletion."""
+    def test_named_lock_unlocks_and_deletes(self, client_with_roots, tmp_path):
+        """A locked row named in confirmed_locked is unlocked and deleted."""
         client, root = client_with_roots
         files = _make_real_files(tmp_path, 2)
         f1, f2 = files
@@ -541,7 +541,7 @@ class TestExecuteLockedGate:
         resp = client.post("/api/execute", json={
             "manifest_path": str(manifest),
             "recycle": False,
-            "force_locked": True,
+            "confirmed_locked": [str(f1)],
         })
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -584,7 +584,7 @@ class TestExecuteLockedGate:
         resp = client.post("/api/execute", json={
             "manifest_path": str(manifest),
             "recycle": False,
-            "force_locked": False,
+            "confirmed_locked": [],
         })
         assert resp.status_code == 409, resp.text
         body = resp.json()
@@ -641,10 +641,10 @@ class TestExecuteMutex:
         # for the second request to arrive and see the lock already acquired.
         original_run = _exec_route._run_execute
 
-        def _slow_run(manifest_path, scope_paths, recycle, force_locked, allowed_roots):
+        def _slow_run(manifest_path, scope_paths, recycle, confirmed_locked, allowed_roots):
             import time
             time.sleep(0.25)  # hold lock for 250 ms
-            return original_run(manifest_path, scope_paths, recycle, force_locked, allowed_roots)
+            return original_run(manifest_path, scope_paths, recycle, confirmed_locked, allowed_roots)
 
         _exec_route._run_execute = _slow_run
 
@@ -817,7 +817,7 @@ class TestPostRemove:
         assert _read_outcome(manifest, str(f2)) == "ignored"
 
     def test_locked_row_without_force_returns_409(self, client_with_roots, tmp_path):
-        """A locked row in file_paths without force_locked → 409."""
+        """A locked row in file_paths not named in confirmed_locked → 409."""
         client, root = client_with_roots
         files = _make_real_files(tmp_path, 2)
         f1, f2 = files
@@ -846,7 +846,7 @@ class TestPostRemove:
         resp = client.post("/api/remove", json={
             "manifest_path": str(manifest),
             "file_paths": [str(f1), str(f2)],
-            "force_locked": False,
+            "confirmed_locked": [],
         })
         assert resp.status_code == 409, resp.text
         assert resp.json()["detail"]["code"] == "locked_paths"
@@ -968,7 +968,7 @@ class TestPostRestore:
         assert _read_outcome(manifest, str(f2)) == "ignored"
         assert _read_is_locked(manifest, str(f2)) is True
 
-    def test_force_locked_unlocks_and_restores(self, client_with_roots, tmp_path):
+    def test_named_lock_unlocks_and_restores(self, client_with_roots, tmp_path):
         client, root = client_with_roots
         manifest, (f1, f2) = self._locked_skipped_manifest(tmp_path)
         paths = [str(f1), str(f2)]
@@ -976,7 +976,7 @@ class TestPostRestore:
         resp = client.post("/api/restore", json={
             "manifest_path": str(manifest),
             "file_paths": paths,
-            "force_locked": True,
+            "confirmed_locked": paths,
         })
 
         assert resp.status_code == 200, resp.text
@@ -1044,7 +1044,7 @@ class TestPostPrune:
         assert _read_outcome(manifest, str(f1)) == "ignored"
 
     def test_locked_singleton_refused_409_nothing_written(self, client_with_roots, tmp_path):
-        """#983: a locked singleton in scope without force_locked → 409
+        """#983: a locked singleton in scope not named in confirmed_locked → 409
         locked_paths, and the manifest is untouched (all or nothing)."""
         client, root = client_with_roots
         files = _make_real_files(tmp_path, 2)
@@ -1083,9 +1083,9 @@ class TestPostPrune:
         assert _read_outcome(manifest, str(f1)) == ""
         assert _read_is_locked(manifest, str(f1)) is True
 
-    def test_force_locked_prunes_and_unlocks_locked_singleton(self, client_with_roots, tmp_path):
-        """#983: force_locked=True prunes the locked singleton (ignored) and
-        clears its lock in the same write."""
+    def test_named_lock_prunes_and_unlocks_locked_singleton(self, client_with_roots, tmp_path):
+        """#983: a locked singleton named in confirmed_locked is pruned (ignored)
+        and its lock is cleared in the same write."""
         client, root = client_with_roots
         f1, f2 = _make_real_files(tmp_path, 2)
         manifest = _make_manifest(tmp_path, [
@@ -1100,7 +1100,7 @@ class TestPostPrune:
         resp = client.post("/api/prune", json={
             "manifest_path": str(manifest),
             "paths": [str(f1)],
-            "force_locked": True,
+            "confirmed_locked": [str(f1)],
         })
         assert resp.status_code == 200, resp.text
         assert resp.json()["pruned"] == [str(f1)]
@@ -1428,3 +1428,253 @@ class TestPostReveal:
         assert explorer_calls[0][1] == "/select,"
         # Third argument is the normalized path.
         assert os.path.normpath(str(f)) == explorer_calls[0][2]
+
+
+# ---------------------------------------------------------------------------
+# A8 (L2a): a stray boolean force is ignored by every named-confirmation verb
+# ---------------------------------------------------------------------------
+
+
+def _row_state(manifest: Path, file_path: str) -> tuple[str, str, int]:
+    """(outcome, user_decision, is_locked) for one manifest row."""
+    conn = sqlite3.connect(str(manifest))
+    try:
+        return conn.execute(
+            "SELECT outcome, user_decision, is_locked FROM migration_manifest "
+            "WHERE source_path = ?",
+            (file_path,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def _stray_bulk_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "field": "File Name", "pattern": ".",
+            "action": "delete", "force_locked": True}
+    return "/api/action/bulk-decide", body, manifest, f1
+
+
+def _stray_best_copy_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 0, "file_size_bytes": 128,
+         "score": 0.9},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 1, "file_size_bytes": 128,
+         "score": 0.5},
+    ])
+    body = {"manifest_path": str(manifest), "group_number": 1, "force_locked": True}
+    return "/api/action/apply-best-copy", body, manifest, f2
+
+
+def _stray_execute_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "", "user_decision": "delete",
+         "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "", "user_decision": "delete",
+         "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "recycle": False, "force_locked": True}
+    return "/api/execute", body, manifest, f1
+
+
+def _stray_remove_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "", "user_decision": "",
+         "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "", "user_decision": "",
+         "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "file_paths": [str(f1)], "force_locked": True}
+    return "/api/remove", body, manifest, f1
+
+
+def _stray_restore_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "ignored", "user_decision": "",
+         "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "ignored", "user_decision": "",
+         "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "file_paths": [str(f1)], "force_locked": True}
+    return "/api/restore", body, manifest, f1
+
+
+def _stray_prune_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "", "group_id": "g2",
+         "outcome": "", "user_decision": "", "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "paths": [str(f1)], "force_locked": True}
+    return "/api/prune", body, manifest, f1
+
+
+_STRAY_FORCE_CASES = {
+    "bulk_decide": _stray_bulk_case,
+    "apply_best_copy": _stray_best_copy_case,
+    "execute": _stray_execute_case,
+    "remove": _stray_remove_case,
+    "restore": _stray_restore_case,
+    "prune": _stray_prune_case,
+}
+
+
+@pytest.mark.parametrize("verb", sorted(_STRAY_FORCE_CASES))
+def test_stray_force_locked_is_ignored_by_every_named_verb(client_with_roots, tmp_path, verb):
+    """A boolean force_locked in the body is not a field any A8 model has. With
+    no confirmed_locked, a locked row in scope is refused: 409 naming that row,
+    and the row stays locked and unwritten. If a force field were re-added and
+    honoured, the request would answer 200 and unlock the row."""
+    client, root = client_with_roots
+    url, body, manifest, locked = _STRAY_FORCE_CASES[verb](tmp_path)
+    before = _row_state(manifest, str(locked))
+    assert before[2] == 1
+
+    resp = client.post(url, json=body)
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "locked_paths"
+    assert str(locked) in detail["locked_paths"]
+    assert _row_state(manifest, str(locked)) == before
+
+
+# ---------------------------------------------------------------------------
+# A8 (D7): a row locked after the dialog opened is confirmed again
+# ---------------------------------------------------------------------------
+
+
+class TestNamedConfirmationAfterDialog:
+    """Each verb answers a second 409 for a row locked after its dialog opened.
+    The 409 names only that row, and it stays locked with nothing written."""
+
+    def test_execute_row_locked_after_the_dialog_gets_a_second_409(
+        self, client_with_roots, tmp_path
+    ):
+        client, root = client_with_roots
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "hamming_distance": 4, "outcome": "",
+                "user_decision": "delete", "is_locked": 1, "file_size_bytes": 128,
+            }
+            for f in (f1, f2)
+        ])
+
+        resp = client.post("/api/execute", json={
+            "manifest_path": str(manifest),
+            "recycle": False,
+            "confirmed_locked": [str(f1)],
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "locked_paths"
+        assert detail["locked_paths"] == [str(f2)]
+        assert f1.exists() and f2.exists()
+        assert _read_outcome(manifest, str(f1)) == ""
+        assert _read_is_locked(manifest, str(f2)) is True
+
+    def test_remove_row_locked_after_the_dialog_gets_a_second_409(
+        self, client_with_roots, tmp_path
+    ):
+        client, root = client_with_roots
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "hamming_distance": 4, "outcome": "",
+                "user_decision": "", "is_locked": 1, "file_size_bytes": 128,
+            }
+            for f in (f1, f2)
+        ])
+
+        resp = client.post("/api/remove", json={
+            "manifest_path": str(manifest),
+            "file_paths": [str(f1), str(f2)],
+            "confirmed_locked": [str(f1)],
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["locked_paths"] == [str(f2)]
+        assert _read_outcome(manifest, str(f1)) == ""
+        assert _read_outcome(manifest, str(f2)) == ""
+        assert _read_is_locked(manifest, str(f2)) is True
+
+    def test_restore_row_locked_after_the_dialog_gets_a_second_409(
+        self, client_with_roots, tmp_path
+    ):
+        client, root = client_with_roots
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "hamming_distance": 4, "outcome": "ignored",
+                "user_decision": "", "is_locked": 1, "file_size_bytes": 128,
+            }
+            for f in (f1, f2)
+        ])
+
+        resp = client.post("/api/restore", json={
+            "manifest_path": str(manifest),
+            "file_paths": [str(f1), str(f2)],
+            "confirmed_locked": [str(f1)],
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["locked_paths"] == [str(f2)]
+        assert _read_outcome(manifest, str(f1)) == "ignored"
+        assert _read_outcome(manifest, str(f2)) == "ignored"
+        assert _read_is_locked(manifest, str(f2)) is True
+
+    def test_prune_singleton_locked_after_the_dialog_gets_a_second_409(
+        self, client_with_roots, tmp_path
+    ):
+        """Two locked singletons (one row each, in separate groups). The dialog
+        named f1; f2 was locked after it opened, so the prune is refused."""
+        client, root = client_with_roots
+        f1, f2 = _make_real_files(tmp_path, 2)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(f1), "action": "", "group_id": "g1",
+                "outcome": "", "user_decision": "", "is_locked": 1,
+                "file_size_bytes": 128,
+            },
+            {
+                "source_path": str(f2), "action": "", "group_id": "g2",
+                "outcome": "", "user_decision": "", "is_locked": 1,
+                "file_size_bytes": 128,
+            },
+        ])
+
+        resp = client.post("/api/prune", json={
+            "manifest_path": str(manifest),
+            "paths": [str(f1), str(f2)],
+            "confirmed_locked": [str(f1)],
+        })
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["locked_paths"] == [str(f2)]
+        assert _read_outcome(manifest, str(f1)) == ""
+        assert _read_outcome(manifest, str(f2)) == ""
+        assert _read_is_locked(manifest, str(f2)) is True

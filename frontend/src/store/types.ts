@@ -663,7 +663,7 @@ export interface AppActions {
    * - On 409 execute_already_running: sets executeError, clears executeRunning.
    * - On other errors: sets executeError, clears executeRunning.
    */
-  executeDecisions(opts?: { scopePaths?: string[]; forceLocked?: boolean }): Promise<void>;
+  executeDecisions(opts?: { scopePaths?: string[]; confirmedLocked?: string[] }): Promise<void>;
 
   /**
    * POST /api/remove for the given file paths.
@@ -676,7 +676,7 @@ export interface AppActions {
    */
   removeFromList(
     paths: string[],
-    forceLocked?: boolean,
+    confirmedLocked?: string[],
     opts?: { undoable?: boolean }
   ): Promise<void>;
 
@@ -712,12 +712,12 @@ export interface AppActions {
   applyPrune(
     paths: string[],
     undoToastId?: number | null,
-    forceLocked?: boolean
+    confirmedLocked?: string[]
   ): Promise<void>;
 
   /**
    * Resolve the prune-context lock gate (LockConfirmDialog op="prune").
-   * - "unlock-apply": fold the locked singletons into the prune with force_locked;
+   * - "unlock-apply": fold the locked singletons into the prune, naming them in confirmed_locked;
    *   the server unlocks each in the same write (#983, no separate unlock).
    * - "unlocked-only" / "cancel": hold the locked singletons; continue with the
    *   unlocked buckets only (faithful to Qt — Cancel does NOT abort the prune).
@@ -797,10 +797,10 @@ export interface AppActions {
    * - On other errors: sets actionError.
    *
    * Lock verdicts (#674) are mutually exclusive:
-   * - forceLocked: mutate locked rows too (Unlock & Apply All).
+   * - confirmedLocked: the locked rows the dialog showed, named (Unlock & Apply).
    * - skipLocked: apply to the unlocked subset only (Apply to Unlocked Only).
    */
-  applyBulkDecide(opts?: { forceLocked?: boolean; skipLocked?: boolean }): Promise<void>;
+  applyBulkDecide(opts?: { confirmedLocked?: string[]; skipLocked?: boolean }): Promise<void>;
 
   /** Clear the actionError field. */
   clearActionError(): void;
@@ -818,13 +818,14 @@ export interface AppActions {
    *   Unlock & Apply / Unlocked Only retry.
    * - On other errors: sets manifest.error.
    *
-   * Lock verdicts mirror applyBulkDecide: forceLocked unlocks previously-
-   * locked delete-targets in the same write; skipLocked narrows the write to
-   * the unlocked subset only. Mutually exclusive (the route 422s if both).
+   * Lock verdicts mirror applyBulkDecide: confirmedLocked names the locked
+   * delete-targets the dialog showed, unlocked in the same write; skipLocked
+   * narrows the write to the unlocked subset only. Mutually exclusive (the
+   * route 422s if both).
    */
   applyBestCopy(
     groupNumber: number,
-    opts?: { forceLocked?: boolean; skipLocked?: boolean }
+    opts?: { confirmedLocked?: string[]; skipLocked?: boolean }
   ): Promise<void>;
 
   /**
@@ -866,13 +867,14 @@ export interface AppActions {
 
   /**
    * POST /api/restore for `paths` — the retry behind the lock-confirm dialog
-   * for op="restore" (#981). "Unlock & Apply" passes `forceLocked`; "Unlocked
-   * only" passes the unlocked subset. On success replaces manifest.groups and
-   * clears a skip-now toast; on 409 locked_paths sets lockConflict again.
+   * for op="restore" (#981). "Unlock & Apply" names the rows the dialog showed
+   * in `confirmedLocked`; "Unlocked only" passes the unlocked subset. On success
+   * replaces manifest.groups and clears a skip-now toast; on 409 locked_paths
+   * sets lockConflict again.
    */
   restoreToReview(
     paths: string[],
-    opts?: { forceLocked?: boolean }
+    opts?: { confirmedLocked?: string[] }
   ): Promise<void>;
 
   /** Clear the toast (its timer expired, or Undo finished). */

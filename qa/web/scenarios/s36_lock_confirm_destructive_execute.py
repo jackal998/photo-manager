@@ -25,10 +25,11 @@ Web slice:
      409 → LockConfirmDialog.
   7. Wait EXECUTE_ALL_DELETE_CONFIRM visible; click EXECUTE_ALL_DELETE_CONFIRM_YES.
   8. Wait LOCK_CONFIRM_DIALOG visible; optionally assert q95 basename appears in its text.
-  9. Click LOCK_CONFIRM_BTN_UNLOCK_APPLY → re-issues POST /api/execute with force_locked=true.
+  9. Click LOCK_CONFIRM_BTN_UNLOCK_APPLY → re-issues POST /api/execute with
+     confirmed_locked naming the locked row (A8, no boolean force).
  10. Poll GET /api/manifest until total_files==0 — the execute dialog does NOT
      auto-close on the web; completion is the manifest emptying after the
-     force_locked re-POST, not the dialog hiding.
+     named re-POST, not the dialog hiding.
  11. ASSERT (absence-based, per the corrected post-execute contract):
        - All 5 tmpdir file paths absent from disk (send2trash moved them).
        - _get_manifest total_files == 0 (all rows have outcome != '' and are filtered out).
@@ -275,8 +276,8 @@ def run(*, base_url: str) -> None:
                 )
 
             # ── Step 10: click Unlock & Apply ─────────────────────────────
-            # LOCK_CONFIRM_BTN_UNLOCK_APPLY re-issues the execute request with
-            # force_locked=true so the locked row is unlocked then deleted.
+            # LOCK_CONFIRM_BTN_UNLOCK_APPLY re-issues the execute request naming
+            # the locked row in confirmed_locked, so it is unlocked then deleted.
             unlock_apply_btn = page.get_by_test_id(LOCK_CONFIRM_BTN_UNLOCK_APPLY)
             unlock_apply_btn.wait_for(state="visible", timeout=5_000)
             unlock_apply_btn.click()
@@ -285,7 +286,7 @@ def run(*, base_url: str) -> None:
             # The web execute dialog does NOT auto-close (the store keeps
             # executeOpen=true and refreshes the now-empty tree — see
             # useAppStore.executeDecisions). Completion is signalled by the
-            # manifest emptying after the force_locked=true re-POST, not by the
+            # manifest emptying after the named re-POST, not by the
             # dialog hiding. Poll GET /api/manifest until total_files==0.
             deadline = time.monotonic() + 30.0
             manifest_post_exec = _get_manifest(base_url, db_path)

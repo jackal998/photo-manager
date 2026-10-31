@@ -212,7 +212,8 @@ export interface ExecuteRequest {
   manifest_path: string;
   scope_paths?: string[] | null;
   recycle?: boolean;
-  force_locked?: boolean;
+  /** A8: locked rows the user confirmed by name. Never a boolean force. */
+  confirmed_locked?: string[];
 }
 
 export interface ExecuteResult {
@@ -231,7 +232,7 @@ export interface ExecuteResult {
 export interface RemoveRequest {
   manifest_path: string;
   file_paths: string[];
-  force_locked?: boolean;
+  confirmed_locked?: string[];
 }
 
 export interface RemoveResult {
@@ -244,7 +245,7 @@ export interface RemoveResult {
 export interface RestoreRequest {
   manifest_path: string;
   file_paths: string[];
-  force_locked?: boolean;
+  confirmed_locked?: string[];
 }
 
 export interface RestoreResult {
@@ -266,11 +267,11 @@ export interface PruneRequest {
    */
   paths?: string[];
   /**
-   * #983: confirmed lock-gate prune. Without it the server refuses (409
-   * `locked_paths`) any locked singleton in scope. With it, each such singleton
-   * is pruned and unlocked in the same write. Sent only for lock-confirmed rows.
+   * #983 / A8: the locked singletons the user confirmed by name. Without a name
+   * the server refuses (409 `locked_paths`) any locked singleton in scope. A
+   * named singleton is pruned and unlocked in the same write.
    */
-  force_locked?: boolean;
+  confirmed_locked?: string[];
 }
 
 export interface PruneResult {
@@ -340,9 +341,9 @@ export interface BulkDecideRequest {
   field: string;
   pattern: string;
   action: string;
-  force_locked?: boolean;
+  confirmed_locked?: string[];
   // #674 — apply the decision to the unlocked subset only (mutually exclusive
-  // with force_locked). Omitted/false on every other call.
+  // with confirmed_locked). Omitted/false on every other call.
   skip_locked?: boolean;
   preview?: boolean;
 }
@@ -364,7 +365,7 @@ export interface BulkDecideResult {
 export interface ApplyBestCopyRequest {
   manifest_path: string;
   group_number: number;
-  force_locked?: boolean;
-  // Apply to the unlocked subset only (mutually exclusive with force_locked).
+  confirmed_locked?: string[];
+  // Apply to the unlocked subset only (mutually exclusive with confirmed_locked).
   skip_locked?: boolean;
 }

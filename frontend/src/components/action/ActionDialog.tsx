@@ -219,7 +219,7 @@ export function ActionDialog() {
   // ---------------------------------------------------------------------------
 
   const doApply = useCallback(
-    async (opts: { forceLocked?: boolean; skipLocked?: boolean }) => {
+    async (opts: { confirmedLocked?: string[]; skipLocked?: boolean }) => {
       try {
         await applyBulkDecide(opts);
         // Recent patterns (#741 sub-item B): record AFTER a successful apply
@@ -240,7 +240,11 @@ export function ActionDialog() {
         closeActionDialog();
       } catch (err) {
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
-          setLockConflictPaths(err.lockedPaths ?? []);
+          // A8 (H1, D7): rows the dialog already confirmed stay in it, so the
+          // next Unlock & Apply re-sends them by name along with the new ones.
+          const prior = opts.confirmedLocked ?? [];
+          const fresh = (err.lockedPaths ?? []).filter((p) => !prior.includes(p));
+          setLockConflictPaths([...prior, ...fresh]);
           // matched_total (#674) sizes the unlocked subset; null when absent.
           setLockConfirmMatchedTotal(err.matchedTotal);
           setLockConfirmOpen(true);
@@ -272,11 +276,11 @@ export function ActionDialog() {
     setDeleteConfirmOpen(false);
   }, []);
 
-  // Unlock & Apply All — re-run mutating the locked rows too.
+  // Unlock & Apply — re-run naming the locked rows this dialog showed (A8).
   const handleLockConfirmForce = useCallback(async () => {
     setLockConfirmOpen(false);
-    await doApply({ forceLocked: true });
-  }, [doApply]);
+    await doApply({ confirmedLocked: lockConflictPaths });
+  }, [doApply, lockConflictPaths]);
 
   // Apply to Unlocked Only — re-run applying to the unlocked subset; locked
   // rows stay locked + undecided (#674, mirrors Qt APPLY_UNLOCKED_ONLY).

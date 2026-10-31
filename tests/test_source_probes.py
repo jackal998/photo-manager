@@ -852,8 +852,9 @@ def test_probe_transport_catches_class_method_on_plain_transport():
 #   1. the wire name (and its camelCase option) lives only in allow-listed
 #      frontend files: default-deny;
 #   2. the decision request builder names `confirmed_locked` and never sends a
-#      boolean force. Other verbs keep `force_locked` until A8, so it is not
-#      banned in the frontend at large.
+#      boolean force.
+# A8 extends the same tripwire to every verb: no `force_locked` / `forceLocked`
+# appears in frontend code outside the lock module and api/client.ts.
 
 FRONTEND_SRC = REPO / "frontend" / "src"
 _CONFIRMED_ALLOWLIST: dict[str, str] = {
@@ -861,6 +862,9 @@ _CONFIRMED_ALLOWLIST: dict[str, str] = {
     "store/types.ts": "the setDecisions contract (opts.confirmedLocked)",
     "store/useAppStore.ts": "setDecisions and the Undo of Keep best name their confirmed rows",
     "components/dialogs/LockConfirmDialog.tsx": "Unlock & Apply names the rows the dialog showed",
+    "components/action/ActionDialog.tsx": "bulk decide names the rows Unlock & Apply showed (A8)",
+    "components/execute/ExecuteDialog.tsx": "types the execute re-send's confirmed rows (A8)",
+    "api/types.ts": "the wire request types declare the confirmed_locked field (A8)",
 }
 _CONFIRMED_NAME_RE = re.compile(r"\bconfirmed_locked\b|\bconfirmedLocked\b")
 _BOOLEAN_FORCE_RE = re.compile(r"\bforce_locked\b|\bforceLocked\b")
@@ -907,6 +911,86 @@ def _find_decision_builder_findings(src: str) -> list[str]:
     return findings
 
 
+_FORCE_ALLOWLIST: dict[str, str] = {
+    "api/client.ts": "the HTTP client, where wire keys are built",
+    "components/dialogs/LockConfirmDialog.tsx": "the lock-confirm module (Unlock & Apply)",
+}
+
+
+def _find_boolean_force_findings(files: dict[str, str]) -> list[str]:
+    """A8: one finding per file outside the allow-list that names a boolean force.
+
+    Code only: comments are blanked by _mask_source, so a comment that records
+    the removal does not count, and a quoted or split wire key does.
+    """
+    findings: list[str] = []
+    for rel, src in sorted(files.items()):
+        if rel in _FORCE_ALLOWLIST:
+            continue
+        code, _ = _mask_source(src)
+        if _BOOLEAN_FORCE_RE.search(code):
+            findings.append(f"{rel} names a boolean force outside the lock module")
+    return findings
+
+
+def test_probe_no_boolean_force_on_current_tree():
+    """A8 must-pass on today's tree: no boolean force in frontend code."""
+    assert _find_boolean_force_findings(_frontend_source_files()) == []
+
+
+def test_probe_force_allow_list_names_live_files():
+    """A stale force allow-list entry fails loudly instead of covering nothing."""
+    stale = sorted(set(_FORCE_ALLOWLIST) - set(_frontend_source_files()))
+    assert not stale, f"_FORCE_ALLOWLIST names missing files: {stale}"
+
+
+_MUST_FAIL_FORCE_FIXTURES: dict[str, tuple[str, str]] = {
+    "boolean_force_key_outside": (
+        "components/action/ActionDialog.tsx",
+        "const body = { force_locked: true };\n",
+    ),
+    "camel_force_read_outside": (
+        "store/useAppStore.ts",
+        "const f = opts.forceLocked ?? false;\n",
+    ),
+    "quoted_spaced_force_key_outside": (
+        "store/useAppStore.ts",
+        'const body = { "force_locked"  :  true };\n',
+    ),
+    "camel_force_split_across_lines_outside": (
+        "components/action/ActionDialog.tsx",
+        "const body = {\n  forceLocked:\n    true,\n};\n",
+    ),
+}
+
+_MUST_PASS_FORCE_FIXTURES: dict[str, tuple[str, str]] = {
+    "force_only_in_comment_outside": (
+        "components/action/ActionDialog.tsx",
+        "// force_locked is gone: named confirmation replaced it\nconst x = 1;\n",
+    ),
+    "force_in_allow_listed_client": (
+        "api/client.ts",
+        "const body = { force_locked: true };\n",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_MUST_FAIL_FORCE_FIXTURES))
+def test_probe_boolean_force_fixture_must_fail(name):
+    rel, src = _MUST_FAIL_FORCE_FIXTURES[name]
+    assert _find_boolean_force_findings({rel: src}), (
+        f"probe missed the must-fail force fixture {name!r}"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_MUST_PASS_FORCE_FIXTURES))
+def test_probe_boolean_force_fixture_must_pass(name):
+    rel, src = _MUST_PASS_FORCE_FIXTURES[name]
+    assert not _find_boolean_force_findings({rel: src}), (
+        f"probe flagged the must-pass force fixture {name!r}"
+    )
+
+
 def test_probe_confirmed_name_stays_on_allow_listed_files_on_current_tree():
     """Must-pass on today's tree: no file outside the allow-list names the confirmation."""
     assert _find_confirmed_name_findings(_frontend_source_files()) == []
@@ -926,15 +1010,15 @@ def test_probe_decision_builder_must_pass_on_current_tree():
 
 _MUST_FAIL_NAME_FIXTURES: dict[str, tuple[str, str]] = {
     "name_outside_allow_list": (
-        "components/action/ActionDialog.tsx",
+        "components/ContextMenu.tsx",
         "const body = { confirmed_locked: paths };\n",
     ),
     "quoted_spaced_wire_key_outside": (
-        "components/action/ActionDialog.tsx",
+        "components/ContextMenu.tsx",
         'const body = { "confirmed_locked"  :  paths };\n',
     ),
     "camel_name_split_across_lines_outside": (
-        "components/action/ActionDialog.tsx",
+        "components/ContextMenu.tsx",
         "const body = {\n  confirmedLocked:\n    paths,\n};\n",
     ),
 }

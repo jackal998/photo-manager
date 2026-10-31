@@ -206,7 +206,7 @@ scenarios:
   - scenario: s36_lock_confirm_destructive_execute
     playwright_module: qa.web.scenarios.s36_lock_confirm_destructive_execute
     status: done
-    notes: "Lock-confirm -> Unlock & Apply -> delete fires on the previously-locked row. Locks q95, marks all 5 delete, Execute -> all-delete confirm -> POST returns 409 locked_paths -> LOCK_CONFIRM_DIALOG -> Unlock & Apply (re-POST force_locked=true) -> asserts all 5 gone from disk + total_files==0. Web modal ordering (all-delete confirm BEFORE lock-confirm) differs from Qt; final outcome identical. Uses the EXECUTE-flow LockConfirmDialog (testid'd), distinct from the ActionDialog inline lock dialog that blocks s32."
+    notes: "Lock-confirm -> Unlock & Apply -> delete fires on the previously-locked row. Locks q95, marks all 5 delete, Execute -> all-delete confirm -> POST returns 409 locked_paths -> LOCK_CONFIRM_DIALOG -> Unlock & Apply (re-POST naming the locked row in confirmed_locked) -> asserts all 5 gone from disk + total_files==0. Web modal ordering (all-delete confirm BEFORE lock-confirm) differs from Qt; final outcome identical. Uses the EXECUTE-flow LockConfirmDialog (testid'd), distinct from the ActionDialog inline lock dialog that blocks s32."
 
   - scenario: s37_status_bar_baseline
     playwright_module: qa.web.scenarios.s37_status_bar_baseline
