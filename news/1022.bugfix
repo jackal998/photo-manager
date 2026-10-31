@@ -1,0 +1,1 @@
+Undo of Keep best sends one decision write with each row's prior lock, so a lock set after the toast is no longer overridden silently; a refused Undo opens the lock-confirm dialog and keeps the toast up
