@@ -844,6 +844,199 @@ def test_probe_transport_catches_class_method_on_plain_transport():
     findings = _find_plain_transport_findings(fixture)
     assert len(findings) == 1 and findings[0].startswith("Api reaches")
 # ---------------------------------------------------------------------------
+# A6 — named confirmation: the decision PATCH never sends a boolean force
+# ---------------------------------------------------------------------------
+# design 3.2 (rev 3): a TRIPWIRE, not a proof. The decision PATCH names the
+# locked rows the user confirmed (`confirmed_locked`); the server refuses any
+# locked row not named, and that is the backstop. Two checks:
+#   1. the wire name (and its camelCase option) lives only in allow-listed
+#      frontend files: default-deny;
+#   2. the decision request builder names `confirmed_locked` and never sends a
+#      boolean force. Other verbs keep `force_locked` until A8, so it is not
+#      banned in the frontend at large.
+
+FRONTEND_SRC = REPO / "frontend" / "src"
+_CONFIRMED_ALLOWLIST: dict[str, str] = {
+    "api/client.ts": "the decision PATCH builder, the one place the wire key is set",
+    "store/types.ts": "the setDecisions contract (opts.confirmedLocked)",
+    "store/useAppStore.ts": "setDecisions and the Undo of Keep best name their confirmed rows",
+    "components/dialogs/LockConfirmDialog.tsx": "Unlock & Apply names the rows the dialog showed",
+}
+_CONFIRMED_NAME_RE = re.compile(r"\bconfirmed_locked\b|\bconfirmedLocked\b")
+_BOOLEAN_FORCE_RE = re.compile(r"\bforce_locked\b|\bforceLocked\b")
+_DECISION_BUILDER = "patchDecisions"
+
+
+def _frontend_source_files(root: Path = FRONTEND_SRC) -> dict[str, str]:
+    """Non-test .ts/.tsx sources under frontend/src, keyed by path relative to src."""
+    files: dict[str, str] = {}
+    for path in sorted([*root.rglob("*.ts"), *root.rglob("*.tsx")]):
+        if ".test." in path.name:
+            continue
+        files[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+    return files
+
+
+def _find_confirmed_name_findings(files: dict[str, str]) -> list[str]:
+    """One finding per file outside the allow-list that names the confirmation.
+
+    Reads the code only: comments are blank, strings are kept, so a quoted wire
+    key counts and a mention in a comment does not.
+    """
+    findings: list[str] = []
+    for rel, src in sorted(files.items()):
+        if rel in _CONFIRMED_ALLOWLIST:
+            continue
+        code, _ = _mask_source(src)
+        if _CONFIRMED_NAME_RE.search(code):
+            findings.append(f"{rel} names the confirmation outside the allow-list")
+    return findings
+
+
+def _find_decision_builder_findings(src: str) -> list[str]:
+    """Findings for the decision builder: it names confirmed_locked, never a force."""
+    declarations = _client_declarations(src)
+    if _DECISION_BUILDER not in declarations:
+        return [f"{_DECISION_BUILDER} is not declared, so the decision builder is unchecked"]
+    _masked, code = declarations[_DECISION_BUILDER]
+    findings: list[str] = []
+    if _BOOLEAN_FORCE_RE.search(code):
+        findings.append(f"{_DECISION_BUILDER} sends a boolean force")
+    if not re.search(r"\bconfirmed_locked\b", code):
+        findings.append(f"{_DECISION_BUILDER} does not send confirmed_locked")
+    return findings
+
+
+def test_probe_confirmed_name_stays_on_allow_listed_files_on_current_tree():
+    """Must-pass on today's tree: no file outside the allow-list names the confirmation."""
+    assert _find_confirmed_name_findings(_frontend_source_files()) == []
+
+
+def test_probe_confirmed_allow_list_names_live_files():
+    """A stale allow-list entry fails loudly instead of covering nothing."""
+    stale = sorted(set(_CONFIRMED_ALLOWLIST) - set(_frontend_source_files()))
+    assert not stale, f"_CONFIRMED_ALLOWLIST names missing files: {stale}"
+
+
+def test_probe_decision_builder_must_pass_on_current_tree():
+    """Must-pass on today's tree: patchDecisions names confirmed_locked, no force."""
+    src = CLIENT_TS_PATH.read_text(encoding="utf-8")
+    assert _find_decision_builder_findings(src) == []
+
+
+_MUST_FAIL_NAME_FIXTURES: dict[str, tuple[str, str]] = {
+    "name_outside_allow_list": (
+        "components/action/ActionDialog.tsx",
+        "const body = { confirmed_locked: paths };\n",
+    ),
+    "quoted_spaced_wire_key_outside": (
+        "components/action/ActionDialog.tsx",
+        'const body = { "confirmed_locked"  :  paths };\n',
+    ),
+    "camel_name_split_across_lines_outside": (
+        "components/action/ActionDialog.tsx",
+        "const body = {\n  confirmedLocked:\n    paths,\n};\n",
+    ),
+}
+
+_MUST_PASS_NAME_FIXTURES: dict[str, tuple[str, str]] = {
+    "name_in_allow_listed_client": (
+        "api/client.ts",
+        "const body = {\n  confirmed_locked:\n    paths,\n};\n",
+    ),
+    "name_only_in_comment_outside": (
+        "components/action/ActionDialog.tsx",
+        "// confirmed_locked is sent by the decision PATCH only\nconst x = 1;\n",
+    ),
+    "force_locked_on_other_verb_outside": (
+        "components/action/ActionDialog.tsx",
+        "const body = { force_locked: true };\n",
+    ),
+}
+
+
+def _builder(*entries: str) -> str:
+    """A patchDecisions declaration whose request object holds *entries*."""
+    body = "\n".join(f"    {entry}" for entry in entries)
+    return (
+        "export async function patchDecisions(\n"
+        "  manifestPath: string,\n"
+        "  decisions: DecisionEntry[],\n"
+        "  opts?: { confirmedLocked?: string[] }\n"
+        "): Promise<PatchDecisionsResult> {\n"
+        '  return patchJsonOrConflict<PatchDecisionsResult>("/api/decision", {\n'
+        f"{body}\n"
+        "  });\n"
+        "}\n"
+    )
+
+
+_BASE = ("manifest_path: manifestPath,", "decisions,")
+
+_MUST_FAIL_BUILDER_FIXTURES: dict[str, str] = {
+    "boolean_force_key": _builder(
+        *_BASE, "confirmed_locked: opts?.confirmedLocked ?? [],",
+        "force_locked: opts?.forceLocked ?? false,",
+    ),
+    "quoted_spaced_force_key": _builder(
+        *_BASE, "confirmed_locked: [],", '"force_locked"   :   false,',
+    ),
+    "split_force_key": _builder(
+        *_BASE, "confirmed_locked: [],", "force_locked", ": false,",
+    ),
+    "single_quoted_force_key": _builder(
+        *_BASE, "confirmed_locked: [],", "'force_locked': false,",
+    ),
+    "spread_force_key": _builder(
+        *_BASE, "confirmed_locked: [],",
+        "...(opts?.forceLocked ? { force_locked: true } : {}),",
+    ),
+    "confirmed_key_missing": _builder(*_BASE),
+}
+
+_MUST_PASS_BUILDER_FIXTURES: dict[str, str] = {
+    "split_confirmed_key": _builder(
+        *_BASE, "confirmed_locked", ":", "opts?.confirmedLocked ?? [],",
+    ),
+    "quoted_confirmed_key_extra_spaces": _builder(
+        *_BASE, '"confirmed_locked"   :   opts?.confirmedLocked ?? [],',
+    ),
+    "force_locked_only_in_comment": _builder(
+        *_BASE, "// force_locked is gone: the decision PATCH never sends it",
+        "confirmed_locked: opts?.confirmedLocked ?? [],",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_MUST_FAIL_NAME_FIXTURES))
+def test_probe_confirmed_name_fixture_must_fail(name):
+    rel, src = _MUST_FAIL_NAME_FIXTURES[name]
+    assert _find_confirmed_name_findings({rel: src}), (
+        f"probe missed the must-fail fixture {name!r}"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_MUST_PASS_NAME_FIXTURES))
+def test_probe_confirmed_name_fixture_must_pass(name):
+    rel, src = _MUST_PASS_NAME_FIXTURES[name]
+    assert not _find_confirmed_name_findings({rel: src}), (
+        f"probe flagged the must-pass fixture {name!r}"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_MUST_FAIL_BUILDER_FIXTURES))
+def test_probe_decision_builder_fixture_must_fail(name):
+    findings = _find_decision_builder_findings(_MUST_FAIL_BUILDER_FIXTURES[name])
+    assert findings, f"probe missed the must-fail builder fixture {name!r}"
+
+
+@pytest.mark.parametrize("name", sorted(_MUST_PASS_BUILDER_FIXTURES))
+def test_probe_decision_builder_fixture_must_pass(name):
+    findings = _find_decision_builder_findings(_MUST_PASS_BUILDER_FIXTURES[name])
+    assert findings == [], f"probe flagged the must-pass builder fixture {name!r}: {findings}"
+
+
+# ---------------------------------------------------------------------------
 # A5 — write-path probe: no unguarded UPDATE of user_decision / outcome / is_locked
 # ---------------------------------------------------------------------------
 # design 2.3 (rev 3). Scope: UPDATE only. INSERT OR REPLACE and REPLACE INTO are

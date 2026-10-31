@@ -9,6 +9,7 @@
 //
 // Three outcomes:
 //   Unlock & Apply  → re-run the original op with forceLocked:true
+//                     (op "decision" names its rows: confirmedLocked, A6)
 //   Unlocked Only   → re-run the original op with the locked paths excluded
 //   Cancel          → clear lockConflict, do nothing
 //
@@ -132,7 +133,11 @@ export function LockConfirmDialog() {
     if (op === "execute") {
       void executeDecisions({ scopePaths: original, forceLocked: true });
     } else if (op === "decision") {
-      void setDecisions(original, pendingDecision, { forceLocked: true });
+      // A6: name the rows this dialog showed. A row locked after it opened is
+      // not in lockedPaths, so the server answers a second 409 for it alone.
+      void setDecisions(original, pendingDecision, {
+        confirmedLocked: lockedPaths,
+      });
     } else if (op === "apply-best-copy") {
       if (groupNumber !== undefined) {
         void applyBestCopy(groupNumber, { forceLocked: true });

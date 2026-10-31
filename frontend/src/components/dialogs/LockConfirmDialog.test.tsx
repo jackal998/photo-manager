@@ -270,7 +270,7 @@ describe("LockConfirmDialog", () => {
   // #733 — op="decision" (PATCH /api/decision 409 locked_paths)
   // ---------------------------------------------------------------------------
 
-  it("Unlock & Apply (decision) re-runs setDecisions with the ORIGINAL scope, forceLocked:true, and the pending decision", async () => {
+  it("Unlock & Apply (decision) re-runs setDecisions with the ORIGINAL scope, confirming the dialog's rows by name, and the pending decision", async () => {
     const user = userEvent.setup();
     const lockedPaths = ["/photos/locked.jpg"];
     const originalPaths = ["/photos/ok.jpg", "/photos/locked.jpg"];
@@ -278,7 +278,7 @@ describe("LockConfirmDialog", () => {
     render(<LockConfirmDialog />);
     await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
     expect(setDecisionsMock).toHaveBeenCalledWith(originalPaths, "delete", {
-      forceLocked: true,
+      confirmedLocked: lockedPaths,
     });
     expect(executeDecisionsMock).not.toHaveBeenCalled();
     expect(removeFromListMock).not.toHaveBeenCalled();

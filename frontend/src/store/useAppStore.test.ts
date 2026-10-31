@@ -1397,22 +1397,27 @@ describe("undoKeepBest – restores the snapshot and dismisses the toast", () =>
     await useAppStore.getState().applyBestCopy(1, { skipLocked: true });
   }
 
-  it("PATCHes the prior decisions with force_locked, then the prior locks", async () => {
+  it("PATCHes the prior decisions with the snapshot confirmed, then the prior locks", async () => {
     await stage();
     vi.mocked(client.patchDecisions).mockResolvedValue({ updated: 2 });
     vi.mocked(client.patchLocks).mockResolvedValue({ updated: 2 });
 
     await useAppStore.getState().undoKeepBest();
 
-    // force_locked matters: apply-best-copy LOCKED the keeper, so without it
-    // the undo is refused by the lock the action itself had just created.
+    // The confirmation matters: apply-best-copy LOCKED the keeper, so without
+    // it the undo is refused by the lock the action itself had just created.
     expect(client.patchDecisions).toHaveBeenCalledWith(
       "/data/scan.db",
       expect.arrayContaining([
         { file_path: "/photos/keeper.jpg", decision: "" },
         { file_path: "/photos/peer.jpg", decision: "ignore" },
       ]),
-      { forceLocked: true }
+      {
+        confirmedLocked: expect.arrayContaining([
+          "/photos/keeper.jpg",
+          "/photos/peer.jpg",
+        ]),
+      }
     );
     expect(client.patchLocks).toHaveBeenCalledWith(
       "/data/scan.db",
@@ -2264,7 +2269,7 @@ describe("setDecisions – one PATCH for the whole list, optimistic on all", () 
         { file_path: "/p/a.jpg", decision: "delete" },
         { file_path: "/p/c.jpg", decision: "delete" },
       ],
-      { forceLocked: false }
+      { confirmedLocked: [] }
     );
   });
 
@@ -2309,6 +2314,43 @@ describe("setDecisions – one PATCH for the whole list, optimistic on all", () 
       originalPaths: ["/p/a.jpg", "/p/b.jpg"],
       pendingDecision: "delete",
     });
+  });
+
+  // A6 / D7: Unlock & Apply re-sends naming the rows the dialog showed. A row
+  // locked after the dialog opened gets a second 409 that names only itself,
+  // and the dialog reopens for it.
+  it("Unlock & Apply names the dialog's row; a second 409 reopens the dialog for the new row only", async () => {
+    seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg"])]);
+    const original = ["/p/a.jpg", "/p/b.jpg"];
+    vi.mocked(client.patchDecisions)
+      .mockRejectedValueOnce(new client.ApiConflictError("locked_paths", ["/p/b.jpg"]))
+      .mockRejectedValueOnce(new client.ApiConflictError("locked_paths", ["/p/a.jpg"]));
+
+    await useAppStore.getState().setDecisions(original, "delete");
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual(["/p/b.jpg"]);
+
+    // The dialog clears the conflict, then re-runs with the rows it showed.
+    useAppStore.setState((s) => ({ execute: { ...s.execute, lockConflict: null } }));
+    await useAppStore
+      .getState()
+      .setDecisions(original, "delete", { confirmedLocked: ["/p/b.jpg"] });
+
+    expect(client.patchDecisions).toHaveBeenLastCalledWith(
+      "/data/scan.db",
+      [
+        { file_path: "/p/a.jpg", decision: "delete" },
+        { file_path: "/p/b.jpg", decision: "delete" },
+      ],
+      { confirmedLocked: ["/p/b.jpg"] }
+    );
+    const { execute, manifest } = useAppStore.getState();
+    expect(execute.lockConflict).toEqual({
+      paths: ["/p/a.jpg"],
+      op: "decision",
+      originalPaths: original,
+      pendingDecision: "delete",
+    });
+    expect(manifest.error).toBeNull();
   });
 });
 
@@ -2582,9 +2624,9 @@ describe("applyBulkDecision – the toolbar's counted verbs (L5)", () => {
         { file_path: "/photos/a.jpg", decision: "delete" },
         { file_path: "/photos/b.jpg", decision: "delete" },
       ],
-      // Not forced: the lock never reaches the route, so there is no 409 to
+      // Not confirmed: the lock never reaches the route, so there is no 409 to
       // recover from and no LockConfirmDialog in front of a reversible write.
-      { forceLocked: false }
+      { confirmedLocked: [] }
     );
   });
 
@@ -2691,7 +2733,7 @@ describe("applyBulkDecision – the toolbar's counted verbs (L5)", () => {
         { file_path: "/photos/keep_a.jpg", decision: "delete" },
         { file_path: "/photos/keep_b.jpg", decision: "delete" },
       ],
-      { forceLocked: false }
+      { confirmedLocked: [] }
     );
     const byPath = new Map(
       useAppStore
