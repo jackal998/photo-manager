@@ -7,6 +7,7 @@ red tests for the stale-plan, SQL-guard and record_deleted acceptance items.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -386,3 +387,152 @@ class TestRecordDeleted:
             tx.record_deleted(str(f1))
 
         assert _read_row(manifest, str(f1))[:3] == ("deleted", 1, 0)
+
+
+# ---------------------------------------------------------------------------
+# A9: Execute re-checks each delete row right before its file call (D6).
+# The change lands on a SEPARATE connection, from inside the file-call step
+# (the fake recycle below), so it happens after the gate and before the call.
+# ---------------------------------------------------------------------------
+
+
+class _RecycleStep:
+    """Stands in for DeleteService.delete_to_recycle; runs ``before`` per file."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.before = lambda _path: None
+
+
+@pytest.fixture
+def recycle_step(monkeypatch):
+    from core.services.interfaces import DeleteResult
+    from infrastructure.delete_service import DeleteService
+
+    step = _RecycleStep()
+
+    def _fake_recycle(_self, paths):
+        for path in paths:
+            step.calls.append(path)
+            step.before(path)
+            os.remove(path)
+        return DeleteResult(success_paths=list(paths), failed=[])
+
+    monkeypatch.setattr(DeleteService, "delete_to_recycle", _fake_recycle)
+    return step
+
+
+def _set_outcome(manifest: Path, path: str, outcome: str) -> None:
+    conn = sqlite3.connect(str(manifest))
+    try:
+        conn.execute(
+            "UPDATE migration_manifest SET outcome = ? WHERE source_path = ?",
+            (outcome, path),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _two_deletes(tmp_path: Path):
+    """Two unlocked delete rows and a keeper; returns (manifest, a, b)."""
+    row_a, row_b = _touch(tmp_path, "a.jpg"), _touch(tmp_path, "b.jpg")
+    keeper = _touch(tmp_path, "k.jpg")
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(row_a), "group_id": "g1", "outcome": "",
+         "user_decision": "delete", "file_size_bytes": 64},
+        {"source_path": str(row_b), "group_id": "g1", "outcome": "",
+         "user_decision": "delete", "file_size_bytes": 64},
+        {"source_path": str(keeper), "group_id": "g1", "outcome": "",
+         "user_decision": "", "file_size_bytes": 64},
+    ])
+    return manifest, row_a, row_b
+
+
+def _lock_the_others_before_first_call(recycle_step, manifest: Path, rows: list[Path]):
+    """Land a change on every other delete row before the first file call returns.
+
+    The first file call is the one that runs after the gate; every other row
+    is still unexecuted at that point, so the change is always after the gate
+    and before that row's own re-check. Which row goes first is left to the
+    query order, and the test asserts it from ``recycle_step.calls``.
+    """
+    def _before(path: str) -> None:
+        if len(recycle_step.calls) == 1:
+            for other in rows:
+                if str(other) != path:
+                    _set_locked(manifest, str(other))
+    recycle_step.before = _before
+
+
+class TestExecuteRowRecheck:
+    def test_row_locked_after_the_gate_is_not_deleted_and_keeps_its_lock(
+        self, tmp_path, recycle_step
+    ):
+        manifest, row_a, row_b = _two_deletes(tmp_path)
+        _lock_the_others_before_first_call(recycle_step, manifest, [row_a, row_b])
+
+        result = execute_decisions(str(manifest), recycle=True)
+
+        assert len(recycle_step.calls) == 1, "the locked row never reaches its file call"
+        first = recycle_step.calls[0]
+        locked = str(row_b) if first == str(row_a) else str(row_a)
+        assert os.path.exists(locked), "a row locked after the gate is not deleted"
+        assert _read_row(manifest, locked)[:3] == ("", 0, 1), "outcome and lock unchanged"
+        assert locked in [p for p, _reason in result["failed"]]
+        assert locked not in result["success_paths"]
+        assert _read_row(manifest, first)[:3] == ("deleted", 1, 0), (
+            "the unaffected row is still deleted and recorded"
+        )
+
+    def test_row_dismissed_after_the_gate_is_not_deleted(self, tmp_path, recycle_step):
+        manifest, row_a, row_b = _two_deletes(tmp_path)
+
+        def _dismiss_others(path: str) -> None:
+            if len(recycle_step.calls) == 1:
+                for other in (row_a, row_b):
+                    if str(other) != path:
+                        _set_outcome(manifest, str(other), "ignored")
+
+        recycle_step.before = _dismiss_others
+
+        result = execute_decisions(str(manifest), recycle=True)
+
+        assert len(recycle_step.calls) == 1
+        dismissed = str(row_b) if recycle_step.calls[0] == str(row_a) else str(row_a)
+        assert os.path.exists(dismissed), "a row dismissed after the gate is not deleted"
+        assert _read_row(manifest, dismissed)[:3] == ("ignored", 0, 0)
+        assert dismissed in [p for p, _reason in result["failed"]]
+
+    def test_row_handled_elsewhere_after_the_gate_is_not_deleted(
+        self, tmp_path, recycle_step
+    ):
+        manifest, row_a, row_b = _two_deletes(tmp_path)
+
+        def _handle_others(path: str) -> None:
+            if len(recycle_step.calls) == 1:
+                for other in (row_a, row_b):
+                    if str(other) != path:
+                        _set_outcome(manifest, str(other), "deleted")
+
+        recycle_step.before = _handle_others
+
+        result = execute_decisions(str(manifest), recycle=True)
+
+        assert len(recycle_step.calls) == 1
+        handled = str(row_b) if recycle_step.calls[0] == str(row_a) else str(row_a)
+        assert os.path.exists(handled), "a row already handled is not re-deleted"
+        assert _read_row(manifest, handled)[:3] == ("deleted", 0, 0)
+        assert handled in [p for p, _reason in result["failed"]]
+
+    def test_row_locked_before_and_named_is_still_deleted(self, tmp_path, recycle_step):
+        manifest, row_a, row_b = _two_deletes(tmp_path)
+        _set_locked(manifest, str(row_a))
+
+        result = execute_decisions(
+            str(manifest), recycle=True, confirmed_locked=[str(row_a)]
+        )
+
+        assert str(row_a) in result["success_paths"]
+        assert not row_a.exists()
+        assert _read_row(manifest, str(row_a))[:3] == ("deleted", 1, 0)

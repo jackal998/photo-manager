@@ -36,7 +36,13 @@ from core.app_service.lock_gate import (
 from core.app_service.path_safety import is_under_roots
 from infrastructure.delete_service import DeleteService
 from infrastructure.logging import write_delete_log
-from infrastructure.manifest_repository import ManifestRepository
+from infrastructure.manifest_repository import DeleteSession, ManifestRepository
+
+# A9 (D6): reasons for a delete row left alone by the pre-call re-check. They
+# go in the existing ``failed`` list, which already carries per-row reasons for
+# rows that were not deleted (e.g. outside_allowed_roots).
+ROW_LOCKED_AFTER_GATE = "locked after the gate: not deleted, lock kept"
+ROW_OUTCOME_CHANGED = "dismissed or handled after the gate: not deleted"
 
 
 def _require_manifest(manifest_path: str) -> None:
@@ -179,10 +185,20 @@ def _transition_outcome(
         )
 
 
-def _record_deleted(repo: ManifestRepository, manifest_path: str, path: str) -> None:
-    """Record a successful per-file delete (D7) in its own short txn (A4)."""
-    with repo.write_txn(manifest_path) as tx:
-        tx.record_deleted(path)
+def _recheck_reason(
+    session: DeleteSession, path: str, confirmed: frozenset[str]
+) -> str | None:
+    """Why ``path`` must not be deleted now, or None when it may be (A9, D6).
+
+    A row locked after the gate is kept unless the user named it at the gate.
+    A row whose outcome is no longer '' (dismissed or handled) is never deleted.
+    """
+    for is_locked, outcome in session.row_states(path):
+        if outcome != "":
+            return ROW_OUTCOME_CHANGED
+        if is_locked and path not in confirmed:
+            return ROW_LOCKED_AFTER_GATE
+    return None
 
 
 def _gate_execute(
@@ -285,43 +301,53 @@ def execute_decisions(
     missing: list[str] = []
     db_write_failed: list[str] = []
 
-    for path in safe_delete_paths:
-        if not os.path.exists(path):
-            missing.append(path)
-            logger.warning("File not found, skipping delete: {}", path)
-            # Do NOT write outcome='deleted' for missing files — they
-            # never appeared in the manifest as deleted from disk.
-            continue
+    confirmed = frozenset(named or ())
+    with repo.delete_session(manifest_path) as session:
+        for path in safe_delete_paths:
+            if not os.path.exists(path):
+                missing.append(path)
+                logger.warning("File not found, skipping delete: {}", path)
+                # Do NOT write outcome='deleted' for missing files — they
+                # never appeared in the manifest as deleted from disk.
+                continue
 
-        if recycle:
-            result = svc.delete_to_recycle([path])
-            if result.success_paths:
-                success_paths.append(path)
-                # D7: write outcome PER FILE immediately after success.
-                try:
-                    _record_deleted(repo, manifest_path, path)
-                except Exception as exc:
-                    # FIX 5: file IS gone from disk — keep it in success_paths,
-                    # record the DB write failure separately.
-                    logger.warning("Failed to write deleted outcome for {}: {}", path, exc)
-                    db_write_failed.append(path)
+            # A9 (D6): re-check the row's lock and outcome right before its
+            # file call. A row changed after the gate is left alone and reported.
+            skip_reason = _recheck_reason(session, path, confirmed)
+            if skip_reason is not None:
+                failed.append((path, skip_reason))
+                logger.warning("Skipped delete of {}: {}", path, skip_reason)
+                continue
+
+            if recycle:
+                result = svc.delete_to_recycle([path])
+                if result.success_paths:
+                    success_paths.append(path)
+                    # D7: write outcome PER FILE immediately after success.
+                    try:
+                        session.record_deleted(path)
+                    except Exception as exc:
+                        # FIX 5: file IS gone from disk — keep it in success_paths,
+                        # record the DB write failure separately.
+                        logger.warning("Failed to write deleted outcome for {}: {}", path, exc)
+                        db_write_failed.append(path)
+                else:
+                    reason = result.failed[0][1] if result.failed else "unknown"
+                    failed.append((path, reason))
             else:
-                reason = result.failed[0][1] if result.failed else "unknown"
-                failed.append((path, reason))
-        else:
-            # recycle=False: direct unlink (for tests / explicit user opt-out).
-            try:
-                os.unlink(path)
-                success_paths.append(path)
+                # recycle=False: direct unlink (for tests / explicit user opt-out).
                 try:
-                    _record_deleted(repo, manifest_path, path)
-                except Exception as exc:
-                    # FIX 5: file IS gone from disk — keep it in success_paths,
-                    # record the DB write failure separately.
-                    logger.warning("Failed to write deleted outcome for {}: {}", path, exc)
-                    db_write_failed.append(path)
-            except OSError as exc:
-                failed.append((path, str(exc)))
+                    os.unlink(path)
+                    success_paths.append(path)
+                    try:
+                        session.record_deleted(path)
+                    except Exception as exc:
+                        # FIX 5: file IS gone from disk — keep it in success_paths,
+                        # record the DB write failure separately.
+                        logger.warning("Failed to write deleted outcome for {}: {}", path, exc)
+                        db_write_failed.append(path)
+                except OSError as exc:
+                    failed.append((path, str(exc)))
 
     # --- Batch ignore ---------------------------------------------------
     ignored: list[str] = []

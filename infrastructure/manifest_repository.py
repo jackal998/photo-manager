@@ -198,6 +198,11 @@ UPDATE migration_manifest SET outcome = 'deleted', executed = 1, is_locked = 0
  WHERE source_path = ?
 """
 
+# A9 — Execute's pre-call re-check: a plain read of the lock and the outcome.
+_ROW_STATE_SQL = """
+SELECT is_locked, outcome FROM migration_manifest WHERE source_path = ?
+"""
+
 # #821 — every in-review row, for the open-time skip-directory reconcile.
 # #982 — ``is_locked`` and ``group_id`` ride along so the reconcile can leave
 # every group that holds a locked row untouched (the group is the unit).
@@ -606,6 +611,32 @@ class ManifestTxn:
         self._conn.execute(_RECORD_DELETED_SQL, (path,))
 
 
+class DeleteSession:
+    """Execute's per-file connection (A9, design D6).
+
+    ``row_states`` is a plain read in autocommit, so it never holds the write
+    lock. ``record_deleted`` takes its own short IMMEDIATE transaction on the
+    same connection. Both run around one file call.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def row_states(self, path: str) -> list[tuple[int, str]]:
+        """``(is_locked, outcome)`` for every row with this source path."""
+        return self._conn.execute(_ROW_STATE_SQL, (path,)).fetchall()
+
+    def record_deleted(self, path: str) -> None:
+        """Record a successful delete in one IMMEDIATE txn on this connection."""
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            ManifestTxn(self._conn).record_deleted(path)
+        except BaseException:
+            self._conn.rollback()
+            raise
+        self._conn.commit()
+
+
 class ManifestRepository:
     """Read all manifest rows; write user decisions back."""
 
@@ -666,6 +697,22 @@ class ManifestRepository:
             conn.commit()
         finally:
             _open_txn_paths().discard(key)
+            conn.close()
+
+    @contextmanager
+    def delete_session(self, manifest_path: str) -> Iterator[DeleteSession]:
+        """Open one autocommit connection for Execute's per-file loop (A9).
+
+        Each row is re-checked with a plain read before its file call, and the
+        outcome is written on this same connection afterwards. No transaction
+        is open between those steps, so a PATCH is never held up by the read.
+        """
+        self.ensure_schema(manifest_path)
+        conn = _connect(manifest_path)
+        conn.isolation_level = None  # autocommit reads; BEGIN is explicit
+        try:
+            yield DeleteSession(conn)
+        finally:
             conn.close()
 
     # --------------------------------------------------------- reconcile
