@@ -142,3 +142,29 @@ class TestDeleteToRecycle:
         assert result.success_paths == []
         assert len(result.failed) == 1
         assert "Unexpected error" in result.failed[0][1]
+
+
+# ── write_delete_log ───────────────────────────────────────────────────────
+
+
+class TestWriteDeleteLog:
+    """write_delete_log writes one audit row per path, successes and failures alike."""
+
+    def test_success_and_failure_rows_are_read_back(self, tmp_path):
+        import csv
+
+        from infrastructure.logging import write_delete_log
+
+        log_path = write_delete_log(
+            [(1, "/a/ok.jpg", True, ""), (2, "/a/bad.jpg", False, "access denied")],
+            log_dir=str(tmp_path),
+        )
+
+        assert log_path is not None
+        with open(log_path, encoding="utf-8", newline="") as f:
+            rows = list(csv.reader(f))
+        assert rows == [
+            ["GroupNumber", "FilePath", "Success", "Reason"],
+            ["1", "/a/ok.jpg", "1", ""],
+            ["2", "/a/bad.jpg", "0", "access denied"],
+        ]

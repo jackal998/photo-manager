@@ -61,7 +61,8 @@ def build_auto_select_writes(
     write-set into the manifest's own tmp connection (closing the
     incoherence window where a crash between the manifest write and a
     separate auto-select write left keepers unlocked). The separate
-    post-write apply was removed in A5; nothing else writes this set.
+    post-write apply was removed in A5. ``action_service.apply_best_copy`` also
+    builds a keeper set for its own write; this function defines the shape.
 
     The canonical stored value for "keep" is the **empty string** —
     matches what ``settable_decisions()`` returns and what the right-

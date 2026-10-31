@@ -850,8 +850,13 @@ def test_probe_transport_catches_class_method_on_plain_transport():
 # out of scope; the only INSERT ... SELECT is the schema rebuild in
 # migrate_manifest_schema, which copies rows and sets no decision.
 #
-# The probe reads the AST, never raw text. Limit: SQL assembled from a variable
-# at runtime (a concatenation with a non-literal part) is not seen.
+# The probe reads the AST, never raw text. Seen: a string literal, implicit
+# concatenation, a `+` chain of literals, an f-string and a `%` template, each
+# as its literal parts; a non-literal operand is shown as one space. So
+# `"... SET outcome = " + x` is caught by its literal column name. Not seen:
+# a protected column name chosen at runtime (`"SET " + col + " = ?"`), a column
+# name passed into `.format(...)`, `str.join` or `getattr`, and any file the scan
+# does not read.
 
 _PROBE_EXCLUDED_DIRS = frozenset(
     {"tests", ".venv", "venv", "node_modules", ".claude", ".git", "__pycache__"}
@@ -882,11 +887,16 @@ _ALLOWED_CONSTANT_USERS: dict[str, frozenset[tuple[str, str]]] = {
     }),
 }
 
+# The table may be written as `migration_manifest`, `"migration_manifest"` or
+# `[migration_manifest]`, with a `main.` prefix and an `OR <action>` conflict
+# clause. A protected column may be quoted in SET.
 _UPDATE_HEAD = re.compile(
-    r"\bupdate\s+migration_manifest(?:\s+as)?(?:\s+(?!set\b)\w+)?\s+set\b"
+    r"\bupdate\s+(?:or\s+(?:ignore|replace|abort|fail|rollback)\s+)?"
+    r"(?:main\.)?[\"\[`]?migration_manifest[\"\]`]?"
+    r"(?:\s+as)?(?:\s+(?!set\b)\w+)?\s+set\b"
 )
 _PROTECTED_ASSIGN = re.compile(
-    r"(?<![\w.])(?:\w+\.)?(user_decision|outcome|is_locked)\s*=(?!=)"
+    r"(?<![\w.])(?:\w+\.)?[\"\[`]?(user_decision|outcome|is_locked)[\"\]`]?\s*=(?!=)"
 )
 
 
@@ -906,13 +916,27 @@ def _protected_update_columns(sql: str) -> set[str]:
     return hits
 
 
+def _joined_text(node: ast.JoinedStr) -> str:
+    """An f-string's literal parts, each placeholder shown as one space."""
+    return "".join(
+        part.value if isinstance(part, ast.Constant) else " " for part in node.values
+    )
+
+
+def _add_leaves(node: ast.expr) -> list[ast.expr]:
+    """The operands of a left-or-right nested ``+`` chain, in source order."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _add_leaves(node.left) + _add_leaves(node.right)
+    return [node]
+
+
 class _ScopedStrings(ast.NodeVisitor):
     """Collect (scope, SQL-text) and (scope, guarded-name) pairs from one module.
 
     A module-level ``NAME = ...`` gives its own scope the name, so a constant's
-    SQL is keyed by the constant. An f-string is joined from its literal parts,
-    with each placeholder shown as a space. Implicit concatenation is already a
-    single ``Constant`` in the AST.
+    SQL is keyed by the constant. Implicit concatenation is one ``Constant`` in
+    the AST; a ``+`` chain and an f-string are joined by ``visit_BinOp`` and
+    ``visit_JoinedStr``. A ``%`` template is its literal string.
     """
 
     def __init__(self) -> None:
@@ -948,11 +972,30 @@ class _ScopedStrings(ast.NodeVisitor):
             self.sql.append((self._qual(), node.value))
 
     def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
-        text = "".join(
-            part.value if isinstance(part, ast.Constant) else " "
-            for part in node.values
-        )
-        self.sql.append((self._qual(), text))
+        self.sql.append((self._qual(), _joined_text(node)))
+        for part in node.values:
+            if isinstance(part, ast.FormattedValue):
+                self.visit(part.value)
+
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        # ast does not fold `+`, so each literal of `"A " + "B"` would be matched
+        # alone and a split UPDATE would slip through. Join the whole chain once.
+        if not isinstance(node.op, ast.Add):
+            self.generic_visit(node)
+            return
+        parts: list[str] = []
+        for leaf in _add_leaves(node):
+            if isinstance(leaf, ast.Constant) and isinstance(leaf.value, str):
+                parts.append(leaf.value)
+            elif isinstance(leaf, ast.JoinedStr):
+                parts.append(_joined_text(leaf))
+                self.visit_JoinedStr_refs(leaf)
+            else:
+                parts.append(" ")
+                self.visit(leaf)
+        self.sql.append((self._qual(), "".join(parts)))
+
+    def visit_JoinedStr_refs(self, node: ast.JoinedStr) -> None:
         for part in node.values:
             if isinstance(part, ast.FormattedValue):
                 self.visit(part.value)
@@ -1133,6 +1176,28 @@ _MUST_FAIL_WRITE_FIXTURES = {
         "def f(conn):\n"
         "    conn.execute(repo._UPDATE_LOCK_SQL, (1, '/a.jpg'))\n"
     ),
+    "plus_concat_split_across_lines": (
+        'S = ("UPDATE migration_manifest SET executed = 1, "\n'
+        '     + "is_locked = 0 WHERE source_path = ?")\n'
+    ),
+    "plus_concat_table_then_set": (
+        'S = "UPDATE migration_manifest " + "SET outcome = ? WHERE source_path = ?"\n'
+    ),
+    "or_ignore_conflict_clause": (
+        "SQL = 'UPDATE OR IGNORE migration_manifest SET outcome = ?'\n"
+    ),
+    "quoted_table_name": (
+        "SQL = 'UPDATE \"migration_manifest\" SET outcome = ?'\n"
+    ),
+    "bracketed_table_name": (
+        "SQL = 'UPDATE [migration_manifest] SET outcome = ?'\n"
+    ),
+    "main_schema_prefix": (
+        "SQL = 'UPDATE main.migration_manifest SET outcome = ?'\n"
+    ),
+    "quoted_column_in_set": (
+        "SQL = 'UPDATE migration_manifest SET \"outcome\" = ?'\n"
+    ),
 }
 
 # Must-PASS fixtures: the same probe must stay silent on each.
@@ -1146,6 +1211,15 @@ _MUST_PASS_WRITE_FIXTURES = {
     ),
     "select_mentioning_is_locked": (
         "SQL = \"SELECT source_path, is_locked FROM migration_manifest WHERE outcome = ''\"\n"
+    ),
+    "score_only_lowercase": (
+        "SQL = 'update migration_manifest set score = ? where source_path = ?'\n"
+    ),
+    "score_only_split_across_lines": (
+        "SQL = '''\nUPDATE migration_manifest\n   SET score = ?\n WHERE source_path = ?\n'''\n"
+    ),
+    "score_only_with_alias": (
+        "SQL = 'UPDATE migration_manifest AS m SET m.score = ? WHERE m.source_path = ?'\n"
     ),
 }
 

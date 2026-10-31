@@ -19,8 +19,10 @@ Load flow:
   ``reconcile_skip_directory_rows`` (#821).
 
 Decision flow:
-  Decisions are written only by ``ManifestTxn.write_decisions`` inside
-  ``write_txn``, which refuses locked rows. Lock state is written by
+  Decisions are written by ``ManifestTxn.write_decisions`` inside
+  ``write_txn``, which refuses locked rows. The one other writer is
+  ``scanner.manifest.write_manifest``'s fresh temp DB, where nothing can be
+  locked yet. Lock state is written by
   ``batch_update_lock_state`` separately — locking is a UI affordance,
   not a per-decision side-effect.
   Outcome is written by ``ManifestTxn.transition`` / ``record_deleted`` after execute operations run.
