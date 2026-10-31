@@ -3128,3 +3128,98 @@ describe("setDensity", () => {
     expect(loadDensity()).toBe("comfortable");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A8 (M1, D7): a second 409 re-opens the dialog with the rows already confirmed
+// (within the request's scope) plus the newly locked ones. Naming only the new
+// rows loops forever: [B] is refused for A, then [A] is refused for B. Each
+// test sends round 2 with round 1's confirmed row and pins the next list.
+// ---------------------------------------------------------------------------
+
+describe("a second 409 accumulates the confirmed rows (A8, M1)", () => {
+  const A = "/p/a.jpg";
+  const B = "/p/b.jpg";
+
+  it("execute: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    const group = makeGroup(1, [A, B]);
+    group.items[0].user_decision = "delete";
+    group.items[1].user_decision = "delete";
+    seedManifest([group]);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [A] }))
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [B] }));
+
+    await useAppStore.getState().executeDecisions({ scopePaths: [A, B] });
+    await useAppStore
+      .getState()
+      .executeDecisions({ scopePaths: [A, B], confirmedLocked: [A] });
+
+    expect(fetchBody(fetchSpy, 1)).toMatchObject({ confirmed_locked: [A] });
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("remove: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    seedManifest([makeGroup(1, [A, B])]);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [A] }))
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [B] }));
+
+    await useAppStore.getState().removeFromList([A, B]);
+    await useAppStore.getState().removeFromList([A, B], [A]);
+
+    expect(fetchBody(fetchSpy, 1)).toMatchObject({ confirmed_locked: [A] });
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("restore: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    seedManifest([makeGroup(1, [A, B])]);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [A] }))
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [B] }));
+
+    await useAppStore.getState().restoreToReview([A, B]);
+    await useAppStore.getState().restoreToReview([A, B], { confirmedLocked: [A] });
+
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("apply best copy: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    seedManifest([makeGroup(1, [A, B])]);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [A] }))
+      .mockResolvedValueOnce(conflict409({ code: "locked_paths", locked_paths: [B] }));
+
+    await useAppStore.getState().applyBestCopy(1);
+    await useAppStore.getState().applyBestCopy(1, { confirmedLocked: [A] });
+
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("prune: round 1's confirmed row stays named when B locks after the dialog", async () => {
+    seedManifest([]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: [B] })
+    );
+
+    await useAppStore.getState().applyPrune([A, B], undefined, [A]);
+
+    expect(useAppStore.getState().execute.lockConflict?.paths).toEqual([A, B]);
+  });
+
+  it("prune: a row already confirmed is not re-offered as unlocked in the reopened gate", async () => {
+    seedManifest([]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      conflict409({ code: "locked_paths", locked_paths: [B] })
+    );
+
+    await useAppStore.getState().applyPrune([A, B], undefined, [A]);
+
+    // A is confirmed (named, so it stays in the re-send) and must not also sit
+    // in the unlocked buckets; B is the refused row and is in neither bucket.
+    const pending = useAppStore.getState().execute.prunePending;
+    expect(pending?.plain).toEqual([]);
+    expect(pending?.actioned).toEqual([]);
+  });
+});

@@ -1431,6 +1431,135 @@ class TestPostReveal:
 
 
 # ---------------------------------------------------------------------------
+# A8 (L2a): a stray boolean force is ignored by every named-confirmation verb
+# ---------------------------------------------------------------------------
+
+
+def _row_state(manifest: Path, file_path: str) -> tuple[str, str, int]:
+    """(outcome, user_decision, is_locked) for one manifest row."""
+    conn = sqlite3.connect(str(manifest))
+    try:
+        return conn.execute(
+            "SELECT outcome, user_decision, is_locked FROM migration_manifest "
+            "WHERE source_path = ?",
+            (file_path,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def _stray_bulk_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "field": "File Name", "pattern": ".",
+            "action": "delete", "force_locked": True}
+    return "/api/action/bulk-decide", body, manifest, f1
+
+
+def _stray_best_copy_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 0, "file_size_bytes": 128,
+         "score": 0.9},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 1, "file_size_bytes": 128,
+         "score": 0.5},
+    ])
+    body = {"manifest_path": str(manifest), "group_number": 1, "force_locked": True}
+    return "/api/action/apply-best-copy", body, manifest, f2
+
+
+def _stray_execute_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "", "user_decision": "delete",
+         "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "", "user_decision": "delete",
+         "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "recycle": False, "force_locked": True}
+    return "/api/execute", body, manifest, f1
+
+
+def _stray_remove_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "", "user_decision": "",
+         "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "", "user_decision": "",
+         "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "file_paths": [str(f1)], "force_locked": True}
+    return "/api/remove", body, manifest, f1
+
+
+def _stray_restore_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "ignored", "user_decision": "",
+         "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "REVIEW_DUPLICATE", "group_id": "g1",
+         "hamming_distance": 4, "outcome": "ignored", "user_decision": "",
+         "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "file_paths": [str(f1)], "force_locked": True}
+    return "/api/restore", body, manifest, f1
+
+
+def _stray_prune_case(tmp_path: Path):
+    f1, f2 = _make_real_files(tmp_path, 2)
+    manifest = _make_manifest(tmp_path, [
+        {"source_path": str(f1), "action": "", "group_id": "g1",
+         "outcome": "", "user_decision": "", "is_locked": 1, "file_size_bytes": 128},
+        {"source_path": str(f2), "action": "", "group_id": "g2",
+         "outcome": "", "user_decision": "", "is_locked": 0, "file_size_bytes": 128},
+    ])
+    body = {"manifest_path": str(manifest), "paths": [str(f1)], "force_locked": True}
+    return "/api/prune", body, manifest, f1
+
+
+_STRAY_FORCE_CASES = {
+    "bulk_decide": _stray_bulk_case,
+    "apply_best_copy": _stray_best_copy_case,
+    "execute": _stray_execute_case,
+    "remove": _stray_remove_case,
+    "restore": _stray_restore_case,
+    "prune": _stray_prune_case,
+}
+
+
+@pytest.mark.parametrize("verb", sorted(_STRAY_FORCE_CASES))
+def test_stray_force_locked_is_ignored_by_every_named_verb(client_with_roots, tmp_path, verb):
+    """A boolean force_locked in the body is not a field any A8 model has. With
+    no confirmed_locked, a locked row in scope is refused: 409 naming that row,
+    and the row stays locked and unwritten. If a force field were re-added and
+    honoured, the request would answer 200 and unlock the row."""
+    client, root = client_with_roots
+    url, body, manifest, locked = _STRAY_FORCE_CASES[verb](tmp_path)
+    before = _row_state(manifest, str(locked))
+    assert before[2] == 1
+
+    resp = client.post(url, json=body)
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "locked_paths"
+    assert str(locked) in detail["locked_paths"]
+    assert _row_state(manifest, str(locked)) == before
+
+
+# ---------------------------------------------------------------------------
 # A8 (D7): a row locked after the dialog opened is confirmed again
 # ---------------------------------------------------------------------------
 

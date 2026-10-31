@@ -512,6 +512,45 @@ describe("ActionDialog", () => {
     });
   });
 
+  // A8 (M1): a second 409 keeps the row the dialog already confirmed, so the next
+  // Unlock & Apply names both. Naming only the new row would loop forever.
+  it("a second 409 after Unlock & Apply keeps the confirmed row and names both on the retry", async () => {
+    const user = userEvent.setup();
+    const B = "/photos/b.jpg";
+    const A = "/photos/a.jpg";
+    applyMock
+      .mockRejectedValueOnce(new ApiConflictError("locked_paths", [B]))
+      .mockRejectedValueOnce(new ApiConflictError("locked_paths", [A]));
+    useAppStore.setState({ applyBulkDecide: applyMock } as never);
+
+    act(() => {
+      useAppStore.setState((s) => ({
+        action: {
+          ...s.action,
+          actionDialogOpen: true,
+          pattern: "IMG",
+          action: "__ignore__",
+        },
+        manifest: { ...s.manifest, path: "/manifests/test.db" },
+      }));
+    });
+
+    render(<ActionDialog />);
+    await user.click(screen.getByTestId(ACTION_BTN_APPLY));
+
+    // Round 1: B is locked, the dialog names it. Unlock & Apply sends [B].
+    await user.click(await screen.findByTestId(ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    await waitFor(() => {
+      expect(applyMock).toHaveBeenNthCalledWith(2, { confirmedLocked: [B] });
+    });
+
+    // Round 2: A locked after the dialog opened; the reopened dialog keeps B.
+    await user.click(await screen.findByTestId(ACTION_LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+    await waitFor(() => {
+      expect(applyMock).toHaveBeenNthCalledWith(3, { confirmedLocked: [B, A] });
+    });
+  });
+
   // 15. Non-delete action calls applyBulkDecide directly without confirm
   it("non-delete action calls applyBulkDecide without showing DeleteConfirmDialog", async () => {
     const user = userEvent.setup();
