@@ -71,7 +71,7 @@ omit = [
   # full layer model.
   "run_all_linters.py",               # dev tooling shell, not user-facing
   "infrastructure/image_service.py",  # Windows Shell/WIC + COM STA decode paths that need a real desktop session; covered by the web preview scenarios (qa/web/scenarios/s05_huge_preview.py) and the thumbnail-latency bench
-  "infrastructure/logging.py",        # loguru sink setup + os.startfile/subprocess file-openers (no unit-testable surface); the pure write_delete_log helper IS covered via test_delete_service.py
+  "infrastructure/logging.py",        # loguru sink setup + os.startfile/subprocess file-openers (no unit-testable surface); the pure write_delete_log helper IS covered via tests/test_delete_service.py::TestWriteDeleteLog
   "core/app_service/events.py",       # ScanProgressBus is a runtime_checkable Protocol; its stub method bodies (`...`) cannot be invoked in unit tests — covered by SseScanBus (app/web/routes/scan.py) and _SpyBus (test_scan_runner.py)
 ]
 

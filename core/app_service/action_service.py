@@ -307,7 +307,7 @@ def apply_best_copy(
     keepers = top_score_path_per_group(scored)
     if not keepers:
         # No scored rows in this group (e.g. every member is a passenger) —
-        # nothing to apply. Benign no-op, mirrors apply_auto_select_decisions.
+        # nothing to apply. Benign no-op, mirrors the post-scan auto-select write.
         return {
             "matched": 0,
             "affected_paths": [],

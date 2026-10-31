@@ -590,8 +590,8 @@ photo-manager/
 │       └── sort_service.py       # SortService
 │
 ├── infrastructure/          # I/O: manifest repo, delete service, image cache
-│   ├── manifest_repository.py   # load/save/batch_update_decisions; finalize_outcome()
-│   ├── delete_service.py         # Recycle-bin deletion + audit CSV logging
+│   ├── manifest_repository.py   # load(); write_txn/ManifestTxn; batch_update_lock_state
+│   ├── delete_service.py         # send2trash recycle-bin delete; per-path success/failure results
 │   ├── image_service.py          # Thumbnail loading; disk + memory LRU cache
 │   ├── transcode_service.py      # HEVC → H.264 via the bundled ffmpeg
 │   ├── device_key.py             # Per-device read budgeting for the scan pipeline

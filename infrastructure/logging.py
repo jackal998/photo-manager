@@ -52,7 +52,7 @@ def write_delete_log(
     """Write a delete audit CSV and return its path (``None`` on failure).
 
     ``rows`` are ``(group_number, file_path, success, reason)`` tuples.
-    Shared by ``DeleteService.execute_delete`` and the Execute Action
+    Shared by the Execute Action
     dialog so every real deletion writes one consistent audit trail
     under ``delete_<timestamp>.csv`` (photo-manager#505 — the UI delete
     path previously logged nothing).

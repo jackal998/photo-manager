@@ -57,13 +57,12 @@ def build_auto_select_writes(
     """Build the ``(decisions, lock_states)`` write-sets for the post-scan
     auto-select pass. Pure — no I/O, no schema access.
 
-    #651 — extracted from :func:`apply_auto_select_decisions` so
-    ``scanner.manifest.write_manifest`` can fold the SAME write-set
-    into the manifest's own tmp connection (closing the incoherence
-    window where a crash between the manifest write and a separate
-    auto-select write left keepers unlocked), while
-    ``apply_auto_select_decisions`` keeps working standalone for any
-    other caller.
+    #651 — so ``scanner.manifest.write_manifest`` can fold the SAME
+    write-set into the manifest's own tmp connection (closing the
+    incoherence window where a crash between the manifest write and a
+    separate auto-select write left keepers unlocked). The separate
+    post-write apply was removed in A5. ``action_service.apply_best_copy`` also
+    builds a keeper set for its own write; this function defines the shape.
 
     The canonical stored value for "keep" is the **empty string** —
     matches what ``settable_decisions()`` returns and what the right-
@@ -97,69 +96,6 @@ def build_auto_select_writes(
         decisions.update({p: "delete" for p in non_keepers_for_delete})
     lock_states: dict[str, bool] = {p: True for p in keepers}
     return decisions, lock_states
-
-
-def apply_auto_select_decisions(
-    manifest_path: str,
-    keepers: set[str],
-    non_keepers_for_delete: set[str] | None = None,
-) -> None:
-    """Write ``user_decision=""`` (canonical keep state) + ``is_locked=1``
-    on every keeper, and optionally ``user_decision='delete'`` on every
-    non-keeper in ``non_keepers_for_delete`` (the aggressive #393 path).
-
-    Composes ``ManifestRepository.batch_update_decisions`` and
-    ``batch_update_lock_state`` so the post-scan auto-select state is
-    durable on disk and visible in the tree via the lock badge. Both
-    sets refer to ``source_path`` strings; non-keeper rows that aren't
-    in a scored group (Live Photo MOV passengers, isolated files) are
-    NOT included by callers — the caller filters before passing in.
-
-    #651 — the scan pipeline itself no longer calls this function (it
-    passes ``keepers`` / ``non_keepers_for_delete`` into
-    ``scanner.manifest.write_manifest`` so the writes land atomically
-    with the manifest). This function remains for any other caller
-    that needs to apply auto-select decisions to an ALREADY-WRITTEN
-    manifest as a separate, non-atomic step.
-
-    Args:
-        manifest_path: Absolute path to the SQLite manifest just
-            written by ``write_manifest``.
-        keepers: Paths of the per-group top-scored rows from
-            :func:`top_score_path_per_group`. Each receives
-            ``user_decision=""`` AND ``is_locked=1``.
-        non_keepers_for_delete: Paths to receive
-            ``user_decision='delete'``. ``None`` (the default) leaves
-            non-keepers' decision untouched — that's the non-aggressive
-            behaviour. Pass an empty set or ``None`` interchangeably;
-            both skip the delete writes.
-
-    Returns:
-        None. Writes are persisted by the time this returns. Caller's
-        own ``progress`` / log emission is its responsibility.
-    """
-    from infrastructure.manifest_repository import ManifestRepository
-
-    if not keepers:
-        # No keepers → no writes. Empty input is a benign no-op so the
-        # caller can invoke unconditionally without an outer guard.
-        return
-
-    decisions, lock_states = build_auto_select_writes(
-        keepers, non_keepers_for_delete
-    )
-
-    repo = ManifestRepository()
-    # Lazy-migrate the schema before writing — ``write_manifest`` uses
-    # the original DDL, so post-scan / pre-first-load runs hit a
-    # manifest without ``is_locked``. ``ensure_schema`` is idempotent
-    # so the cost on already-migrated DBs is a couple of failed
-    # ALTERs (caught and ignored).
-    repo.ensure_schema(manifest_path)
-    # Single-transaction write — saves one connection-open + one fsync
-    # vs the original split call pair. Microsecond gain on local SSD,
-    # measurable over SMB/NAS.
-    repo.batch_update_decisions_and_lock(manifest_path, decisions, lock_states)
 
 
 def top_n_paths(

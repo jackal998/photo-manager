@@ -16,7 +16,7 @@ Web reframing (the parity decision — see scenario_map.yml notes)
 ----------------------------------------------------------------
 The web app has NO explicit Save step and NO dirty state. Every decision is
 persisted live and durably the moment it is made: ``PATCH /api/decision`` →
-``review_service.set_decisions()`` → ``ManifestRepository.batch_update_decisions()``
+``review_service.set_decisions()`` → ``ManifestTxn.write_decisions()``
 opens a connection, ``executemany``, ``commit()``, ``close()`` — synchronously
 (manifest_repository.py:462-471). ``GET /api/manifest`` is stateless and re-reads
 the DB ("SQLite is the only source of truth", review_service.py:4), and

@@ -1,0 +1,1 @@
+Delete the replaced unguarded manifest writers and add a probe that fails CI on any new unguarded decision or outcome write

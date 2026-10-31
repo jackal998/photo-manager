@@ -555,277 +555,6 @@ class TestSubsecTimeOriginalMigration:
         assert row[2] == "+09:00"
 
 
-class TestManifestRepositorySave:
-    def _make_record(
-        self, path: str, action: str, user_decision: str = "", locked: bool = False
-    ) -> PhotoRecord:
-        return PhotoRecord(
-            group_number=1, is_mark=False, is_locked=locked,
-            folder_path="", file_path=path,
-            capture_date=None, modified_date=None, file_size_bytes=0,
-            action=action,
-            user_decision=user_decision,
-        )
-
-    def _make_group(
-        self,
-        cand_path: str,
-        cand_action: str,
-        ref_path: str,
-        ref_action: str = "",
-        cand_decision: str = "",
-        ref_decision: str = "",
-    ) -> PhotoGroup:
-        return PhotoGroup(group_number=1, items=[
-            self._make_record(cand_path, cand_action, cand_decision),
-            self._make_record(ref_path, ref_action, ref_decision),
-        ])
-
-    def test_user_decision_written_to_db(self, tmp_path):
-        """save() writes rec.user_decision to the DB."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg"}),
-        ])
-        group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "REVIEW_DUPLICATE", "delete"),
-        ])
-        ManifestRepository().save(str(db), [group])
-
-        conn = sqlite3.connect(db)
-        row = conn.execute(
-            "SELECT user_decision FROM migration_manifest WHERE source_path = '/source/a.jpg'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == "delete"
-
-    def test_legacy_user_decision_keep_round_trips(self, tmp_path):
-        """#425 — back-compat: the repository must still accept the
-        legacy literal "keep" string on save and round-trip it back
-        from disk unchanged. Canonical write paths use "" but old
-        manifests on disk may still carry the literal value, and
-        operations that re-save them must preserve the data."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "", "keep"),
-        ])
-        ManifestRepository().save(str(db), [group])
-
-        conn = sqlite3.connect(db)
-        row = conn.execute(
-            "SELECT user_decision FROM migration_manifest WHERE source_path = '/source/a.jpg'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == "keep"
-
-    def test_user_decision_empty_written(self, tmp_path):
-        """save() writes empty string when user_decision is unset."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "user_decision": "delete",
-                  "group_id": None, "hamming_distance": None, "action": ""}),
-        ])
-        group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "", ""),
-        ])
-        ManifestRepository().save(str(db), [group])
-
-        conn = sqlite3.connect(db)
-        row = conn.execute(
-            "SELECT user_decision FROM migration_manifest WHERE source_path = '/source/a.jpg'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == ""
-
-    def test_scanner_action_unchanged_by_save(self, tmp_path):
-        """save() must not modify the scanner's action column."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg"}),
-        ])
-        group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "REVIEW_DUPLICATE", "delete"),
-        ])
-        ManifestRepository().save(str(db), [group])
-
-        conn = sqlite3.connect(db)
-        row = conn.execute(
-            "SELECT action FROM migration_manifest WHERE source_path = '/source/a.jpg'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == "REVIEW_DUPLICATE"  # scanner classification untouched
-
-    def test_save_returns_row_count(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-            _row({"source_path": "/source/b.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-        ])
-        # #425 — first record canonical empty keep; second deletes.
-        group = PhotoGroup(group_number=1, items=[
-            self._make_record("/source/a.jpg", "", ""),
-            self._make_record("/source/b.jpg", "", "delete"),
-        ])
-        count = ManifestRepository().save(str(db), [group])
-        assert count == 2
-
-
-class TestManifestRepositoryUpdateDecision:
-    def test_update_decision_sets_single_row(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-            _row({"source_path": "/source/b.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-        ])
-        ManifestRepository().update_decision(str(db), "/source/a.jpg", "delete")
-
-        conn = sqlite3.connect(db)
-        rows = {
-            r[0]: r[1]
-            for r in conn.execute(
-                "SELECT source_path, user_decision FROM migration_manifest"
-            ).fetchall()
-        }
-        conn.close()
-        assert rows["/source/a.jpg"] == "delete"
-        assert rows["/source/b.jpg"] == ""  # untouched
-
-    def test_update_decision_overwrites_existing(self, tmp_path):
-        # #425 — flipped "keep" → "" (canonical keep). The test proves
-        # that an existing "delete" decision can be overwritten back to
-        # the canonical undecided/keep state.
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/source/a.jpg", "user_decision": "delete",
-                  "group_id": None, "hamming_distance": None, "action": ""}),
-        ])
-        ManifestRepository().update_decision(str(db), "/source/a.jpg", "")
-
-        conn = sqlite3.connect(db)
-        row = conn.execute(
-            "SELECT user_decision FROM migration_manifest WHERE source_path = '/source/a.jpg'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == ""
-
-
-class TestBatchUpdateDecisions:
-    def test_updates_multiple_rows_in_one_call(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "group_id": None, "hamming_distance": None, "action": ""}),
-            _row({"source_path": "/b.jpg", "group_id": None, "hamming_distance": None, "action": ""}),
-            _row({"source_path": "/c.jpg", "group_id": None, "hamming_distance": None, "action": ""}),
-        ])
-        # #425 — second value flipped "keep" → IGNORE_DECISION
-        # so the batch test still verifies two distinct non-default
-        # writes (canonical keep "" would be indistinguishable from
-        # the untouched /c.jpg row).
-        from core.constants import IGNORE_DECISION
-        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete", "/b.jpg": IGNORE_DECISION})
-
-        conn = sqlite3.connect(db)
-        rows = {r[0]: r[1] for r in conn.execute(
-            "SELECT source_path, user_decision FROM migration_manifest"
-        ).fetchall()}
-        conn.close()
-        assert rows["/a.jpg"] == "delete"
-        assert rows["/b.jpg"] == IGNORE_DECISION
-        assert rows["/c.jpg"] == ""  # untouched
-
-    def test_noop_on_empty_dict(self, tmp_path):
-        # #425 — flipped "keep" → "delete" so the unchanged-state
-        # assertion is distinguishable from the schema default.
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "user_decision": "delete",
-                  "group_id": None, "hamming_distance": None, "action": ""}),
-        ])
-        ManifestRepository().batch_update_decisions(str(db), {})
-
-        conn = sqlite3.connect(db)
-        row = conn.execute(
-            "SELECT user_decision FROM migration_manifest WHERE source_path = '/a.jpg'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == "delete"  # unchanged
-
-
-class TestBatchUpdateDecisionsAndLock:
-    """Combined batch method — used by the auto-select post-scan write
-    path (#393) to land both writes in a single transaction.
-    """
-
-    def test_writes_both_decision_and_lock_in_one_call(self, tmp_path):
-        """Catches: the combined method drops one side (e.g. forgets
-        the lock executemany, or commits before the second statement).
-        Mixing keepers (keep+lock=1) with non-keepers (delete only,
-        lock untouched) exercises both columns and confirms they
-        don't bleed onto each other.
-        """
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/k.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-            _row({"source_path": "/d.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-            _row({"source_path": "/untouched.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-        ])
-        # Add is_locked column for parity with the production schema
-        # path (auto-select migrates lazily before this call).
-        ManifestRepository().ensure_schema(str(db))
-
-        # #425 — canonical empty-keep write matches the auto-select
-        # production path post-canonicalisation.
-        ManifestRepository().batch_update_decisions_and_lock(
-            str(db),
-            decisions={"/k.jpg": "", "/d.jpg": "delete"},
-            lock_states={"/k.jpg": True},
-        )
-
-        conn = sqlite3.connect(db)
-        try:
-            rows = {
-                r[0]: (r[1], r[2]) for r in conn.execute(
-                    "SELECT source_path, user_decision, is_locked "
-                    "FROM migration_manifest"
-                ).fetchall()
-            }
-        finally:
-            conn.close()
-        # Keeper: empty decision + lock badge.
-        assert rows["/k.jpg"] == ("", 1)
-        assert rows["/d.jpg"] == ("delete", 0)
-        assert rows["/untouched.jpg"] == ("", 0)
-
-    def test_both_empty_short_circuits_without_opening_connection(
-        self, tmp_path, monkeypatch
-    ):
-        """Catches: the short-circuit guard regresses and we open a
-        connection (+ optionally commit an empty transaction) when
-        there's literally nothing to write. The auto-select caller
-        invokes unconditionally on empty-keepers scans; this must
-        stay free.
-        """
-        from infrastructure import manifest_repository as repo_mod
-
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-        ])
-        opens: list[str] = []
-        real_connect = repo_mod._connect
-
-        def _spy(path):
-            opens.append(path)
-            return real_connect(path)
-
-        monkeypatch.setattr(repo_mod, "_connect", _spy)
-        ManifestRepository().batch_update_decisions_and_lock(
-            str(db), decisions={}, lock_states={}
-        )
-        assert opens == []
-
-
 _DDL_WITH_OUTCOME = """
 CREATE TABLE migration_manifest (
     id               INTEGER PRIMARY KEY,
@@ -844,45 +573,8 @@ CREATE TABLE migration_manifest (
 """
 
 
-class TestRemoveFromReview:
-    """remove_from_review() and the load() visibility filter (WHERE outcome='')."""
-
-    def test_marks_outcome_ignored(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-        ])
-        ManifestRepository().remove_from_review(str(db), ["/a.jpg"])
-
-        conn = sqlite3.connect(db)
-        row = conn.execute(
-            "SELECT outcome FROM migration_manifest WHERE source_path = '/a.jpg'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == "ignored"
-
-    def test_multiple_paths_marked_ignored(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-            _row({"source_path": "/b.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-            _row({"source_path": "/c.jpg", "group_id": None,
-                  "hamming_distance": None, "action": ""}),
-        ])
-        ManifestRepository().remove_from_review(str(db), ["/a.jpg", "/c.jpg"])
-
-        conn = sqlite3.connect(db)
-        rows = {
-            r[0]: r[1]
-            for r in conn.execute(
-                "SELECT source_path, outcome FROM migration_manifest"
-            ).fetchall()
-        }
-        conn.close()
-        assert rows["/a.jpg"] == "ignored"
-        assert rows["/b.jpg"] == ""       # untouched — still in-review
-        assert rows["/c.jpg"] == "ignored"
+class TestLoadOutcomeVisibility:
+    """The load() visibility filter (WHERE outcome='')."""
 
     def test_load_skips_ignored_candidates(self, tmp_path):
         """outcome='ignored' rows are excluded by the WHERE outcome='' predicate."""
@@ -994,95 +686,6 @@ class TestRemoveFromReview:
         paths = {r.file_path for r in records}
         assert str(cand) not in paths  # was ignored
         assert str(ref) not in paths   # orphaned single — group < 2 members
-
-
-class TestFinalizeOutcome:
-    """finalize_outcome() — the write-once post-execute state writer."""
-
-    def _read_row(self, db, path: str) -> tuple:
-        """Return (outcome, executed) for the given path."""
-        with sqlite3.connect(db) as conn:
-            row = conn.execute(
-                "SELECT outcome, executed FROM migration_manifest WHERE source_path = ?",
-                (path,),
-            ).fetchone()
-        return row if row else (None, None)
-
-    def test_deleted_sets_outcome_and_executed(self, tmp_path):
-        """finalize_outcome('deleted') → outcome='deleted', executed=1."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "deleted")
-        outcome, executed = self._read_row(db, "/a.jpg")
-        assert outcome == "deleted"
-        assert executed == 1
-
-    def test_ignored_sets_outcome_executed_zero(self, tmp_path):
-        """finalize_outcome('ignored') → outcome='ignored', executed=0."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "ignored")
-        outcome, executed = self._read_row(db, "/a.jpg")
-        assert outcome == "ignored"
-        assert executed == 0
-
-    def test_multiple_paths(self, tmp_path):
-        """Multiple paths in one call — all updated atomically."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/b.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        ManifestRepository().finalize_outcome(str(db), ["/a.jpg", "/b.jpg"], "deleted")
-        assert self._read_row(db, "/a.jpg") == ("deleted", 1)
-        assert self._read_row(db, "/b.jpg") == ("deleted", 1)
-
-    def test_noop_for_empty_paths(self, tmp_path):
-        """Empty list → no DB access, no error."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ], ddl=_DDL_WITH_OUTCOME)
-        ManifestRepository().finalize_outcome(str(db), [], "deleted")
-        # Row is untouched — outcome stays ''
-        assert self._read_row(db, "/a.jpg") == ("", 0)
-
-    def test_does_not_affect_other_rows(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/b.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "deleted")
-        assert self._read_row(db, "/a.jpg") == ("deleted", 1)
-        assert self._read_row(db, "/b.jpg") == ("", 0)  # untouched
-
-    def test_fail_loud_propagates_db_error(self, tmp_path):
-        """finalize_outcome propagates DB errors — no swallowing.
-
-        Verified by asking finalize_outcome to update a table that does not
-        exist (DB has no migration_manifest table after we drop it).
-        """
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        # Ensure schema is applied first (outcome column present).
-        ManifestRepository().ensure_schema(str(db))
-
-        # Drop the table so the UPDATE inside finalize_outcome fails.
-        with sqlite3.connect(db) as conn:
-            conn.execute("DROP TABLE migration_manifest")
-            conn.commit()
-
-        with pytest.raises(Exception):
-            ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "deleted")
 
 
 class TestLoadFromDB:
@@ -1266,144 +869,52 @@ class TestConnectionPragmas:
         with sqlite3.connect(db) as conn:
             return conn.execute("PRAGMA journal_mode").fetchone()[0]
 
-    def test_wal_enabled_after_batch_update(self, tmp_path):
+    def test_wal_enabled_after_write_txn(self, tmp_path):
         db = _make_manifest(tmp_path, [
             _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
-        # #425 — flipped "keep" → "delete" (canonical keep "" would be
-        # the schema default — this proves WAL is set even for a write
-        # that changes a row to a distinct non-default value).
-        ManifestRepository().batch_update_decisions(str(db), {"/a.jpg": "delete"})
-        assert self._journal_mode(db) == "wal"
-
-    def test_wal_enabled_after_save(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        group = PhotoGroup(group_number=1, items=[
-            PhotoRecord(
-                group_number=1, is_mark=False, is_locked=False,
-                folder_path="", file_path="/a.jpg",
-                capture_date=None, modified_date=None, file_size_bytes=0,
-                action="", user_decision="",  # #425 — canonical keep
-            )
-        ])
-        ManifestRepository().save(str(db), [group])
-        assert self._journal_mode(db) == "wal"
-
-    def test_wal_enabled_after_finalize_outcome(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        ManifestRepository().finalize_outcome(str(db), ["/a.jpg"], "deleted")
-        assert self._journal_mode(db) == "wal"
-
-    def test_wal_enabled_after_update_decision(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        ManifestRepository().update_decision(str(db), "/a.jpg", "delete")
-        assert self._journal_mode(db) == "wal"
-
-    def test_wal_enabled_after_remove_from_review(self, tmp_path):
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        ManifestRepository().remove_from_review(str(db), ["/a.jpg"])
+        with ManifestRepository().write_txn(str(db)) as txn:
+            txn.record_deleted("/a.jpg")
         assert self._journal_mode(db) == "wal"
 
 
-class TestSaveUsesExecutemany:
-    """save() must delegate to executemany(), not one execute() per row."""
+class TestWritePathNoVacuum:
+    """The guarded write path must NOT call VACUUM (rows are marked, not deleted)."""
 
-    def test_save_return_count_equals_record_count(self, tmp_path):
-        """save() must return the number of records passed, regardless of batch size."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/b.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/c.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        groups = [PhotoGroup(group_number=1, items=[
-            PhotoRecord(group_number=1, is_mark=False, is_locked=False,
-                        folder_path="", file_path=p,
-                        capture_date=None, modified_date=None, file_size_bytes=0,
-                        action="", user_decision="")  # #425 canonical keep
-            for p in ("/a.jpg", "/b.jpg", "/c.jpg")
-        ])]
-        count = ManifestRepository().save(str(db), groups)
-        assert count == 3
-
-    def test_save_empty_groups_returns_zero(self, tmp_path):
-        db = _make_manifest(tmp_path, [])
-        count = ManifestRepository().save(str(db), [])
-        assert count == 0
-
-    def test_save_still_writes_all_decisions(self, tmp_path):
-        """Correctness check: executemany saves every record."""
-        db = _make_manifest(tmp_path, [
-            _row({"source_path": "/a.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-            _row({"source_path": "/b.jpg", "action": "",
-                  "group_id": None, "hamming_distance": None}),
-        ])
-        groups = [PhotoGroup(group_number=1, items=[
-            PhotoRecord(group_number=1, is_mark=False, is_locked=False,
-                        folder_path="", file_path="/a.jpg",
-                        capture_date=None, modified_date=None, file_size_bytes=0,
-                        action="", user_decision=""),  # #425 canonical keep
-            PhotoRecord(group_number=1, is_mark=False, is_locked=False,
-                        folder_path="", file_path="/b.jpg",
-                        capture_date=None, modified_date=None, file_size_bytes=0,
-                        action="", user_decision="delete"),
-        ])]
-        count = ManifestRepository().save(str(db), groups)
-        assert count == 2
-
-        with sqlite3.connect(db) as conn:
-            rows = {r[0]: r[1] for r in conn.execute(
-                "SELECT source_path, user_decision FROM migration_manifest"
-            ).fetchall()}
-        assert rows["/a.jpg"] == ""  # #425 canonical keep
-        assert rows["/b.jpg"] == "delete"
-
-
-class TestRemoveFromReviewNoVacuum:
-    """remove_from_review() must NOT call VACUUM (rows are marked, not deleted)."""
-
-    def test_vacuum_absent_from_source(self):
-        """remove_from_review() must not execute VACUUM.
-
-        Rows are marked (UPDATE), not deleted, so VACUUM reclaims nothing —
-        it would just be a costly full DB rewrite for zero benefit.
+    def test_vacuum_absent_from_write_path(self):
+        """Rows are marked (UPDATE), not deleted, so VACUUM reclaims nothing and
+        would only cost a full DB rewrite. Checks the write_txn / ManifestTxn
+        source and the guarded SQL constants.
         """
         import ast
         import inspect
-        from infrastructure.manifest_repository import ManifestRepository
-
-        src = inspect.getsource(ManifestRepository.remove_from_review)
-        # Dedent so ast.parse sees a valid top-level function definition.
         import textwrap
-        tree = ast.parse(textwrap.dedent(src))
 
-        # Collect all string constants used as SQL arguments to conn.execute / executemany.
-        sql_strings: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                for arg in node.args:
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                        sql_strings.append(arg.value)
+        from infrastructure import manifest_repository as repo_mod
+        from infrastructure.manifest_repository import ManifestTxn
 
-        for sql in sql_strings:
-            assert "VACUUM" not in sql.upper(), (
-                f"remove_from_review() still executes VACUUM via: {sql!r}"
+        sources = [
+            inspect.getsource(func)
+            for func in (
+                ManifestRepository.write_txn,
+                ManifestTxn.write_decisions,
+                ManifestTxn.transition,
+                ManifestTxn.record_deleted,
+            )
+        ]
+        sql_texts = [
+            repo_mod._WRITE_DECISION_SQL,
+            repo_mod._TRANSITION_SQL,
+            repo_mod._RECORD_DELETED_SQL,
+        ]
+        for src in sources:
+            for node in ast.walk(ast.parse(textwrap.dedent(src))):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    sql_texts.append(node.value)
+        for text in sql_texts:
+            assert "VACUUM" not in text.upper(), (
+                f"the guarded write path still executes VACUUM via: {text!r}"
             )
 
 
