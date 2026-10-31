@@ -113,12 +113,19 @@ def patch_decision(body: DecisionUpdate) -> dict:
         422 if confirmed_locked and skip_locked are both set, or on db error
     """
     decisions = {item.file_path: item.decision for item in body.decisions}
+    # A7: per-row lock_after, only for rows that name one (None = today's rule).
+    lock_after = {
+        item.file_path: item.locked
+        for item in body.decisions
+        if item.locked is not None
+    }
     try:
         updated = set_decisions(
             body.manifest_path,
             decisions,
             confirmed_locked=body.confirmed_locked,
             skip_locked=body.skip_locked,
+            lock_after=lock_after,
         )
     except LockFlagsConflictError as exc:
         # Both lock flags: refused for every verb (B-6), 422 as the action routes.

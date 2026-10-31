@@ -158,10 +158,18 @@ class RevealResult(BaseModel):
 
 
 class DecisionItem(BaseModel):
-    """One file-path → decision mapping in a batch decision update."""
+    """One file-path → decision mapping in a batch decision update.
+
+    ``locked`` (A7, design 3.3) sets the row's lock in the same statement as
+    its decision: None keeps today's behaviour, True locks the row, False
+    unlocks it. A locked row in the write set still needs its path named in
+    ``confirmed_locked``, whatever its ``locked`` value; an unlocked row needs
+    no name to be locked. Undo sends it on every row it restores.
+    """
 
     file_path: str
     decision: str
+    locked: bool | None = None
 
 
 class DecisionUpdate(BaseModel):

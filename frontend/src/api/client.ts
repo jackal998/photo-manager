@@ -140,6 +140,11 @@ export async function getManifest(path: string): Promise<ManifestResponse> {
 export interface DecisionEntry {
   file_path: string;
   decision: DecisionValue;
+  /**
+   * A7: the row's lock, written in the same statement as its decision.
+   * Omitted = today's rule. Only Undo sends it (`locked: before.locked`).
+   */
+  locked?: boolean;
 }
 
 export interface PatchDecisionsResult {

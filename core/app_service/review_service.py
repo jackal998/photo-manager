@@ -8,7 +8,7 @@ No UI imports — this module must stay headless for the FastAPI process.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +109,7 @@ def set_decisions(
     *,
     confirmed_locked: Collection[str] = (),
     skip_locked: bool = False,
+    lock_after: Mapping[str, bool] | None = None,
 ) -> int:
     """Persist user decisions to the manifest, gated on locked rows.
 
@@ -137,6 +138,11 @@ def set_decisions(
             and unlocked in the same statement. Empty means no confirmation.
         skip_locked: When True, locked rows are dropped from the write
             set; only the unlocked subset is written.
+        lock_after: Optional per-row lock written in the same statement as
+            the decision (A7). A path absent from the map keeps today's rule:
+            unlocked if confirmed, otherwise its lock as it was. True locks
+            the row; False unlocks it (refused unless the row is confirmed
+            while locked; a no-op on an unlocked row).
 
     Returns:
         Number of decision entries actually submitted.
@@ -161,7 +167,11 @@ def set_decisions(
     # read from the same connection that writes, and the primitive refuses
     # any unconfirmed locked row (hidden rows included, B-5). No load() here.
     verdict, named = _decision_verdict(confirmed_locked, skip_locked)
-    writes = [DecisionWrite(path=p, decision=v) for p, v in decisions.items()]
+    locks = lock_after or {}
+    writes = [
+        DecisionWrite(path=p, decision=v, lock_after=locks.get(p))
+        for p, v in decisions.items()
+    ]
     with ManifestRepository().write_txn(manifest_path) as tx:
         return len(apply_gated_writes(tx, writes, verdict, named=named))
 

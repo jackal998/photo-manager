@@ -331,8 +331,11 @@ def run(*, base_url: str) -> None:
             )
 
             # ── 4. Undo restores the decisions AND the locks ────────────────
+            # A7 (#999): Undo is ONE PATCH /api/decision that carries each row's
+            # prior lock; the old second PATCH /api/lock is gone. The keeper's
+            # lock is named (the write created it), so no lock dialog opens.
             with page.expect_response(
-                lambda r: "/api/lock" in r.url and r.request.method == "PATCH",
+                lambda r: "/api/decision" in r.url and r.request.method == "PATCH",
                 timeout=15_000,
             ):
                 page.get_by_test_id(MAIN_TOAST_UNDO).click()
