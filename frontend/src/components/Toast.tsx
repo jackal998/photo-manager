@@ -45,6 +45,12 @@ export function Toast() {
   const startedAtRef = useRef(0);
 
   const toastId = toast?.id ?? null;
+  // A7 (#999): a lock refused on Undo opens LockConfirmDialog over this toast.
+  // The timer waits for that answer, and Cancel gives the toast a full budget.
+  const undoDialogOpen = useAppStore(
+    (s) => s.execute.lockConflict?.op === "undo"
+  );
+  const timerHeld = paused || undoDialogOpen;
 
   // A new toast id resets the budget — that is what makes "newest replaces
   // previous" restart the clock instead of inheriting its predecessor's tail.
@@ -53,8 +59,14 @@ export function Toast() {
     setPaused(false);
   }, [toastId]);
 
+  // Declared before the timer effect so the reset lands first when the dialog
+  // closes in the same commit that resumes the timer.
   useEffect(() => {
-    if (toastId === null || paused) return;
+    if (!undoDialogOpen) remainingRef.current = TOAST_TIMEOUT_MS;
+  }, [undoDialogOpen]);
+
+  useEffect(() => {
+    if (toastId === null || timerHeld) return;
     startedAtRef.current = Date.now();
     const handle = window.setTimeout(() => {
       dismissToast();
@@ -66,7 +78,7 @@ export function Toast() {
         remainingRef.current - (Date.now() - startedAtRef.current)
       );
     };
-  }, [toastId, paused, dismissToast]);
+  }, [toastId, timerHeld, dismissToast]);
 
   const pause = useCallback(() => setPaused(true), []);
   const resume = useCallback(() => setPaused(false), []);

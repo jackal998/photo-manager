@@ -220,6 +220,58 @@ class TestLoadReview:
 # set_decisions
 # ---------------------------------------------------------------------------
 
+class TestSetDecisionsLockAfter:
+    """``lock_after`` (A7): the per-row lock written in the decision statement.
+    Red before A7: set_decisions had no such parameter."""
+
+    def test_lock_after_true_locks_the_row_with_its_decision(self, tmp_path):
+        manifest = _make_pair(tmp_path)
+        set_decisions(
+            str(manifest),
+            {"/photos/dup.jpg": "delete"},
+            lock_after={"/photos/dup.jpg": True},
+        )
+        assert _read_field(manifest, "user_decision")["/photos/dup.jpg"] == "delete"
+        assert _read_field(manifest, "is_locked")["/photos/dup.jpg"] == 1
+
+    def test_lock_after_false_on_a_confirmed_locked_row_unlocks_it(self, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        set_decisions(
+            str(manifest),
+            {"/photos/ref.jpg": ""},
+            confirmed_locked=["/photos/ref.jpg"],
+            lock_after={"/photos/ref.jpg": False},
+        )
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 0
+
+    def test_lock_after_false_on_an_unnamed_locked_row_raises_and_writes_nothing(
+        self, tmp_path
+    ):
+        manifest = _make_pair_with_lock(tmp_path)
+        with pytest.raises(ValueError) as exc:
+            set_decisions(
+                str(manifest),
+                {"/photos/ref.jpg": ""},
+                lock_after={"/photos/ref.jpg": False},
+            )
+        assert exc.value.args[0] == "locked_paths"
+        assert exc.value.args[1] == ["/photos/ref.jpg"]
+        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == ""
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 1
+
+    def test_absent_lock_after_entry_keeps_todays_behaviour(self, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        set_decisions(
+            str(manifest),
+            {"/photos/ref.jpg": "delete", "/photos/dup.jpg": "delete"},
+            confirmed_locked=["/photos/ref.jpg"],
+            lock_after={"/photos/dup.jpg": True},
+        )
+        # ref is confirmed and has no lock_after entry: unlocked, as before A7.
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 0
+        assert _read_field(manifest, "is_locked")["/photos/dup.jpg"] == 1
+
+
 class TestSetDecisions:
     def test_persists_delete_decision(self, tmp_path):
         manifest = _make_pair(tmp_path)

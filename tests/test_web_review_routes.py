@@ -441,6 +441,88 @@ class TestPatchDecisionLockedRowGate:
 
 
 # ---------------------------------------------------------------------------
+# PATCH /api/decision — per-row ``locked`` (A7, design 3.3 step 2-4)
+# ---------------------------------------------------------------------------
+
+class TestPatchDecisionPerRowLock:
+    """``DecisionItem.locked``: None keeps today's behaviour, True locks the
+    row in the same statement as its decision, False unlocks it (confirmed
+    when the row is locked; a no-op on an unlocked row)."""
+
+    def test_locked_none_is_todays_behaviour_and_leaves_an_unlocked_row_alone(
+        self, client, tmp_path
+    ):
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/dup.jpg", "decision": "delete", "locked": None}],
+        })
+        assert resp.status_code == 200, resp.text
+        assert _read_field(manifest, "user_decision")["/photos/dup.jpg"] == "delete"
+        assert _read_field(manifest, "is_locked")["/photos/dup.jpg"] == 0
+
+    def test_locked_true_locks_an_unlocked_row_in_the_same_write(self, client, tmp_path):
+        """Red before A7: the field was ignored, so the row stayed unlocked.
+        Setting a lock never needs confirmation."""
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/dup.jpg", "decision": "delete", "locked": True}],
+        })
+        assert resp.status_code == 200, resp.text
+        assert _read_field(manifest, "user_decision")["/photos/dup.jpg"] == "delete"
+        assert _read_field(manifest, "is_locked")["/photos/dup.jpg"] == 1
+
+    def test_locked_false_on_an_unlocked_row_is_a_no_op_not_a_refusal(self, client, tmp_path):
+        """The rev-1 trap: an Undo of a toolbar write sends locked:false on rows
+        that were never locked. That must write the decision and leave the lock."""
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/dup.jpg", "decision": "", "locked": False}],
+        })
+        assert resp.status_code == 200, resp.text
+        assert _read_field(manifest, "user_decision")["/photos/dup.jpg"] == ""
+        assert _read_field(manifest, "is_locked")["/photos/dup.jpg"] == 0
+
+    def test_locked_false_on_a_named_locked_row_unlocks_it(self, client, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/ref.jpg", "decision": "", "locked": False}],
+            "confirmed_locked": ["/photos/ref.jpg"],
+        })
+        assert resp.status_code == 200, resp.text
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 0
+
+    def test_locked_false_on_an_unnamed_locked_row_is_409_and_writes_nothing(
+        self, client, tmp_path
+    ):
+        """A row locked after the toast and not named: the Undo gets a 409
+        naming it, and neither its decision nor its lock is written."""
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/ref.jpg", "decision": "", "locked": False}],
+        })
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["locked_paths"] == ["/photos/ref.jpg"]
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 1
+
+    def test_locked_true_keeps_a_named_locked_row_locked(self, client, tmp_path):
+        """A pre-locked keeper confirmed by name keeps its lock: lock_after True
+        wins over the confirmed-unlock branch of the SQL."""
+        manifest = _make_pair_with_lock(tmp_path)
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [{"file_path": "/photos/ref.jpg", "decision": "", "locked": True}],
+            "confirmed_locked": ["/photos/ref.jpg"],
+        })
+        assert resp.status_code == 200, resp.text
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 1
+
+
+# ---------------------------------------------------------------------------
 # PATCH /api/lock
 # ---------------------------------------------------------------------------
 

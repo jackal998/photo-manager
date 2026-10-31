@@ -1564,6 +1564,24 @@ export const useAppStore = create<AppStore>()(
               locked: before.get(path)?.locked ?? false,
             });
           }
+          // A7 (#999): the locks THIS call's write created. Derived from this
+          // call's own pre-write state (`before`) and the rows it wrote
+          // (`affected`), never from the carried snapshot: a carried row that
+          // the user locked between two applies must not be confirmed. A row
+          // already locked before this call (D10 (a)) is not in this list.
+          const lockedAfter = new Map(after.map((row) => [row.file_path, row.is_locked]));
+          const createdNow = [...affected].filter(
+            (path) =>
+              !(before.get(path)?.locked ?? false) &&
+              lockedAfter.get(path) === true
+          );
+          const priorActionLocked =
+            state.toast !== null && state.toast.groupNumber === groupNumber
+              ? (state.toast.actionLocked ?? [])
+              : [];
+          const actionLocked = Array.from(
+            new Set([...priorActionLocked, ...createdNow])
+          );
           _toastSeq += 1;
           state.toast = {
             id: _toastSeq,
@@ -1574,6 +1592,7 @@ export const useAppStore = create<AppStore>()(
             lockedCount,
             snapshot,
             undoing: false,
+            actionLocked,
           };
         });
       } catch (err) {
@@ -1697,13 +1716,16 @@ export const useAppStore = create<AppStore>()(
       });
     },
 
-    async undoKeepBest() {
+    async undoKeepBest(opts = {}) {
       const toast = get().toast;
       const manifestPath = get().manifest.path;
       if (toast === null || toast.undoing || manifestPath === null) return;
-      // Nothing was written (every selected row was locked) — there is nothing
-      // to reverse, and an empty PATCH body is a 422 rather than a no-op.
-      if (toast.snapshot.length === 0) {
+      // "Unlocked only" leaves its excluded rows exactly as they are. When
+      // nothing is left to write, an empty PATCH body would be a 422, so the
+      // toast is simply dismissed.
+      const excluded = new Set(opts.excludePaths ?? []);
+      const rows = toast.snapshot.filter((row) => !excluded.has(row.file_path));
+      if (rows.length === 0) {
         set((state) => {
           state.toast = null;
         });
@@ -1715,33 +1737,24 @@ export const useAppStore = create<AppStore>()(
         state.manifest.error = null;
       });
 
+      // A7 (#999): ONE PATCH. Each row carries its prior decision and prior
+      // lock. The confirmed set is what the action created, plus every row the
+      // dialog's earlier rounds and this round confirmed. Anything else locked
+      // answers 409 and writes nothing.
+      const confirmed = Array.from(
+        new Set([...(toast.actionLocked ?? []), ...(opts.confirmedLocked ?? [])])
+      );
       try {
-        // Confirm the snapshot's rows by name, because apply-best-copy locked
-        // the keeper it chose — without it the undo is refused by the lock the
-        // action just created. The snapshot is the whole PATCH scope, so
-        // naming it confirms the same locked rows the old boolean force did.
-        // (A7 changes Undo to name only the rows the action locked.)
         await patchDecisions(
           manifestPath,
-          toast.snapshot.map((row) => ({
+          rows.map((row) => ({
             file_path: row.file_path,
             decision: row.decision,
-          })),
-          { confirmedLocked: toast.snapshot.map((row) => row.file_path) }
-        );
-        // Second PATCH, not an afterthought: the write above both created and
-        // (via the confirmation) cleared locks, so the snapshot's lock column is
-        // restored explicitly or the group ends up unlocked-everywhere.
-        await patchLocks(
-          manifestPath,
-          toast.snapshot.map((row) => ({
-            file_path: row.file_path,
             locked: row.locked,
-          }))
+          })),
+          { confirmedLocked: confirmed }
         );
-        const restored = new Map(
-          toast.snapshot.map((row) => [row.file_path, row])
-        );
+        const restored = new Map(rows.map((row) => [row.file_path, row]));
         set((state) => {
           for (const group of state.manifest.groups) {
             // A keep-best toast names ONE group, so the scan stops there; a
@@ -1764,6 +1777,26 @@ export const useAppStore = create<AppStore>()(
           state.toast = null;
         });
       } catch (err) {
+        if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          // A lock set after the toast (or a D10 keeper): ask, keep the toast.
+          // As in the decision 409 (H1), rows the user already confirmed stay in
+          // the reopened dialog, so the next Unlock & Apply re-sends them too.
+          const priorConfirmed = (opts.confirmedLocked ?? []).filter((p) =>
+            rows.some((row) => row.file_path === p)
+          );
+          const newlyLocked = (err.lockedPaths ?? []).filter(
+            (p) => !priorConfirmed.includes(p)
+          );
+          set((state) => {
+            if (state.toast !== null) state.toast.undoing = false;
+            state.execute.lockConflict = {
+              paths: [...priorConfirmed, ...newlyLocked],
+              op: "undo",
+              originalPaths: rows.map((row) => row.file_path),
+            };
+          });
+          return;
+        }
         // Leave the toast up on failure — dismissing it would strand the user
         // with a bulk write they asked to reverse and no way left to reverse
         // it. The error line under the status bar says what happened.

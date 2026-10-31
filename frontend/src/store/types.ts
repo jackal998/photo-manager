@@ -254,6 +254,25 @@ export interface UndoToast {
   prunedPaths?: string[];
   /** True while an Undo is in flight, so the button cannot fire twice. */
   undoing: boolean;
+  /**
+   * keep-best only (A7, #999): the rows whose lock THIS action created, i.e.
+   * `snapshot.locked === false` and `is_locked === true` after the write. Undo
+   * confirms exactly these by name. A keeper that was already locked before the
+   * action is not here, so its Undo asks again (D10 ruling (a)). Absent on the
+   * toolbar toast, which has none.
+   */
+  actionLocked?: string[];
+}
+
+/**
+ * Options for `undoKeepBest` (A7). Both are set only by LockConfirmDialog's
+ * op="undo" buttons: `confirmedLocked` adds the dialog's rows to the toast's
+ * `actionLocked` ("Unlock & Apply"); `excludePaths` leaves those rows out of
+ * the write ("Unlocked only").
+ */
+export interface UndoKeepBestOpts {
+  confirmedLocked?: string[];
+  excludePaths?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +286,7 @@ export interface UndoToast {
 export interface LockConflict {
   /** The paths the server reported as locked. */
   paths: string[];
-  op: "execute" | "remove" | "prune" | "decision" | "apply-best-copy" | "restore";
+  op: "execute" | "remove" | "prune" | "decision" | "apply-best-copy" | "restore" | "undo";
   /**
    * The original path list that triggered the conflict.
    * - execute: all decided paths that were in scope at call time (null means
@@ -826,14 +845,16 @@ export interface AppActions {
    * questions Q5; slice TB reuses it for the toolbar verbs), then dismiss it.
    * No-op when there is no toast or an Undo is already in flight.
    *
-   * Restores BOTH decision and lock from the snapshot, in that order and with
-   * the snapshot's rows confirmed (`confirmed_locked`) on the decision PATCH —
-   * apply-best-copy LOCKS the keeper it chooses, so a decision-only undo would
-   * be refused by the very lock the
-   * action had just created, and the user would get a lock-conflict dialog for
-   * pressing Undo.
+   * A7 (#999): ONE PATCH /api/decision. Each restored row carries its prior
+   * decision AND its prior lock (`locked`), and the request confirms only
+   * `actionLocked`, the locks the action itself created. A row locked after
+   * the toast, or a keeper locked before the action (D10 (a)), is not named:
+   * the server answers 409, the store opens LockConfirmDialog on op "undo", and
+   * the toast stays up. Cancel writes nothing.
+   *
+   * `opts` is set only by that dialog: see UndoKeepBestOpts.
    */
-  undoKeepBest(): Promise<void>;
+  undoKeepBest(opts?: UndoKeepBestOpts): Promise<void>;
 
   /**
    * Reverse the immediate Skip the current "skip-now" toast describes (#909):

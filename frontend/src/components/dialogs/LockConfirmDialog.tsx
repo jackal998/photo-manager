@@ -12,6 +12,9 @@
 //                     (op "decision" names its rows: confirmedLocked, A6)
 //   Unlocked Only   → re-run the original op with the locked paths excluded
 //   Cancel          → clear lockConflict, do nothing
+//   op "undo" (A7, #999): Unlock & Apply → undoKeepBest({confirmedLocked}),
+//                     Unlocked only → undoKeepBest({excludePaths}); Cancel
+//                     leaves the Keep best toast up. Wording as "decision".
 //
 // Body copy is context-sensitive:
 //   op === "execute"  → "About to DELETE N locked files (Recycle Bin)"
@@ -92,12 +95,15 @@ export function LockConfirmDialog() {
   const resolvePruneLock = useAppStore((s) => s.resolvePruneLock);
   const applyBestCopy = useAppStore((s) => s.applyBestCopy);
   const restoreToReview = useAppStore((s) => s.restoreToReview);
+  const undoKeepBest = useAppStore((s) => s.undoKeepBest);
   const set = useAppStore.setState;
   const t = useT();
 
   const isOpen = lockConflict !== null;
   const lockedPaths = lockConflict?.paths ?? [];
-  const op = lockConflict?.op ?? "execute";
+  // A7: Undo's dialog reuses the decision wording. Its buttons route on rawOp.
+  const rawOp = lockConflict?.op ?? "execute";
+  const op = rawOp === "undo" ? "decision" : rawOp;
   const n = lockedPaths.length;
   const originalPathsLen = lockConflict?.originalPaths?.length ?? 0;
 
@@ -113,6 +119,13 @@ export function LockConfirmDialog() {
     // clears it — must NOT pre-clear here, or it would see an empty locked set.
     if (op === "prune") {
       void resolvePruneLock("unlock-apply");
+      return;
+    }
+    if (rawOp === "undo") {
+      // A7: the store already lists earlier rounds' confirmed rows in paths
+      // (H1), so naming paths confirms everything the user has agreed to.
+      clearConflict();
+      void undoKeepBest({ confirmedLocked: lockedPaths });
       return;
     }
     // Capture the ORIGINAL scope before clearConflict() nulls the store field.
@@ -153,6 +166,13 @@ export function LockConfirmDialog() {
     if (op === "prune") {
       // Hold the locked singletons; continue pruning the unlocked buckets.
       void resolvePruneLock("unlocked-only");
+      return;
+    }
+    if (rawOp === "undo") {
+      // A7: every locked row in paths is left out, as "Unlocked only" means
+      // everywhere else; the rest of the Undo proceeds.
+      clearConflict();
+      void undoKeepBest({ excludePaths: lockedPaths });
       return;
     }
     // Capture before clearConflict() nulls the store field.

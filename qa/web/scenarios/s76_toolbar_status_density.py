@@ -504,8 +504,10 @@ def run(*, base_url: str) -> None:
             assert "2" in toast_en and "Delete" in toast_en, (
                 f"The toast does not say what the verb did: {toast_en!r}"
             )
+            # A7 (#999): Undo is ONE PATCH /api/decision; the second /api/lock
+            # PATCH it used to send is gone.
             with page.expect_response(
-                lambda r: "/api/lock" in r.url and r.request.method == "PATCH",
+                lambda r: "/api/decision" in r.url and r.request.method == "PATCH",
                 timeout=15_000,
             ):
                 page.get_by_test_id(MAIN_TOAST_UNDO).click()

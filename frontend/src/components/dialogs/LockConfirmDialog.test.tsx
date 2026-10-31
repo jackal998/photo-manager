@@ -36,7 +36,7 @@ import {
 // ---------------------------------------------------------------------------
 
 function seedLockConflict(
-  op: "execute" | "remove" | "decision" | "apply-best-copy" | "prune" | "restore",
+  op: "execute" | "remove" | "decision" | "apply-best-copy" | "prune" | "restore" | "undo",
   paths: string[] = ["/photos/a.jpg"],
   originalPaths: string[] | null = null,
   pendingDecision?: "" | "delete" | "ignore",
@@ -671,6 +671,66 @@ describe("LockConfirmDialog — Unlock & Apply weight by fate (#984, F5)", () =>
     expect(btn.className).toContain("bg-warm");
     expect(btn.className).not.toContain("bg-danger-warm");
     expect(btn.textContent).not.toContain("⊗");
+  });
+
+  // A7 (#999): the Undo of a Keep best whose lock was set after the toast. The
+  // dialog reuses the decision wording; Unlock & Apply and Unlocked only both
+  // go back to the toast's own undo, and Cancel writes nothing.
+  describe("op='undo' (A7)", () => {
+    let undoMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      undoMock = vi.fn().mockResolvedValue(undefined);
+      useAppStore.setState({ undoKeepBest: undoMock } as never);
+    });
+
+    it("Unlock & Apply re-runs undo confirming the dialog's rows", async () => {
+      const user = userEvent.setup();
+      seedLockConflict("undo", ["/photos/peer.jpg"], ["/photos/keeper.jpg", "/photos/peer.jpg"]);
+      render(<LockConfirmDialog />);
+      await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+      expect(undoMock).toHaveBeenCalledWith({ confirmedLocked: ["/photos/peer.jpg"] });
+      expect(useAppStore.getState().execute.lockConflict).toBeNull();
+    });
+
+    it("Unlocked only re-runs undo excluding the dialog's rows", async () => {
+      const user = userEvent.setup();
+      seedLockConflict("undo", ["/photos/peer.jpg"], ["/photos/keeper.jpg", "/photos/peer.jpg"]);
+      render(<LockConfirmDialog />);
+      await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCKED_ONLY));
+      expect(undoMock).toHaveBeenCalledWith({
+        excludePaths: ["/photos/peer.jpg"],
+      });
+      expect(useAppStore.getState().execute.lockConflict).toBeNull();
+    });
+
+    // A7 H1 (accumulation): the store lists rows earlier rounds confirmed in
+    // paths, so Unlock & Apply names all of them, not just the newest round.
+    it("Unlock & Apply names every row in paths, including earlier rounds' confirmed rows", async () => {
+      const user = userEvent.setup();
+      seedLockConflict("undo", ["/photos/peer.jpg", "/photos/c.jpg"], ["/photos/keeper.jpg", "/photos/peer.jpg", "/photos/c.jpg"]);
+      render(<LockConfirmDialog />);
+      await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY));
+      expect(undoMock).toHaveBeenCalledWith({
+        confirmedLocked: ["/photos/peer.jpg", "/photos/c.jpg"],
+      });
+    });
+
+    it("Cancel clears the dialog and writes nothing", async () => {
+      const user = userEvent.setup();
+      seedLockConflict("undo", ["/photos/peer.jpg"]);
+      render(<LockConfirmDialog />);
+      await user.click(screen.getByTestId(LOCK_CONFIRM_BTN_CANCEL));
+      expect(useAppStore.getState().execute.lockConflict).toBeNull();
+      expect(undoMock).not.toHaveBeenCalled();
+    });
+
+    it("uses the decision wording, not the restore or execute copy", () => {
+      seedLockConflict("undo", ["/photos/peer.jpg"]);
+      render(<LockConfirmDialog />);
+      expect(screen.getByText("Locked rows affected")).toBeInTheDocument();
+      expect(screen.getByTestId(LOCK_CONFIRM_BTN_UNLOCK_APPLY).className).toContain("bg-warm");
+    });
   });
 
   it("decision: default weight, no glyph", () => {
