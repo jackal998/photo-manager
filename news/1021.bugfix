@@ -1,0 +1,1 @@
+Confirm locked decision writes by name, so a row locked after the dialog opened asks again (#1021)

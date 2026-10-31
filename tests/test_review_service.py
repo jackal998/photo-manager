@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from core.app_service.lock_gate import LockFlagsConflictError
 from core.app_service.review_service import (
     VALID_DECISIONS,
     load_review,
@@ -124,6 +125,19 @@ def _read_field(manifest: Path, field: str) -> dict[str, object]:
     finally:
         conn.close()
     return dict(rows)
+
+
+def _set_locked_row(manifest: Path, source_path: str) -> None:
+    """Lock one row directly, to model a lock set after the dialog opened."""
+    conn = sqlite3.connect(str(manifest))
+    try:
+        conn.execute(
+            "UPDATE migration_manifest SET is_locked = 1 WHERE source_path = ?",
+            (source_path,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -281,16 +295,45 @@ class TestSetDecisionsLockedRowGate:
             set_decisions(str(manifest), {"/photos/ref.jpg": ""})
         assert exc_info.value.args[0] == "locked_paths"
 
-    def test_force_locked_applies_decision_and_unlocks(self, tmp_path):
+    def test_confirmed_locked_applies_decision_and_unlocks(self, tmp_path):
         manifest = _make_pair_with_lock(tmp_path)
         n = set_decisions(
-            str(manifest), {"/photos/ref.jpg": "delete"}, force_locked=True
+            str(manifest),
+            {"/photos/ref.jpg": "delete"},
+            confirmed_locked=["/photos/ref.jpg"],
         )
         assert n == 1
         decisions = _read_field(manifest, "user_decision")
         locks = _read_field(manifest, "is_locked")
         assert decisions["/photos/ref.jpg"] == "delete"
         assert locks["/photos/ref.jpg"] == 0
+
+    def test_row_locked_after_dialog_is_refused_and_named_alone(self, tmp_path):
+        """D7 / B-2: a row locked after the dialog opened is not named, so the
+        write refuses it. Named rows are not written either (one txn)."""
+        manifest = _make_pair_with_lock(tmp_path)
+        _set_locked_row(manifest, "/photos/dup.jpg")
+        with pytest.raises(ValueError) as exc_info:
+            set_decisions(
+                str(manifest),
+                {"/photos/ref.jpg": "delete", "/photos/dup.jpg": "delete"},
+                confirmed_locked=["/photos/ref.jpg"],
+            )
+        assert exc_info.value.args[0] == "locked_paths"
+        assert exc_info.value.args[1] == ["/photos/dup.jpg"]
+        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == ""
+        assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 1
+
+    def test_confirmed_locked_with_skip_locked_raises_flags_conflict(self, tmp_path):
+        manifest = _make_pair_with_lock(tmp_path)
+        with pytest.raises(LockFlagsConflictError):
+            set_decisions(
+                str(manifest),
+                {"/photos/ref.jpg": "delete"},
+                confirmed_locked=["/photos/ref.jpg"],
+                skip_locked=True,
+            )
+        assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == ""
 
     def test_skip_locked_writes_unlocked_only_leaves_locked_untouched(self, tmp_path):
         manifest = _make_pair_with_lock(tmp_path)

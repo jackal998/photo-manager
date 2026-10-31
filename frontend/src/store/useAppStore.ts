@@ -436,7 +436,7 @@ export const useAppStore = create<AppStore>()(
         await patchDecisions(
           manifestPath,
           paths.map((p) => ({ file_path: p, decision })),
-          { forceLocked: opts.forceLocked ?? false }
+          { confirmedLocked: opts.confirmedLocked ?? [] }
         );
       } catch (err) {
         // Revert the optimistic apply on EVERY failure (conflict or not) —
@@ -447,9 +447,19 @@ export const useAppStore = create<AppStore>()(
           });
         }
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          // H1: rows the user already confirmed stay in the reopened dialog, so
+          // the next Unlock & Apply re-sends them with the new ones. The server
+          // names only the unconfirmed rows, so without this a second lock makes
+          // the re-send drop the first and the loop never ends.
+          const priorConfirmed = (opts.confirmedLocked ?? []).filter((p) =>
+            paths.includes(p)
+          );
+          const newlyLocked = (err.lockedPaths ?? []).filter(
+            (p) => !priorConfirmed.includes(p)
+          );
           set((state) => {
             state.execute.lockConflict = {
-              paths: err.lockedPaths ?? [],
+              paths: [...priorConfirmed, ...newlyLocked],
               op: "decision",
               // Preserve the original path list so "Unlocked Only" can filter
               // out the locked paths and re-apply the decision to the rest.
@@ -1706,18 +1716,21 @@ export const useAppStore = create<AppStore>()(
       });
 
       try {
-        // force_locked, because apply-best-copy locked the keeper it chose —
-        // without it the undo is refused by the lock the action just created.
+        // Confirm the snapshot's rows by name, because apply-best-copy locked
+        // the keeper it chose — without it the undo is refused by the lock the
+        // action just created. The snapshot is the whole PATCH scope, so
+        // naming it confirms the same locked rows the old boolean force did.
+        // (A7 changes Undo to name only the rows the action locked.)
         await patchDecisions(
           manifestPath,
           toast.snapshot.map((row) => ({
             file_path: row.file_path,
             decision: row.decision,
           })),
-          { forceLocked: true }
+          { confirmedLocked: toast.snapshot.map((row) => row.file_path) }
         );
         // Second PATCH, not an afterthought: the write above both created and
-        // (via force_locked) cleared locks, so the snapshot's lock column is
+        // (via the confirmation) cleared locks, so the snapshot's lock column is
         // restored explicitly or the group ends up unlocked-everywhere.
         await patchLocks(
           manifestPath,

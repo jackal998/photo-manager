@@ -8,10 +8,16 @@ No UI imports — this module must stay headless for the FastAPI process.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
-from core.app_service.lock_gate import apply_gated_writes, verdict_from_flags
+from core.app_service.lock_gate import (
+    LockFlagsConflictError,
+    LockVerdict,
+    apply_gated_writes,
+    verdict_from_flags,
+)
 from infrastructure.manifest_repository import DecisionWrite, ManifestRepository
 from infrastructure.settings import load_settings
 from app.viewmodels.main_vm import MainVM
@@ -101,7 +107,7 @@ def set_decisions(
     manifest_path: str,
     decisions: dict[str, str],
     *,
-    force_locked: bool = False,
+    confirmed_locked: Collection[str] = (),
     skip_locked: bool = False,
 ) -> int:
     """Persist user decisions to the manifest, gated on locked rows.
@@ -109,11 +115,16 @@ def set_decisions(
     Mirrors the Qt desktop's ``set_decision_with_lock_check`` /
     ``LockedRowsConfirmDialog`` gate (#182, #733): a decision write that
     would touch a locked row is refused unless the caller opts into one
-    of ``force_locked`` (write anyway, unlocking the row in the same
-    write) or ``skip_locked`` (drop locked rows from the write set,
+    of ``confirmed_locked`` (write the named locked rows, unlocking each in
+    the same write) or ``skip_locked`` (drop locked rows from the write set,
     leaving both ``is_locked`` and ``user_decision`` untouched). The gate
     applies to every decision value, including ``""`` (clearing a locked
     row's decision is also gated — Qt does not special-case it).
+
+    A locked row in the write set that is not named in ``confirmed_locked``
+    is refused, even when others are named (A6, D7): a row locked after the
+    user's dialog opened must be confirmed again. The refusal is raised by
+    the write primitive inside the same transaction, so nothing is written.
 
     The returned count is the number of rows ACTUALLY submitted for write
     (narrowed by ``skip_locked``), not necessarily the number matched in
@@ -122,8 +133,8 @@ def set_decisions(
     Args:
         manifest_path: Absolute path to the manifest.
         decisions: Mapping of file_path → decision value.
-        force_locked: When True, locked rows are written anyway and
-            unlocked (``is_locked`` set to False) in the same write.
+        confirmed_locked: Locked paths the user confirmed. Each is written
+            and unlocked in the same statement. Empty means no confirmation.
         skip_locked: When True, locked rows are dropped from the write
             set; only the unlocked subset is written.
 
@@ -133,9 +144,10 @@ def set_decisions(
     Raises:
         FileNotFoundError: If manifest_path does not exist on disk.
         ValueError: If any decision value is not in VALID_DECISIONS.
+        LockFlagsConflictError: If ``confirmed_locked`` and ``skip_locked``
+            are both set (422 at the route).
         ValueError("locked_paths", [...], matched_total): The decision
-            write targets locked rows and neither ``force_locked`` nor
-            ``skip_locked`` is set.
+            write targets locked rows that are not confirmed.
     """
     _require_manifest(manifest_path)
     for fp, dec in decisions.items():
@@ -148,10 +160,24 @@ def set_decisions(
     # The lock gate runs inside one IMMEDIATE transaction: the locked set is
     # read from the same connection that writes, and the primitive refuses
     # any unconfirmed locked row (hidden rows included, B-5). No load() here.
-    verdict = verdict_from_flags(force_locked, skip_locked)
+    verdict, named = _decision_verdict(confirmed_locked, skip_locked)
     writes = [DecisionWrite(path=p, decision=v) for p, v in decisions.items()]
     with ManifestRepository().write_txn(manifest_path) as tx:
-        return len(apply_gated_writes(tx, writes, verdict))
+        return len(apply_gated_writes(tx, writes, verdict, named=named))
+
+
+def _decision_verdict(
+    confirmed_locked: Collection[str], skip_locked: bool
+) -> tuple[LockVerdict, list[str] | None]:
+    """Map the decision request to a verdict; a non-empty list means FORCE (A6)."""
+    named = list(confirmed_locked)
+    if named and skip_locked:
+        raise LockFlagsConflictError(
+            "confirmed_locked and skip_locked are mutually exclusive"
+        )
+    if named:
+        return LockVerdict.FORCE, named
+    return verdict_from_flags(False, skip_locked), None
 
 
 def set_locks(manifest_path: str, locks: dict[str, bool]) -> int:

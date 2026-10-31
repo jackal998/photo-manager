@@ -149,12 +149,13 @@ export interface PatchDecisionsResult {
 export async function patchDecisions(
   manifestPath: string,
   decisions: DecisionEntry[],
-  opts?: { forceLocked?: boolean }
+  opts?: { confirmedLocked?: string[] }
 ): Promise<PatchDecisionsResult> {
+  // A6: the locked rows the user confirmed, by name. Never a boolean force.
   return patchJsonOrConflict<PatchDecisionsResult>("/api/decision", {
     manifest_path: manifestPath,
     decisions,
-    force_locked: opts?.forceLocked ?? false,
+    confirmed_locked: opts?.confirmedLocked ?? [],
   });
 }
 

@@ -481,13 +481,15 @@ export interface AppActions {
    *   manifest.error — mirrors the removeFromList 409 flow.
    * - On other errors: reverts every optimistic apply and sets manifest.error.
    *
-   * ``opts.forceLocked`` threads through to patchDecisions's force_locked —
-   * used by LockConfirmDialog's "Unlock & Apply" re-run.
+   * ``opts.confirmedLocked`` threads through to patchDecisions's
+   * confirmed_locked (A6) — the locked rows the user confirmed by name, used by
+   * LockConfirmDialog's "Unlock & Apply" re-run. A second 409 for a row locked
+   * after the dialog opened reopens the dialog, naming only that row.
    */
   setDecisions(
     paths: string[],
     decision: DecisionValue,
-    opts?: { forceLocked?: boolean }
+    opts?: { confirmedLocked?: string[] }
   ): Promise<void>;
 
   /**
@@ -825,8 +827,9 @@ export interface AppActions {
    * No-op when there is no toast or an Undo is already in flight.
    *
    * Restores BOTH decision and lock from the snapshot, in that order and with
-   * `force_locked` on the decision PATCH — apply-best-copy LOCKS the keeper it
-   * chooses, so a decision-only undo would be refused by the very lock the
+   * the snapshot's rows confirmed (`confirmed_locked`) on the decision PATCH —
+   * apply-best-copy LOCKS the keeper it chooses, so a decision-only undo would
+   * be refused by the very lock the
    * action had just created, and the user would get a lock-conflict dialog for
    * pressing Undo.
    */

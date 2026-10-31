@@ -146,10 +146,12 @@ class TestHiddenLockedRow:
         assert exc_info.value.args[1] == ["/photos/hidden.jpg"]
         assert _read(manifest, "user_decision", "/photos/hidden.jpg") == ""
 
-    def test_forced_hidden_locked_row_is_unlocked(self, tmp_path):
+    def test_confirmed_hidden_locked_row_is_unlocked(self, tmp_path):
         manifest = _make_hidden_locked(tmp_path)
         n = set_decisions(
-            str(manifest), {"/photos/hidden.jpg": "delete"}, force_locked=True
+            str(manifest),
+            {"/photos/hidden.jpg": "delete"},
+            confirmed_locked=["/photos/hidden.jpg"],
         )
         assert n == 1
         assert _read(manifest, "user_decision", "/photos/hidden.jpg") == "delete"
@@ -168,7 +170,7 @@ class TestBothFlagsRefused:
         with pytest.raises(ValueError) as exc_info:
             set_decisions(
                 str(manifest), {"/photos/ref.jpg": "delete"},
-                force_locked=True, skip_locked=True,
+                confirmed_locked=["/photos/ref.jpg"], skip_locked=True,
             )
         assert exc_info.value.args[0] != "locked_paths"
         assert _read(manifest, "user_decision", "/photos/ref.jpg") == ""
@@ -179,7 +181,7 @@ class TestBothFlagsRefused:
         resp = client.patch("/api/decision", json={
             "manifest_path": str(manifest),
             "decisions": [{"file_path": "/photos/ref.jpg", "decision": "delete"}],
-            "force_locked": True,
+            "confirmed_locked": ["/photos/ref.jpg"],
             "skip_locked": True,
         })
         assert resp.status_code == 422, resp.text
