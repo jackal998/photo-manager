@@ -44,8 +44,9 @@ LOCKED-ROW DECISION phase (#733 — PATCH /api/decision now lock-gated):
         LOCK_CONFIRM_BTN_UNLOCK_APPLY -> GET /api/manifest proves
         user_decision=='delete' AND is_locked==False (Unlock & Apply both
         writes the decision AND force-unlocks the row in the same call —
-        Qt #417 verdict parity, backend confirmed in
-        core/app_service/review_service.py:set_decisions' force_locked path).
+        Qt #417 verdict parity). A6: the PATCH names the row the dialog showed
+        (`confirmed_locked`), never a boolean force; backend in
+        core/app_service/review_service.py:set_decisions' confirmed_locked path.
 
 Qt divergences:
   D1. Manifest read via GET /api/manifest JSON vs Qt SQLite.
@@ -297,7 +298,15 @@ def run(*, base_url: str) -> None:
             lock_confirm.wait_for(state="visible", timeout=15_000)
             unlock_apply_btn = page.get_by_test_id(LOCK_CONFIRM_BTN_UNLOCK_APPLY)
             unlock_apply_btn.wait_for(state="visible", timeout=5_000)
-            unlock_apply_btn.click()
+            # A6: the re-send must name the locked row, not carry a boolean force.
+            with page.expect_request("**/api/decision") as req_info:
+                unlock_apply_btn.click()
+            sent = req_info.value.post_data_json
+            named = sent.get("confirmed_locked", [])
+            assert len(named) == 1 and named[0].endswith(_Q88), (
+                f"(g) Unlock & Apply must name q88: {sent!r}"
+            )
+            assert "force_locked" not in sent, f"(g) decision PATCH sent a boolean force: {sent!r}"
             lock_confirm.wait_for(state="hidden", timeout=10_000)
 
             final_state = _await(
