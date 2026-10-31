@@ -105,17 +105,19 @@ def patch_decision(body: DecisionUpdate) -> dict:
         200 {updated: int}
         400 if a decision value is invalid
         404 if manifest_path does not exist on disk
-        409 locked_paths (locked rows targeted and force_locked=False and
-            skip_locked=False) — mirrors POST /api/action/bulk-decide's
-            409 detail shape: {code, locked_paths, matched_total}
-        422 on db error
+        409 locked_paths (a locked row is targeted and not named in
+            confirmed_locked, and skip_locked=False) — mirrors POST
+            /api/action/bulk-decide's 409 detail shape:
+            {code, locked_paths, matched_total}. The 409 names only the
+            unconfirmed rows; nothing is written (A6, D7).
+        422 if confirmed_locked and skip_locked are both set, or on db error
     """
     decisions = {item.file_path: item.decision for item in body.decisions}
     try:
         updated = set_decisions(
             body.manifest_path,
             decisions,
-            force_locked=body.force_locked,
+            confirmed_locked=body.confirmed_locked,
             skip_locked=body.skip_locked,
         )
     except LockFlagsConflictError as exc:

@@ -165,11 +165,16 @@ class DecisionItem(BaseModel):
 
 
 class DecisionUpdate(BaseModel):
-    """Body for PATCH /api/decision."""
+    """Body for PATCH /api/decision.
+
+    ``confirmed_locked`` names the locked rows the user saw in the lock dialog
+    (A6, design 3.1). No boolean force exists here: a request that still sends
+    ``force_locked`` has the field ignored and is refused like an unforced one.
+    """
 
     manifest_path: str
     decisions: list[DecisionItem]
-    force_locked: bool = False
+    confirmed_locked: list[str] = []
     skip_locked: bool = False
 
 
