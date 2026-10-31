@@ -335,6 +335,28 @@ class TestPatchDecisionLockedRowGate:
         assert _read_field(manifest, "user_decision")["/photos/ref.jpg"] == "delete"
         assert _read_field(manifest, "is_locked")["/photos/ref.jpg"] == 0
 
+    def test_two_locked_rows_both_named_are_written_and_unlocked(self, client, tmp_path):
+        """H1: the reopened dialog names every row confirmed so far. Naming both
+        locked rows writes both and clears both locks in one request."""
+        manifest = _make_pair_with_lock(tmp_path)
+        _set_locked(manifest, "/photos/dup.jpg")
+        resp = client.patch("/api/decision", json={
+            "manifest_path": str(manifest),
+            "decisions": [
+                {"file_path": "/photos/ref.jpg", "decision": "delete"},
+                {"file_path": "/photos/dup.jpg", "decision": "delete"},
+            ],
+            "confirmed_locked": ["/photos/ref.jpg", "/photos/dup.jpg"],
+        })
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["updated"] == 2
+        assert _read_field(manifest, "user_decision") == {
+            "/photos/ref.jpg": "delete", "/photos/dup.jpg": "delete",
+        }
+        assert _read_field(manifest, "is_locked") == {
+            "/photos/ref.jpg": 0, "/photos/dup.jpg": 0,
+        }
+
     def test_force_locked_alone_never_writes_a_locked_row(self, client, tmp_path):
         """DecisionUpdate no longer offers force_locked. Pydantic ignores the
         unknown field, so the request runs unforced: 409, nothing written."""

@@ -2319,23 +2319,31 @@ describe("setDecisions – one PATCH for the whole list, optimistic on all", () 
   // A6 / D7: Unlock & Apply re-sends naming the rows the dialog showed. A row
   // locked after the dialog opened gets a second 409 that names only itself,
   // and the dialog reopens for it.
-  it("Unlock & Apply names the dialog's row; a second 409 reopens the dialog for the new row only", async () => {
+  it("Unlock & Apply keeps confirmed rows across a second 409, and the re-send with both rows completes", async () => {
     seedManifest([makeGroup(1, ["/p/a.jpg", "/p/b.jpg"])]);
     const original = ["/p/a.jpg", "/p/b.jpg"];
     vi.mocked(client.patchDecisions)
       .mockRejectedValueOnce(new client.ApiConflictError("locked_paths", ["/p/b.jpg"]))
-      .mockRejectedValueOnce(new client.ApiConflictError("locked_paths", ["/p/a.jpg"]));
+      .mockRejectedValueOnce(new client.ApiConflictError("locked_paths", ["/p/a.jpg"]))
+      .mockResolvedValueOnce({ updated: 2 });
+
+    // The dialog's Unlock & Apply: clear the conflict, re-run with the rows shown.
+    const unlockApply = async () => {
+      const shown = useAppStore.getState().execute.lockConflict?.paths ?? [];
+      useAppStore.setState((s) => ({ execute: { ...s.execute, lockConflict: null } }));
+      await useAppStore
+        .getState()
+        .setDecisions(original, "delete", { confirmedLocked: shown });
+    };
 
     await useAppStore.getState().setDecisions(original, "delete");
     expect(useAppStore.getState().execute.lockConflict?.paths).toEqual(["/p/b.jpg"]);
 
-    // The dialog clears the conflict, then re-runs with the rows it showed.
-    useAppStore.setState((s) => ({ execute: { ...s.execute, lockConflict: null } }));
-    await useAppStore
-      .getState()
-      .setDecisions(original, "delete", { confirmedLocked: ["/p/b.jpg"] });
-
-    expect(client.patchDecisions).toHaveBeenLastCalledWith(
+    // Round 2: a's lock lands while the dialog is open. The server names only a,
+    // but the reopened dialog must keep b, which the user already confirmed.
+    await unlockApply();
+    expect(client.patchDecisions).toHaveBeenNthCalledWith(
+      2,
       "/data/scan.db",
       [
         { file_path: "/p/a.jpg", decision: "delete" },
@@ -2343,14 +2351,26 @@ describe("setDecisions – one PATCH for the whole list, optimistic on all", () 
       ],
       { confirmedLocked: ["/p/b.jpg"] }
     );
-    const { execute, manifest } = useAppStore.getState();
-    expect(execute.lockConflict).toEqual({
-      paths: ["/p/a.jpg"],
+    expect(useAppStore.getState().execute.lockConflict).toEqual({
+      paths: ["/p/b.jpg", "/p/a.jpg"],
       op: "decision",
       originalPaths: original,
       pendingDecision: "delete",
     });
-    expect(manifest.error).toBeNull();
+
+    // Round 3: Unlock & Apply sends both rows, so the write completes.
+    await unlockApply();
+    expect(client.patchDecisions).toHaveBeenNthCalledWith(
+      3,
+      "/data/scan.db",
+      [
+        { file_path: "/p/a.jpg", decision: "delete" },
+        { file_path: "/p/b.jpg", decision: "delete" },
+      ],
+      { confirmedLocked: ["/p/b.jpg", "/p/a.jpg"] }
+    );
+    expect(useAppStore.getState().execute.lockConflict).toBeNull();
+    expect(useAppStore.getState().manifest.error).toBeNull();
   });
 });
 

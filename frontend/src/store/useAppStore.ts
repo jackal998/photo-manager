@@ -447,9 +447,19 @@ export const useAppStore = create<AppStore>()(
           });
         }
         if (err instanceof ApiConflictError && err.code === "locked_paths") {
+          // H1: rows the user already confirmed stay in the reopened dialog, so
+          // the next Unlock & Apply re-sends them with the new ones. The server
+          // names only the unconfirmed rows, so without this a second lock makes
+          // the re-send drop the first and the loop never ends.
+          const priorConfirmed = (opts.confirmedLocked ?? []).filter((p) =>
+            paths.includes(p)
+          );
+          const newlyLocked = (err.lockedPaths ?? []).filter(
+            (p) => !priorConfirmed.includes(p)
+          );
           set((state) => {
             state.execute.lockConflict = {
-              paths: err.lockedPaths ?? [],
+              paths: [...priorConfirmed, ...newlyLocked],
               op: "decision",
               // Preserve the original path list so "Unlocked Only" can filter
               // out the locked paths and re-apply the decision to the rest.
