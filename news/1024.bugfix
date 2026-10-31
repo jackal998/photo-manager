@@ -1,0 +1,1 @@
+Execute re-checks each delete row's lock and outcome before its file call, so a row locked or dismissed mid-run is kept and reported (#1024)
