@@ -772,13 +772,16 @@ def run_pipeline(
         swap it into ``exif_procs``. Returns False (``holder[0]`` -> None) when
         a fresh process cannot start; the caller then drains without work."""
         old = holder[0]
-        old.close()
+        _exit_exif(old)
         with exif_procs_lock:
             if old in exif_procs:
                 exif_procs.remove(old)
+        if cancel_token():  # cancelled: never start a process nothing will kill
+            holder[0] = None
+            return False
         try:
             fresh = ExiftoolProcess()
-        except OSError as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error(
                 "exiftool could not be restarted ({}); EXIF is skipped for the"
                 " rest of this consumer",
@@ -788,9 +791,21 @@ def run_pipeline(
             return False
         with exif_procs_lock:
             exif_procs.append(fresh)
+        # Re-check after registering: a cancel whose kill sweep ran before the
+        # append must still not leave this process running (#561).
+        if cancel_token():
+            _exit_exif(fresh)
+            with exif_procs_lock:
+                exif_procs.remove(fresh)
+            holder[0] = None
+            return False
         fresh.__enter__()  # what ``with proc as et`` did; registered first (#561)
         holder[0] = fresh
         return True
+
+    def _exit_exif(proc) -> None:
+        """Close via the context-manager protocol, as ``with proc`` would."""
+        proc.__exit__(None, None, None)
 
     def _short_exif_reason(prefix: str, exc: BaseException) -> str:
         detail = str(exc).strip() or type(exc).__name__
@@ -803,7 +818,14 @@ def run_pipeline(
         once. If that fails, or any other failure occurs, every path is
         recorded as exif-missing and the process is rotated, so the consumer
         keeps draining and producers never block on a full ``exif_queue``.
+        Once cancelled, nothing is flushed or retried: the batch is recorded
+        and the consumer drops its process.
         """
+        if cancel_token():
+            _record_exif_missing(batch, "exiftool cancelled")
+            _exit_exif(holder[0])
+            holder[0] = None
+            return
         try:
             _flush_exif_batch(batch, holder[0])
             return
@@ -851,7 +873,7 @@ def run_pipeline(
             if item is None:
                 return
 
-    def _run_exif_loop(holder: list) -> None:
+    def _run_exif_loop(holder: list, sentinel_seen: list) -> None:
         batch: list = []
         while True:
             try:
@@ -861,6 +883,7 @@ def run_pipeline(
                     return
                 continue
             if item is None:
+                sentinel_seen[0] = True  # set before the final flush can raise
                 if batch:
                     _flush_exif_batch_safe(batch, holder)
                 return
@@ -893,15 +916,17 @@ def run_pipeline(
         with exif_procs_lock:
             exif_procs.append(proc)
         holder: list = [proc]
+        sentinel_seen = [False]
         try:
             proc.__enter__()  # what ``with proc as et`` did; registered first (#561)
-            _run_exif_loop(holder)
+            _run_exif_loop(holder, sentinel_seen)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.exception("exiftool consumer crashed: {}", exc)
-            _drain_exif_queue()
+            if not sentinel_seen[0]:  # after the sentinel nobody else will send one
+                _drain_exif_queue()
         finally:
             if holder[0] is not None:
-                holder[0].close()
+                _exit_exif(holder[0])
 
     # #486-PR3 — resolve "auto" to thread|process.
     resolved_pool = config.hash_pool

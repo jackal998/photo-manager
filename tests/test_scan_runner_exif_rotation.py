@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -55,11 +56,12 @@ def _write_png(path: Path, shade: int) -> None:
     Image.new("RGB", (8, 8), (shade % 256, 0, 0)).save(path, "PNG")
 
 
-def _install_fake_exiftool(monkeypatch, on_batch):
+def _install_fake_exiftool(monkeypatch, on_batch, on_construct=None):
     """Replace the exiftool seam with a recorder.
 
     ``on_batch(call_no, proc, paths)`` runs before every batch read and may
-    raise. Returns ``(created_procs, calls)``; ``calls`` holds
+    raise. ``on_construct(attempt_no)`` runs before every ``ExiftoolProcess()``
+    and may raise. Returns ``(created_procs, calls)``; ``calls`` holds
     ``(call_no, proc_index, paths)`` for every batch attempt.
     """
     import scanner.exif as _exif
@@ -69,14 +71,18 @@ def _install_fake_exiftool(monkeypatch, on_batch):
 
     class _FakeProcess:
         def __init__(self) -> None:
+            if on_construct is not None:
+                on_construct(len(created) + 1)
             self.index = len(created)
             self.closed = False
+            self.killed = False
             created.append(self)
 
         def close(self) -> None:
             self.closed = True
 
         def kill(self) -> None:
+            self.killed = True
             self.closed = True
 
         def __enter__(self):
@@ -100,12 +106,18 @@ def _install_fake_exiftool(monkeypatch, on_batch):
     return created, calls
 
 
-def _run_scan(tmp_path: Path, count: int, timeout: float = 60.0):
+def _run_scan(
+    tmp_path: Path, count: int, timeout: float = 60.0, token=None, bus=None
+):
     """Run the real pipeline over ``count`` PNGs in a thread.
 
     Returns ``(rows, bus, finished)``; ``finished`` is False when the scan
     did not return within ``timeout`` (a deadlock).
     """
+    from core.app_service.cancel_token import _CancelToken
+
+    token = token or _CancelToken()
+    bus = bus or _SpyBus()
     src = tmp_path / "src"
     src.mkdir(exist_ok=True)
     for i in range(count):
@@ -119,12 +131,11 @@ def _run_scan(tmp_path: Path, count: int, timeout: float = 60.0):
         exif_workers=1,
         hash_pool="thread",
     )
-    bus = _SpyBus()
     errors: list[BaseException] = []
 
     def _target() -> None:
         try:
-            run_pipeline(config, _CancelToken(), bus)
+            run_pipeline(config, token, bus)
         except BaseException as exc:  # pragma: no cover - surfaced below
             errors.append(exc)
 
@@ -134,7 +145,8 @@ def _run_scan(tmp_path: Path, count: int, timeout: float = 60.0):
     finished = not worker.is_alive()
     if errors:
         raise errors[0]
-    rows = _manifest_rows(out) if finished else []
+    # A cancelled run writes no manifest; only read rows from a completed run.
+    rows = _manifest_rows(out) if finished and not token() else []
     return rows, bus, finished
 
 
@@ -226,3 +238,129 @@ class TestWedgedExiftoolRotation:
 
         assert finished, "scan deadlocked: the exif consumer stopped draining"
         assert len(rows) == 1600
+
+    def test_replacement_that_cannot_start_degrades_past_queue_capacity(
+        self, tmp_path, monkeypatch
+    ):
+        """Degrade branch: the replacement exiftool cannot start, and there are
+        more records than ``_EXIF_QUEUE_MAXSIZE``. The consumer must drain and
+        discard, so producers never block; every row still reaches the manifest."""
+
+        def _on_batch(_call_no, _proc, _paths):
+            raise ExiftoolTimeout("read stalled")
+
+        def _on_construct(attempt):
+            if attempt == 2:
+                raise OSError("exiftool.exe vanished")
+
+        created, _calls = _install_fake_exiftool(
+            monkeypatch, _on_batch, _on_construct
+        )
+
+        rows, _bus, finished = _run_scan(tmp_path, 1600, timeout=60.0)
+
+        assert finished, "scan deadlocked after the replacement failed to start"
+        assert len(created) == 1, f"no process may start after a failed rotation; got {len(created)}"
+        assert len(rows) == 1600
+
+    def test_non_timeout_batch_error_is_recorded_and_next_batch_works(
+        self, tmp_path, monkeypatch
+    ):
+        """A non-timeout error from a batch: its rows are recorded signal-less,
+        the process is rotated, and the next batch succeeds on the new one."""
+
+        def _on_batch(call_no, _proc, _paths):
+            if call_no == 1:
+                raise ValueError("malformed exiftool output")
+
+        created, calls = _install_fake_exiftool(monkeypatch, _on_batch)
+
+        rows, bus, finished = _run_scan(tmp_path, 501)
+
+        assert finished
+        assert bus.failed_msgs == []
+        assert len(created) == 2, f"expected one rotation; got {len(created)}"
+        assert calls[1][1] == 1, "the next batch must run on the rotated process"
+        assert len(rows) == 501
+        assert sum(1 for r in rows if not _has_fake_date(r)) == 500
+        assert sum(1 for r in rows if _has_fake_date(r)) == 1
+
+    def test_cancel_kill_never_starts_a_replacement_process(
+        self, tmp_path, monkeypatch
+    ):
+        """#561 — a cancel kills the live exiftool. The batch that then fails on
+        the dead pipe must not rotate into a new process nothing will kill."""
+        from core.app_service.cancel_token import _CancelToken
+
+        token = _CancelToken()
+
+        def _on_batch(_call_no, proc, _paths):
+            token.request()
+            for _ in range(500):  # wait (<= 5 s) for the cancel kill sweep
+                if proc.killed:
+                    break
+                time.sleep(0.01)
+            raise OSError(22, "Invalid argument")
+
+        created, _calls = _install_fake_exiftool(monkeypatch, _on_batch)
+
+        rows, bus, finished = _run_scan(tmp_path, 1100, token=token)
+
+        assert finished, "cancelled scan must return"
+        assert len(created) == 1, (
+            f"cancel must not start a replacement process; got {len(created)}"
+        )
+        assert "Scan cancelled." in bus.failed_msgs
+
+    def test_second_process_raising_runtime_error_does_not_hang(
+        self, tmp_path, monkeypatch
+    ):
+        """A non-OSError from creating the replacement must degrade, not kill
+        the consumer with items still in flight."""
+
+        def _on_batch(_call_no, _proc, _paths):
+            raise ExiftoolTimeout("read stalled")
+
+        def _on_construct(attempt):
+            if attempt == 2:
+                raise RuntimeError("can't start new thread")
+
+        created, _calls = _install_fake_exiftool(
+            monkeypatch, _on_batch, _on_construct
+        )
+
+        rows, _bus, finished = _run_scan(tmp_path, 3)
+
+        assert finished, "scan hung after a RuntimeError from the replacement"
+        assert len(created) == 1
+        assert len(rows) == 3
+
+    def test_failure_after_sentinel_does_not_wait_for_a_second_sentinel(
+        self, tmp_path, monkeypatch
+    ):
+        """The final flush (after the sentinel) raises from the bus. The consumer
+        must exit instead of draining for a sentinel that never comes."""
+
+        import core.app_service.scan_runner as _sr
+
+        real_emit = _sr._emit_stage
+
+        def _emit_raises_on_exif_progress(bus, tracker, completed, total, **kw):
+            # Deterministic stand-in for a bus failure on the final exif flush
+            # (the real emit is throttled, so it may never reach the bus).
+            on_consumer = threading.current_thread().name.startswith("exif-consumer")
+            if on_consumer and tracker.stage_name == "EXIFTOOL" and completed > 0:
+                raise RuntimeError("bus emit failed")
+            return real_emit(bus, tracker, completed, total, **kw)
+
+        monkeypatch.setattr(_sr, "_emit_stage", _emit_raises_on_exif_progress)
+
+        def _on_batch(_call_no, _proc, _paths):
+            return None
+
+        _install_fake_exiftool(monkeypatch, _on_batch)
+
+        rows, _bus, finished = _run_scan(tmp_path, 3)
+
+        assert finished, "consumer waited for a second sentinel after a crash"
+        assert len(rows) == 3
