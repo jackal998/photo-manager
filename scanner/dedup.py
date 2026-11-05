@@ -58,6 +58,12 @@ FORMAT_PRIORITY = {"heic": 0, "jpeg": 1, "png": 2, "gif": 3, "webp": 4, "raw": -
 
 LOSSY_TYPES = {"jpeg", "heic", "png", "gif", "webp"}
 
+# A union-find edge: (path_a, path_b, confidence), confidence "high" or "low".
+# "high" edges merge groups. "low" edges are hints: they may attach a lone file
+# to a group, but never merge two groups that already have two or more members
+# (see ``_assign_group_ids``).
+Edge = tuple[str, str, str]
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -397,7 +403,8 @@ def classify(
 
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
     # pHash transitive edges (#538 near-dup, #824 complementary).
-    _assign_group_ids(rows, pair_edges + phash_edges)
+    # Live Photo pair edges are certain (high); pHash edges carry their own.
+    _assign_group_ids(rows, [(a, b, "high") for a, b in pair_edges] + phash_edges)
 
     return list(rows.values())
 
@@ -526,7 +533,7 @@ def _classify_phash(
     min_phash_dimension: int = 128,
     bktree_min_candidates: int | None = None,
     min_phash_quality: float = 16.0,
-) -> list[tuple[str, str]]:
+) -> list[Edge]:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE, and
     return the pHash union-find edges — near-duplicate (#538) plus
     complementary exact-bucket (#824).
@@ -559,7 +566,7 @@ def _classify_phash(
     # Exact pHash match (hamming == 0) → FORMAT_DUPLICATE or complementary
     # RAW+lossy. Complementary buckets take no dedup decision but still return
     # their union-find edges (#824).
-    exact_edges: list[tuple[str, str]] = []
+    exact_edges: list[Edge] = []
     for group in by_phash.values():
         if len(group) < 2:
             continue
@@ -582,7 +589,7 @@ def _classify_format_group(
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
-) -> list[tuple[str, str]]:
+) -> list[Edge]:
     """Within a pHash==0 group, apply RAW+lossy exception and format priority.
 
     Returns the union-find edges the bucket contributes. The all-lossy path
@@ -673,9 +680,10 @@ def _complementary_edges(
     group: list[HashResult],
     mean_color_threshold: int,
     dhash_threshold: int,
-) -> list[tuple[str, str]]:
+) -> list[Edge]:
     """#824 — union-find edges for an exact-pHash bucket that takes no dedup
-    decision (RAW+lossy complementary, or all-RAW).
+    decision (RAW+lossy complementary, or all-RAW). These are ``high``: the
+    bucket is one shot, so the group is certain.
 
     A star from the lexicographically smallest member to every peer: one
     connected component, and an anchor that cannot depend on the order the
@@ -692,14 +700,14 @@ def _complementary_edges(
     ordered = sorted(group, key=lambda h: str(h.record.path))
     anchor = ordered[0]
     anchor_key = str(anchor.record.path)
-    edges: list[tuple[str, str]] = []
+    edges: list[Edge] = []
     for peer in ordered[1:]:
         if mean_color_threshold > 0 and anchor.mean_color and peer.mean_color:
             if _mean_color_distance(anchor.mean_color, peer.mean_color) > mean_color_threshold:
                 continue
         if _dhash_vote(anchor, peer, dhash_threshold) == "disagree":
             continue
-        edges.append((anchor_key, str(peer.record.path)))
+        edges.append((anchor_key, str(peer.record.path), "high"))
     return edges
 
 
@@ -722,8 +730,11 @@ def _complementary_edges(
 # "5": the pHash-quality (contrast) gate (min_phash_quality, 16.0) excludes
 # flat/near-black frames whose degenerate pHash bridged unrelated photos
 # (dedup-core research 2026-11-05 class A). Verdict moves on those files.
+# "6": low-confidence edges attach leaves but never merge two multi-member
+# groups (dedup-core research 2026-11-05 §5.1 T3 hint-only), so the torii
+# moments that hash alike stay separate groups.
 # "4" is taken by a separate branch's confidence gates; merged in order.
-GROUPING_STRATEGY_VERSION = "5"
+GROUPING_STRATEGY_VERSION = "6"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -851,9 +862,9 @@ def _classify_near_duplicates(
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
     bktree_min_candidates: int | None = None,
-) -> list[tuple[str, str]]:
+) -> list[Edge]:
     """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE,
-    and return their ``(path_a, path_b)`` union-find edges.
+    and return their ``(path_a, path_b, confidence)`` union-find edges.
 
     #538 — edge collection is DECOUPLED from classification. Every pair that
     passes the distance + mean-color (#462) + dHash (#524) gates yields a
@@ -879,7 +890,7 @@ def _classify_near_duplicates(
     int_hashes = [int(hr.phash, 16) for hr, _ in hashes]
     neighbors = _near_dup_neighbors(int_hashes, threshold, bktree_min_candidates)
 
-    edges: list[tuple[str, str]] = []
+    edges: list[Edge] = []
     for i, (hr_a, hash_a) in enumerate(hashes):
         # hr_a may already be classified — it still serves as a comparator so
         # transitively-similar files connect into one component.
@@ -906,7 +917,12 @@ def _classify_near_duplicates(
             # only behavioural change: the edge stands even when hr_b is already
             # classified (exactly the case the old top-of-loop guard dropped →
             # orphan). Redundant edges are union-find no-ops.
-            edges.append((str(hr_a.record.path), str(hr_b.record.path)))
+            # dedup-core research 2026-11-05 class B — shot-time or PNG-pair
+            # demotion caps confidence at "low" whatever the dHash said. The
+            # edge and the row share this one verdict.
+            note = _demotion_note(hr_a, hr_b)
+            confidence = _edge_confidence(vote, note)
+            edges.append((str(hr_a.record.path), str(hr_b.record.path), confidence))
             # Classification (unchanged from pre-#538): flag the lower-priority
             # side, but only when hr_b is still unclassified — so the
             # REVIEW_DUPLICATE / match_confidence assignment is byte-identical.
@@ -922,9 +938,6 @@ def _classify_near_duplicates(
             flagged = ordered[1]
             flagged_key = str(flagged.record.path)
             if flagged_key not in rows:
-                # dedup-core research 2026-11-05 class B — shot-time or PNG-pair
-                # demotion caps confidence at "low" whatever the dHash said.
-                note = _demotion_note(hr_a, hr_b)
                 suffix = f"; {note}" if note is not None else ""
                 rows[flagged_key] = _make_row(
                     flagged,
@@ -933,9 +946,15 @@ def _classify_near_duplicates(
                     hamming=distance,
                     reason=f"near-duplicate (hamming={distance}) of "
                            f"{ordered[0].record.path.name}{suffix}",
-                    match_confidence="high" if vote == "agree" and note is None else "low",
+                    match_confidence=confidence,
                 )
     return edges
+
+
+def _edge_confidence(vote: str, note: Optional[str]) -> str:
+    """Confidence of a pHash near-dup pair: ``high`` only when dHash agrees
+    and no demotion note (shot-time / both-PNG, class B) applies."""
+    return "high" if vote == "agree" and note is None else "low"
 
 
 def _collect_pair_edges(
@@ -1011,25 +1030,39 @@ def _collect_pair_edges(
     return edges
 
 
+def _row_edges(rows: dict[str, ManifestRow]) -> list[Edge]:
+    """``duplicate_of`` links as edges. A link's confidence is its row's
+    ``match_confidence``: a ``low`` link is a hint, everything else is high."""
+    return [
+        (row.source_path, row.duplicate_of,
+         "low" if row.match_confidence == "low" else "high")
+        for row in rows.values() if row.duplicate_of
+    ]
+
+
 def _assign_group_ids(
     rows: dict[str, ManifestRow],
-    pair_edges: list[tuple[str, str]] | None = None,
+    edges: list[Edge] | None = None,
 ) -> None:
-    """Assign group_id via union-find over duplicate_of edges + pair edges.
+    """Assign group_id via union-find over duplicate_of edges + ``edges``.
 
-    Files transitively connected (A→B, B→C) all receive the same group_id —
-    the lexicographically smallest source_path in the component.
-    Isolated files (no similarity edge AND no pair edge) receive
-    group_id = None.
+    Files transitively connected by ``high`` edges (A→B, B→C) all receive the
+    same group_id — the lexicographically smallest source_path in the
+    component. Isolated files (no edge at all) receive group_id = None.
 
-    ``pair_edges`` carries the non-``duplicate_of`` union edges: Live Photo
-    HEIC ↔ MOV/MP4 pairs from ``_collect_pair_edges`` (photo-manager#88) AND
-    the near-duplicate transitive edges from ``_classify_near_duplicates``
-    (#538). They participate in the same union-find as ``duplicate_of`` edges,
-    so a unique pair (neither side a duplicate of anything else) still gets its
-    own 2-row group; a pair where each side belongs to a different SHA-group
-    still transitively closes into a single component; and a genuine near-dup
-    whose only bridge was already classified is no longer orphaned (#538).
+    ``edges`` carries the non-``duplicate_of`` union edges: Live Photo
+    HEIC ↔ MOV/MP4 pairs (photo-manager#88, always high) and the pHash
+    near-duplicate and complementary edges (#538 / #824), each with its own
+    confidence.
+
+    Low-confidence edges (``GROUPING_STRATEGY_VERSION`` "6") are hints. They
+    are processed after every high edge, in sorted order (deterministic, so
+    the result never depends on record order): a low edge whose endpoints are
+    already in the same component is a no-op; one with a lone endpoint attaches
+    that file as a leaf; one whose two endpoints each already sit in a group of
+    two or more is skipped, so a hint never merges two groups. A lone file
+    whose only edges were skipped stays ``group_id=None``, and the hint is
+    still visible in its ``reason`` and ``duplicate_of``.
     """
     parent: dict[str, str] = {}
 
@@ -1046,29 +1079,33 @@ def _assign_group_ids(
             else:
                 parent[ra] = rb
 
-    for row in rows.values():
-        if row.duplicate_of:
-            union(row.source_path, row.duplicate_of)
+    all_edges = _row_edges(rows) + list(edges or [])
+    # Nodes in a component of two or more members. Every node joined by a
+    # union is one, so membership is exactly "not a lone singleton".
+    joined: set[str] = set()
 
-    # Pair edges (#88): pair partners always share a group regardless
-    # of whether either side is itself a SHA/pHash duplicate.
-    for a, b in (pair_edges or []):
+    for a, b, confidence in all_edges:
+        if confidence == "high":
+            union(a, b)
+            joined.update((a, b))
+
+    # Normalise orientation and sort: the hint pass must not depend on which
+    # side of a pair the classifier happened to write first.
+    low_pairs = sorted(
+        (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "low"
+    )
+    for a, b in low_pairs:
+        if find(a) == find(b):
+            continue
+        if a in joined and b in joined:
+            continue  # a hint never merges two multi-member groups
         union(a, b)
-
-    # Collect every path that participates in at least one edge
-    has_edge: set[str] = set()
-    for row in rows.values():
-        if row.duplicate_of:
-            has_edge.add(row.source_path)
-            has_edge.add(row.duplicate_of)
-    for a, b in (pair_edges or []):
-        has_edge.add(a)
-        has_edge.add(b)
+        joined.update((a, b))
 
     for row in rows.values():
-        if row.source_path in has_edge:
+        if row.source_path in joined:
             row.group_id = find(row.source_path)
-        # else: stays None (isolated file)
+        # else: stays None (isolated file, or a hint that was not taken)
 
 
 # ---------------------------------------------------------------------------
