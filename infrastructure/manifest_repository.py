@@ -70,7 +70,10 @@ SELECT id, source_path, source_label, group_id, hamming_distance, reason,
        -- (not derived) so GET /api/manifest can serialise them; a column
        -- missing here silently becomes the PhotoRecord default, which is
        -- indistinguishable from a genuine "no GPS" reading.
-       exif_tag_count, gps_present, xmp_derived
+       exif_tag_count, gps_present, xmp_derived,
+       -- #517 — persisted scan-time confidence ('high' / 'low' / NULL).
+       -- apply_best_copy reads it to honour the aggressive-delete gate.
+       match_confidence
 FROM   migration_manifest
 WHERE  outcome = ''
 ORDER  BY
@@ -125,6 +128,11 @@ _MIGRATIONS = [
     # ordering inside a burst combines the columns.
     ("subsec_time_original", "TEXT"),
     ("offset_time_original", "TEXT"),
+    # Scan-time match confidence (#517), persisted so the review-time
+    # apply_best_copy path applies the same "low is never auto-deleted" gate
+    # as scan time. Nullable with NO DEFAULT: pre-existing rows read NULL,
+    # which the gate treats as not-low (the legacy behaviour).
+    ("match_confidence", "TEXT"),
 ]
 
 # #433 — drop the legacy ``dest_path`` column and migrate ``action='MOVE'``
@@ -158,6 +166,9 @@ _POST_DROP_COLUMNS = (
     # the columns named here). The additive migrations run first, so these
     # always exist on the source table by the time the dance reads it.
     "subsec_time_original", "offset_time_original",
+    # #517 — same trap as #820: an ALTER-added column missing here is
+    # silently dropped by the copy-table rebuild.
+    "match_confidence",
 )
 
 _UPDATE_LOCK_SQL = """
@@ -305,6 +316,7 @@ def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
             score            REAL,
             subsec_time_original TEXT,
             offset_time_original TEXT,
+            match_confidence TEXT,
             is_locked        INTEGER NOT NULL DEFAULT 0,
             outcome          TEXT    NOT NULL DEFAULT ''
         );
@@ -388,6 +400,7 @@ def _photo_record(
     db_exif_tag_count: "int | None" = None,
     db_gps_present: "int | None" = None,
     db_xmp_derived: "int | None" = None,
+    db_match_confidence: "str | None" = None,
 ) -> PhotoRecord:
     """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 
@@ -459,6 +472,7 @@ def _photo_record(
         exif_tag_count=db_exif_tag_count,
         gps_present=bool(db_gps_present),
         xmp_derived=bool(db_xmp_derived),
+        match_confidence=db_match_confidence,
     )
 
 
@@ -958,6 +972,7 @@ class ManifestRepository:
                         db_exif_tag_count=row["exif_tag_count"],
                         db_gps_present=row["gps_present"],
                         db_xmp_derived=row["xmp_derived"],
+                        db_match_confidence=row["match_confidence"],
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)

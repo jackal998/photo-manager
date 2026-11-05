@@ -190,10 +190,11 @@ class ManifestRow:
     # #517 — multi-hash confidence: "high" when an independent second hash
     # (dHash) agrees with the pHash match (or the match is SHA-exact), "low"
     # when only pHash agrees (dHash missing or disagrees), None for non-dup
-    # rows. Transient like ``duplicate_of`` — NOT written to DB in this phase;
-    # it drives the auto-select aggressive-delete gate (low-confidence rows
-    # are never auto-marked for deletion). Persistence + a UI badge are a
-    # tracked follow-up.
+    # rows. Persisted to ``migration_manifest.match_confidence`` (scanner/
+    # manifest.py) so the review-time ``apply_best_copy`` path can honour the
+    # same aggressive-delete gate as scan time, with no re-scan. It drives
+    # the #517 gate: low-confidence rows are never auto-marked for deletion.
+    # A UI badge is still a tracked follow-up (not exposed on the web API).
     match_confidence: Optional[str] = None
 
 

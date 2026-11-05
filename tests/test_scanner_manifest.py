@@ -98,6 +98,25 @@ class TestWriteManifest:
             ("/a/plain.jpg", None, None, None),
         ]
 
+    def test_match_confidence_written_to_new_manifest(self, tmp_path):
+        """#517 — match_confidence is persisted, so the review-time
+        apply_best_copy path can apply the aggressive-delete gate without a
+        re-scan. A 'low' row round-trips as 'low'; a non-duplicate row with no
+        confidence stores NULL."""
+        out = tmp_path / "manifest.sqlite"
+        low = _row("/a/phash_only.jpg", "REVIEW_DUPLICATE")
+        low.match_confidence = "low"
+        plain = _row("/a/plain.jpg", "")
+
+        write_manifest([low, plain], out)
+
+        with sqlite3.connect(out) as conn:
+            stored = dict(conn.execute(
+                "SELECT source_path, match_confidence FROM migration_manifest"
+            ).fetchall())
+        assert stored["/a/phash_only.jpg"] == "low"
+        assert stored["/a/plain.jpg"] is None
+
     def test_overwrites_existing_file(self, tmp_path):
         import gc
         out = tmp_path / "manifest.sqlite"
