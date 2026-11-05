@@ -17,14 +17,26 @@ if TYPE_CHECKING:
     from PIL import Image
 
 
-# #465 — default timeout for individual stdout-line reads inside
-# ``ExiftoolProcess.execute()``. 60s is generous — even a 500-file
-# batch on NAS produces lines well before that window — but a wedged
-# exiftool (corrupt input, dropped SMB session, kernel pipe stall)
-# would otherwise block ``readline()`` indefinitely and hang the
-# consumer thread for the rest of the scan. Caller catches
-# ``ExiftoolTimeout`` and rotates to a fresh process.
+# #465 — base read budget for ``ExiftoolProcess.execute()``. Perl
+# block-buffers stdout when it writes to a pipe (~8 KB, flushed only when
+# the buffer fills or at the ``{ready}`` sentinel), so the first line of an
+# ``-execute`` batch can arrive long after the batch started. In practice
+# this timeout bounds one whole ``-execute`` call, not one line: callers size
+# each call with ``execute_budget()`` (small batches, budget grows with the
+# file count), so a slow-but-alive NAS batch is not mistaken for a wedged
+# process. A wedged exiftool (corrupt input, dropped SMB session, kernel pipe
+# stall) still exceeds the budget and raises ``ExiftoolTimeout``; the caller
+# closes it and rotates to a fresh process.
 _EXIFTOOL_READ_TIMEOUT_SECONDS = 60.0
+# Max paths per ``-execute`` call (see ``_execute_in_batches``).
+_EXIFTOOL_EXECUTE_BATCH = 25
+# Measured NAS worst case per file under read contention (2026-11-05).
+_EXIFTOOL_PER_FILE_SECONDS = 4.0
+
+
+def execute_budget(n_paths: int) -> float:
+    """Read budget (seconds) for one ``-execute`` call over ``n_paths`` files."""
+    return _EXIFTOOL_READ_TIMEOUT_SECONDS + n_paths * _EXIFTOOL_PER_FILE_SECONDS
 
 
 class ExiftoolTimeout(Exception):
@@ -288,9 +300,12 @@ class ExiftoolProcess:
         up to the ``{ready}`` sentinel.
 
         Raises :class:`ExiftoolTimeout` if the stdout reader thread
-        doesn't yield a line within ``read_timeout`` seconds. Indicates
-        a wedged exiftool process — the caller should ``close()`` it
-        (force-kill path) and rotate to a fresh instance.
+        doesn't yield a line within ``read_timeout`` seconds. Because Perl
+        block-buffers stdout on a pipe, that wait can span a whole
+        ``-execute`` batch, so ``read_timeout`` is a per-call budget
+        (callers size it with :func:`execute_budget`). Exceeding it
+        indicates a wedged exiftool process — the caller should ``close()``
+        it (force-kill path) and rotate to a fresh instance.
         """
         cmd = "\n".join(str(a) for a in args) + "\n-execute\n"
         self.proc.stdin.write(cmd)
@@ -390,6 +405,23 @@ def _parse_exiftool_json(output: str) -> list[dict]:
     except json.JSONDecodeError:
         return []
     return data if isinstance(data, list) else []
+
+
+def _execute_in_batches(
+    et: ExiftoolProcess, fixed_args: list, paths: list,
+) -> list[dict]:
+    """Run ``fixed_args + paths`` through exiftool in sub-batches of at most
+    ``_EXIFTOOL_EXECUTE_BATCH`` paths, each with its own read budget.
+    Returns the concatenated JSON records."""
+    records: list[dict] = []
+    for start in range(0, len(paths), _EXIFTOOL_EXECUTE_BATCH):
+        sub = paths[start:start + _EXIFTOOL_EXECUTE_BATCH]
+        output = et.execute(
+            fixed_args + [str(p) for p in sub],
+            read_timeout=execute_budget(len(sub)),
+        )
+        records.extend(_parse_exiftool_json(output))
+    return records
 
 
 def parse_exif_date(raw: str) -> Optional[datetime]:
@@ -846,9 +878,7 @@ def _read_extract_chunk(
         "-QuickTime:CompressorName",
         # NB: NO -fast here.
     ]
-    args += [str(p) for p in paths]
-    output = et.execute(args)
-    records = _parse_exiftool_json(output)
+    records = _execute_in_batches(et, args, paths)
 
     by_path: dict[Path, dict] = {}
     for rec in records:
@@ -942,9 +972,7 @@ def _read_chunk(paths: list[Path], et: ExiftoolProcess) -> dict[Path, Optional[d
     args = ["-j", "-G",
             "-DateTimeOriginal", "-CreateDate", "-QuickTime:CreateDate",
             "-fast"]
-    args += [str(p) for p in paths]
-    output = et.execute(args)
-    records = _parse_exiftool_json(output)
+    records = _execute_in_batches(et, args, paths)
 
     # Bind records to input paths by ``SourceFile``. ``pathlib`` normalises
     # forward/back slashes on Windows so dict equality holds regardless of
