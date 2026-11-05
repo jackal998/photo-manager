@@ -1374,9 +1374,7 @@ class TestExecuteBudgetPerBatch:
         from scanner import exif
 
         monkeypatch.setattr(exif, "_EXIFTOOL_READ_TIMEOUT_SECONDS", 0.2)
-        # raising=False: the pre-fix module has no per-file constant, and the
-        # regression must fail on its timeout, not on this setattr.
-        monkeypatch.setattr(exif, "_EXIFTOOL_PER_FILE_SECONDS", 0.05, raising=False)
+        monkeypatch.setattr(exif, "_EXIFTOOL_UNIT_SECONDS", 0.05, raising=False)
         # The pre-fix code passed no explicit budget: it used the default
         # bound at def time. Scale that default too, so the old path is
         # measured at the same scaled-down timeout.
@@ -1418,8 +1416,49 @@ class TestExecuteBudgetPerBatch:
         monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
 
         with exif.ExiftoolProcess() as et:
-            with pytest.raises(exif.ExiftoolTimeout):
+            with pytest.raises(exif.ExiftoolTimeout) as info:
                 exif.batch_read_extracts(paths, et)
+        # The message carries the path count and elapsed time for diagnosis.
+        import re as _re
+
+        assert _re.search(r"\(25 paths, [\d.]+s since -execute\)", str(info.value))
+        assert "wedged" in str(info.value)
+
+    def test_budget_counts_cost_units(self):
+        """Image = 1 unit (12 s), video = 4 units. 25 images → 60 + 25×12;
+        6 videos = 24 units → 60 + 24×12; 3 images + 2 videos = 11 units."""
+        from scanner import exif
+
+        images = [Path(f"/fake/{i}.jpg") for i in range(25)]
+        videos = [Path(f"/fake/{i}.mov") for i in range(6)]
+        mixed = [Path(f"/fake/{i}.heic") for i in range(3)]
+        mixed += [Path(f"/fake/v{i}.mp4") for i in range(2)]
+        assert exif.execute_budget(images) == 60.0 + 25 * 12.0
+        assert exif.execute_budget(videos) == 60.0 + 24 * 12.0
+        assert exif.execute_budget(mixed) == 60.0 + 11 * 12.0
+
+    def test_packing_fills_by_units_in_path_order(self):
+        """30 images then 3 videos → [25 images], [5 images + 3 videos = 17
+        units]. 7 videos → [6 videos = 24 units], [1 video]."""
+        from scanner import exif
+
+        images = [Path(f"/fake/{i}.jpg") for i in range(30)]
+        videos = [Path(f"/fake/{i}.mov") for i in range(3)]
+        batches = exif._pack_batches(images + videos)
+        assert batches == [images[:25], images[25:] + videos]
+
+        seven = [Path(f"/fake/{i}.m4v") for i in range(7)]
+        assert [len(b) for b in exif._pack_batches(seven)] == [6, 1]
+
+    def test_single_video_fits_alone_below_cap(self, monkeypatch):
+        """A path whose units exceed the cap still forms its own batch."""
+        from scanner import exif
+
+        monkeypatch.setattr(exif, "_EXIFTOOL_EXECUTE_UNITS", 2)
+        video = Path("/fake/a.mov")
+        other = Path("/fake/b.mov")
+        assert exif._pack_batches([video]) == [[video]]
+        assert exif._pack_batches([video, other]) == [[video], [other]]
 
     def test_sixty_paths_split_into_25_25_10_with_matching_budgets(self):
         """60 paths in one outer chunk → three ``-execute`` calls of 25, 25
@@ -1442,7 +1481,8 @@ class TestExecuteBudgetPerBatch:
         result = exif.batch_read_extracts(paths, et, chunk_size=500)
 
         assert [n for n, _ in calls] == [25, 25, 10]
-        assert [t for _, t in calls] == [exif.execute_budget(n) for n in (25, 25, 10)]
+        subs = (paths[0:25], paths[25:50], paths[50:60])
+        assert [t for _, t in calls] == [exif.execute_budget(s) for s in subs]
         assert set(result) == set(paths)
         assert len(result) == 60
 
