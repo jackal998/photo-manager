@@ -333,7 +333,7 @@ class TestGuardedOutcomeSql:
         ])
         monkeypatch.setattr(ManifestTxn, "refuse_unconfirmed", lambda *a, **k: None)
 
-        with ManifestRepository().write_txn(str(manifest)) as tx:
+        with ManifestRepository().write_txn(str(manifest), verb="skip_now") as tx:
             changed = tx.transition(
                 [str(f1)], from_outcome="", to_outcome="ignored",
                 confirmed=set(), lock_after=False,
@@ -351,7 +351,7 @@ class TestTxnMarkerAndTransition:
         repo = ManifestRepository()
 
         with pytest.raises(RuntimeError, match="boom"):
-            with repo.write_txn(str(manifest)):
+            with repo.write_txn(str(manifest), verb="skip_now"):
                 raise RuntimeError("boom")
 
         assert _txn_key(str(manifest)) not in _open_txn_paths()
@@ -366,7 +366,7 @@ class TestTxnMarkerAndTransition:
             {"source_path": str(f2), "group_id": "g1", "outcome": "ignored", "executed": 0},
         ])
 
-        with ManifestRepository().write_txn(str(manifest)) as tx:
+        with ManifestRepository().write_txn(str(manifest), verb="skip_now") as tx:
             changed = tx.transition(
                 [str(f1)], from_outcome="ignored", to_outcome="",
                 confirmed=set(), lock_after=False,
@@ -383,7 +383,7 @@ class TestRecordDeleted:
             {"source_path": str(f1), "group_id": "g1", "outcome": "", "is_locked": 1},
         ])
 
-        with ManifestRepository().write_txn(str(manifest)) as tx:
+        with ManifestRepository().write_txn(str(manifest), verb="skip_now") as tx:
             tx.record_deleted(str(f1))
 
         assert _read_row(manifest, str(f1))[:3] == ("deleted", 1, 0)

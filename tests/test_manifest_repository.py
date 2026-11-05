@@ -1007,7 +1007,7 @@ class TestConnectionPragmas:
             _row({"source_path": "/a.jpg", "action": "",
                   "group_id": None, "hamming_distance": None}),
         ])
-        with ManifestRepository().write_txn(str(db)) as txn:
+        with ManifestRepository().write_txn(str(db), verb="set_decision") as txn:
             txn.record_deleted("/a.jpg")
         assert self._journal_mode(db) == "wal"
 
@@ -1196,7 +1196,7 @@ class TestIsLockedPersistence:
         ], ddl=_DDL_WITH_IS_LOCKED)
 
         ManifestRepository().batch_update_lock_state(
-            str(db), {str(cand): True}
+            str(db), {str(cand): True}, verb="lock_toggle"
         )
 
         records = {str(r.file_path): r for r in ManifestRepository().load(str(db))}
@@ -1222,7 +1222,7 @@ class TestIsLockedPersistence:
 
         # Unlock
         ManifestRepository().batch_update_lock_state(
-            str(db), {str(cand): False}
+            str(db), {str(cand): False}, verb="lock_toggle"
         )
 
         records = {str(r.file_path): r for r in ManifestRepository().load(str(db))}
@@ -1232,7 +1232,7 @@ class TestIsLockedPersistence:
         """Empty input must not error or open a connection."""
         db = tmp_path / "noop.sqlite"
         # File doesn't even exist; empty dict should be a guard-clause early return
-        ManifestRepository().batch_update_lock_state(str(db), {})
+        ManifestRepository().batch_update_lock_state(str(db), {}, verb="lock_toggle")
         assert not db.exists()
 
 

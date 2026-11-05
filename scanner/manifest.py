@@ -6,6 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 
+from infrastructure import decision_log
 from scanner.dedup import ManifestRow
 
 # Owned here since A5: the only user is the fresh temp DB write in
@@ -107,6 +108,9 @@ def write_manifest(
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = output.with_name(output.name + ".tmp.sqlite")
+    # WP-D — the decision log outlives a rescan. Read it from the existing
+    # output BEFORE the sidecar sweep below, so uncommitted WAL rows are seen.
+    carried_log = decision_log.read_carried_rows(output)
     # Sweep both:
     #   1. Stale TEMP from a previously-killed run — would block sqlite3.connect
     #      on Windows (file lock) and corrupt the new write otherwise.
@@ -135,6 +139,8 @@ def write_manifest(
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.executescript(_DDL)
+        conn.executescript(decision_log.DDL)
+        decision_log.insert_carried(conn, carried_log)
         conn.executemany(
             _INSERT,
             [
@@ -186,6 +192,10 @@ def write_manifest(
             decisions, lock_states = build_auto_select_writes(
                 keepers, non_keepers_for_delete
             )
+            ctx = decision_log.make_context(
+                verb="scan_auto_select", source="auto_select"
+            )
+            decision_log.snapshot_paths(conn, [*decisions, *lock_states], ())
             if decisions:
                 conn.executemany(
                     _UPDATE_DECISION_SQL,
@@ -196,6 +206,7 @@ def write_manifest(
                     _UPDATE_LOCK_SQL,
                     [(1 if v else 0, k) for k, v in lock_states.items()],
                 )
+            decision_log.append_changes(conn, ctx)
 
         conn.commit()
         # Force WAL checkpoint so the temp DB has no live sidecars when

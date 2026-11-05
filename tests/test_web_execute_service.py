@@ -913,7 +913,7 @@ class TestRestoreToReview:
         # A 'deleted' row's file is in the Recycle Bin; putting it back in
         # review would offer to delete a file that is no longer there.
         manifest, (f0, _f1, _f2) = self._three_row_group(tmp_path)
-        with ManifestRepository().write_txn(str(manifest)) as txn:
+        with ManifestRepository().write_txn(str(manifest), verb="set_decision") as txn:
             txn.record_deleted(str(f0))
 
         result = restore_to_review(str(manifest), [str(f0)])

@@ -519,6 +519,9 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
   applies the same rule as the scan-time aggressive auto-select: a pHash-only
   (`"low"`) near-duplicate is never marked for deletion (#517). NULL on
   manifests written before this column existed, which are treated as not-low
+- **Decision history** — every decision, lock and outcome change is recorded
+  in an append-only `decision_log` table inside the manifest, one row per
+  changed file, and survives a rescan. No view reads it yet
 - **pHash contrast gate** — each image's 32×32 grey std-dev (`phash_quality`, recipe `"5"`)
   is stored; images below 16.0 (near-black / near-flat frames whose degenerate pHash
   bridged unrelated photos) are kept out of pHash grouping but still get exact-SHA dedup.
