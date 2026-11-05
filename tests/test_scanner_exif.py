@@ -1338,10 +1338,10 @@ class TestBatchReadExtracts:
 
 def _per_file_block_buffered_proc(delay_for) -> MagicMock:
     """Fake exiftool that answers each ``-execute`` like Perl writing to a
-    pipe: nothing arrives for ``delay_for(path)`` seconds, then that call's
+    pipe: nothing arrives for the sum of ``delay_for(p)`` over the call's paths, then that call's
     output (one record) and the ``{ready}`` sentinel arrive at once. The
     fake reads the paths out of the command text it is sent, so every call
-    gets its own answer. ``delay_for`` receives the single path of the call."""
+    gets its own answer, and a multi-path call waits once per path."""
     import json as _json
     import queue as _queue
     import threading as _threading
@@ -1363,7 +1363,7 @@ def _per_file_block_buffered_proc(delay_for) -> MagicMock:
             for line in chunk:
                 out.put(line)
 
-        timer = _threading.Timer(delay_for(paths[0]), emit)
+        timer = _threading.Timer(sum(delay_for(p) for p in paths), emit)
         timer.daemon = True
         timer.start()
 

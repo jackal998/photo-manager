@@ -385,7 +385,7 @@ class ExiftoolProcess:
         cancel ``join`` until the whole batch finished (and then orphan the
         process, since exiftool is un-jailed per #556). Killing the subprocess
         drops EOF onto the consumer's stdout queue, so its ``execute()`` returns
-        promptly (the ``line is None`` break, not the 60s read-timeout) and the
+        promptly (the ``line is None`` break, not the per-file read budget) and the
         consumer exits on its next cancel check. ``subprocess.Popen.kill`` is
         safe to call from a thread other than the one using the process;
         best-effort / idempotent.
