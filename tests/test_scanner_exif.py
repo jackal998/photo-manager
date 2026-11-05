@@ -346,7 +346,8 @@ class TestBatchReadDates:
         assert result[paths[0]] is None
 
     def test_chunking_calls_execute_multiple_times(self):
-        """With chunk_size=2 and 5 files, execute should be called 3 times."""
+        """With chunk_size=2 and 5 files, execute is called once per file (5
+        times): chunk_size bounds the outer chunk, not the ``-execute`` call."""
         import json as _json
 
         paths = [Path(f"/fake/{i}.jpg") for i in range(5)]
@@ -360,7 +361,7 @@ class TestBatchReadDates:
         et.execute.side_effect = fake_execute
 
         batch_read_dates(paths, et, chunk_size=2)
-        assert et.execute.call_count == 3  # ceil(5/2)
+        assert et.execute.call_count == 5  # one -execute per file
 
     def test_chunking_returns_all_paths(self):
         """All input paths should appear as keys in the result."""
@@ -1285,8 +1286,8 @@ class TestBatchReadExtracts:
         assert result[paths[0]].gps_present is None
 
     def test_chunking_calls_execute_multiple_times(self):
-        """Same chunking semantics as batch_read_dates — chunk_size paths
-        per execute call."""
+        """Same chunking semantics as batch_read_dates — chunk_size bounds the
+        outer chunk; each file is still its own execute call."""
         import json as _json
         from scanner.exif import batch_read_extracts
 
@@ -1301,7 +1302,7 @@ class TestBatchReadExtracts:
         et.execute.side_effect = fake_execute
 
         batch_read_extracts(paths, et, chunk_size=2)
-        assert et.execute.call_count == 3  # ceil(5/2)
+        assert et.execute.call_count == 5  # one -execute per file
 
     def test_args_omit_fast_flag(self):
         """Critical: the extended batch must NOT use ``-fast``. GPS and
@@ -1335,68 +1336,76 @@ class TestBatchReadExtracts:
 # ── Per-batch read budget for -execute (2026-11-05 NAS regression) ─────────
 
 
-def _block_buffered_proc(records: list[dict], first_line_delay: float) -> MagicMock:
-    """Fake exiftool stdout that behaves like Perl writing to a pipe: nothing
-    arrives for ``first_line_delay`` seconds, then the whole batch's output
-    is available at once, followed by the ``{ready}`` sentinel."""
+def _per_file_block_buffered_proc(delay_for) -> MagicMock:
+    """Fake exiftool that answers each ``-execute`` like Perl writing to a
+    pipe: nothing arrives for the sum of ``delay_for(p)`` over the call's paths, then that call's
+    output (one record) and the ``{ready}`` sentinel arrive at once. The
+    fake reads the paths out of the command text it is sent, so every call
+    gets its own answer, and a multi-path call waits once per path."""
     import json as _json
-    import time as _time
+    import queue as _queue
+    import threading as _threading
 
-    lines = iter(_json.dumps(records).splitlines(keepends=True) + ["{ready}\n"])
-    delayed = {"pending": True}
+    out: "_queue.Queue[str]" = _queue.Queue()
 
-    def readline():
-        if delayed["pending"]:
-            delayed["pending"] = False
-            _time.sleep(first_line_delay)
-        return next(lines, "")
+    def write(cmd: str) -> None:
+        lines = cmd.splitlines()
+        if "-execute" not in lines:
+            return  # ``-stay_open False`` from close(): nothing to answer
+        paths = [ln for ln in lines if ln and not ln.startswith("-")]
+        records = [
+            {"SourceFile": p, "EXIF:DateTimeOriginal": "2024:01:01 12:00:00"}
+            for p in paths
+        ]
+        chunk = _json.dumps(records).splitlines(keepends=True) + ["{ready}\n"]
+
+        def emit() -> None:
+            for line in chunk:
+                out.put(line)
+
+        timer = _threading.Timer(sum(delay_for(p) for p in paths), emit)
+        timer.daemon = True
+        timer.start()
 
     proc = MagicMock()
     proc.stdin = MagicMock()
+    proc.stdin.write.side_effect = write
     proc.stdout = MagicMock()
-    proc.stdout.readline.side_effect = readline
+    proc.stdout.readline.side_effect = out.get
     proc.stderr = MagicMock()
     proc.stderr.readline.side_effect = lambda: ""
     return proc
 
 
 class TestExecuteBudgetPerBatch:
-    """Read budget is per ``-execute`` call and scales with the file count.
+    """Read budget is per ``-execute`` call, and each call carries one file.
 
-    Production numbers: the fixed 60 s per-line timeout killed every 500-file
-    NAS batch because exiftool block-buffers stdout (first line after 86 s).
-    The tests scale the constants down (timeout 0.2 s, 0.05 s per file) and
-    keep the same ratio of delay to budget.
+    Production numbers: a 300 s base per file (a bandwidth-starved NAS during
+    HASH silenced 16-file calls for > 360 s) plus 12 s per cost unit. The
+    tests scale the constants down (base 0.4 s, 0.2 s per unit) and keep the
+    same ratio of delay to budget.
     """
 
     @staticmethod
     def _scale_down(monkeypatch) -> None:
         from scanner import exif
 
-        monkeypatch.setattr(exif, "_EXIFTOOL_READ_TIMEOUT_SECONDS", 0.2)
-        monkeypatch.setattr(exif, "_EXIFTOOL_UNIT_SECONDS", 0.05, raising=False)
-        # The pre-fix code passed no explicit budget: it used the default
-        # bound at def time. Scale that default too, so the old path is
-        # measured at the same scaled-down timeout.
-        monkeypatch.setattr(exif.ExiftoolProcess.execute, "__defaults__", (0.2,))
+        monkeypatch.setattr(exif, "_EXIFTOOL_READ_TIMEOUT_SECONDS", 0.4)
+        monkeypatch.setattr(exif, "_EXIFTOOL_UNIT_SECONDS", 0.2, raising=False)
+        # ``execute()``'s default read_timeout is bound at def time to the
+        # base; scale that default too, so a caller that omits it is measured
+        # at the same scaled-down budget.
+        monkeypatch.setattr(exif.ExiftoolProcess.execute, "__defaults__", (0.4,))
 
-    @staticmethod
-    def _records(n: int) -> list[dict]:
-        return [
-            {"SourceFile": f"/fake/{i}.heic",
-             "EXIF:DateTimeOriginal": "2024:01:01 12:00:00"}
-            for i in range(n)
-        ]
-
-    def test_slow_block_buffered_batch_is_not_killed(self, monkeypatch):
-        """Regression for 2026-11-05: a batch whose first output arrives after
-        D > the old fixed timeout, but within the per-file budget, must
-        complete with every record. Fails on the pre-fix exif.py."""
+    def test_slow_block_buffered_file_is_not_killed(self, monkeypatch):
+        """Regression for 2026-11-05: each file's first output arrives after
+        0.5 s, which is above the 0.4 s base but within that file's 0.6 s
+        budget (0.4 + 0.2 for one image). Every record must come back."""
         from scanner import exif
 
         self._scale_down(monkeypatch)
-        paths = [Path(f"/fake/{i}.heic") for i in range(25)]
-        proc = _block_buffered_proc(self._records(25), first_line_delay=0.6)
+        paths = [Path(f"/fake/{i}.heic") for i in range(3)]
+        proc = _per_file_block_buffered_proc(lambda p: 0.5)
         monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
 
         with exif.ExiftoolProcess() as et:
@@ -1405,14 +1414,14 @@ class TestExecuteBudgetPerBatch:
         assert set(result) == set(paths)
         assert all(result[p].exif_date is not None for p in paths)
 
-    def test_truly_wedged_batch_still_raises_timeout(self, monkeypatch):
-        """A delay beyond the per-call budget is still a wedge: the timeout
+    def test_truly_wedged_file_still_raises_timeout(self, monkeypatch):
+        """A delay beyond the per-file budget is still a wedge: the timeout
         must propagate so PR #1035's rotation can fire."""
         from scanner import exif
 
         self._scale_down(monkeypatch)
-        paths = [Path(f"/fake/{i}.heic") for i in range(25)]
-        proc = _block_buffered_proc(self._records(25), first_line_delay=3.0)
+        paths = [Path(f"/fake/{i}.heic") for i in range(3)]
+        proc = _per_file_block_buffered_proc(lambda p: 3.0)
         monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
 
         with exif.ExiftoolProcess() as et:
@@ -1421,58 +1430,64 @@ class TestExecuteBudgetPerBatch:
         # The message carries the path count and elapsed time for diagnosis.
         import re as _re
 
-        assert _re.search(r"\(25 paths, [\d.]+s since -execute\)", str(info.value))
+        assert _re.search(r"\(1 paths, [\d.]+s since -execute\)", str(info.value))
         assert "wedged" in str(info.value)
 
+    def test_silent_file_times_out_and_later_files_are_not_sent(self, monkeypatch):
+        """File 3 of 5 stays silent beyond its budget. Files 1-2 complete,
+        file 3 raises ``ExiftoolTimeout``, and files 4-5 are never sent: the
+        ``execute`` spy sees exactly three calls."""
+        from scanner import exif
+
+        self._scale_down(monkeypatch)
+        paths = [Path(f"/fake/{i}.heic") for i in range(5)]
+        silent = str(paths[2])
+        proc = _per_file_block_buffered_proc(
+            lambda p: 3.0 if p == silent else 0.0,
+        )
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+        real_execute = exif.ExiftoolProcess.execute
+        sent: list[list] = []
+
+        def spy(self, args, read_timeout=None):
+            sent.append(list(args))
+            return real_execute(self, args, read_timeout=read_timeout)
+
+        monkeypatch.setattr(exif.ExiftoolProcess, "execute", spy)
+
+        with exif.ExiftoolProcess() as et:
+            with pytest.raises(exif.ExiftoolTimeout):
+                exif.batch_read_extracts(paths, et)
+
+        assert len(sent) == 3
+        assert [args[-1] for args in sent] == [str(p) for p in paths[:3]]
+
     def test_budget_counts_cost_units(self):
-        """Image = 1 unit (12 s), video = 4 units. 25 images → 60 + 25×12;
-        6 videos = 24 units → 60 + 24×12; 3 images + 2 videos = 11 units."""
+        """Image = 1 unit (12 s), video = 4 units. 25 images → 300 + 25×12;
+        6 videos = 24 units → 300 + 24×12; 3 images + 2 videos = 11 units."""
         from scanner import exif
 
         images = [Path(f"/fake/{i}.jpg") for i in range(25)]
         videos = [Path(f"/fake/{i}.mov") for i in range(6)]
         mixed = [Path(f"/fake/{i}.heic") for i in range(3)]
         mixed += [Path(f"/fake/v{i}.mp4") for i in range(2)]
-        assert exif.execute_budget(images) == 60.0 + 25 * 12.0
-        assert exif.execute_budget(videos) == 60.0 + 24 * 12.0
-        assert exif.execute_budget(mixed) == 60.0 + 11 * 12.0
+        assert exif.execute_budget(images) == 300.0 + 25 * 12.0
+        assert exif.execute_budget(videos) == 300.0 + 24 * 12.0
+        assert exif.execute_budget(mixed) == 300.0 + 11 * 12.0
 
-    def test_packing_fills_by_units_in_path_order(self):
-        """30 images then 3 videos → [25 images], [5 images + 3 videos = 17
-        units]. 7 videos → [6 videos = 24 units], [1 video]."""
-        from scanner import exif
-
-        images = [Path(f"/fake/{i}.jpg") for i in range(30)]
-        videos = [Path(f"/fake/{i}.mov") for i in range(3)]
-        batches = exif._pack_batches(images + videos)
-        assert batches == [images[:25], images[25:] + videos]
-
-        seven = [Path(f"/fake/{i}.m4v") for i in range(7)]
-        assert [len(b) for b in exif._pack_batches(seven)] == [6, 1]
-
-    def test_single_video_fits_alone_below_cap(self, monkeypatch):
-        """A path whose units exceed the cap still forms its own batch."""
-        from scanner import exif
-
-        monkeypatch.setattr(exif, "_EXIFTOOL_EXECUTE_UNITS", 2)
-        video = Path("/fake/a.mov")
-        other = Path("/fake/b.mov")
-        assert exif._pack_batches([video]) == [[video]]
-        assert exif._pack_batches([video, other]) == [[video], [other]]
-
-    def test_sixty_paths_split_into_25_25_10_with_matching_budgets(self):
-        """60 paths in one outer chunk → three ``-execute`` calls of 25, 25
-        and 10 files, each with the budget for its own count; all 60 records
+    def test_sixty_paths_are_sent_one_per_execute_with_per_file_budget(self):
+        """60 paths in one outer chunk → sixty ``-execute`` calls, each
+        carrying exactly one path and that path's own budget; all 60 records
         come back keyed by path."""
         import json as _json
         from scanner import exif
 
         paths = [Path(f"/fake/{i}.jpg") for i in range(60)]
-        calls: list[tuple[int, float]] = []
+        calls: list[tuple[list, float]] = []
 
         def fake_execute(args, read_timeout=None):
             batch = [a for a in args if not a.startswith("-")]
-            calls.append((len(batch), read_timeout))
+            calls.append((batch, read_timeout))
             return _json.dumps([{"SourceFile": p} for p in batch])
 
         et = MagicMock()
@@ -1480,9 +1495,9 @@ class TestExecuteBudgetPerBatch:
 
         result = exif.batch_read_extracts(paths, et, chunk_size=500)
 
-        assert [n for n, _ in calls] == [25, 25, 10]
-        subs = (paths[0:25], paths[25:50], paths[50:60])
-        assert [t for _, t in calls] == [exif.execute_budget(s) for s in subs]
+        assert et.execute.call_count == 60
+        assert [batch for batch, _ in calls] == [[str(p)] for p in paths]
+        assert [t for _, t in calls] == [exif.execute_budget([p]) for p in paths]
         assert set(result) == set(paths)
         assert len(result) == 60
 
