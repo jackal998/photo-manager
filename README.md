@@ -519,6 +519,10 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
   applies the same rule as the scan-time aggressive auto-select: a pHash-only
   (`"low"`) near-duplicate is never marked for deletion (#517). NULL on
   manifests written before this column existed, which are treated as not-low
+- **pHash contrast gate** — each image's 32×32 grey std-dev (`phash_quality`, recipe `"5"`)
+  is stored; images below 16.0 (near-black / near-flat frames whose degenerate pHash
+  bridged unrelated photos) are kept out of pHash grouping but still get exact-SHA dedup.
+  Pre-`"5"` rows are `NULL` and group as before until a re-scan
 - **Keep-worthiness scoring** — composite score in `[0.0, 1.0]` per file (#187);
   highest-scoring copy lands at the top of each group; batch-apply via the
   Set Action dialog's "Top N per group" Score condition or scan-time auto-select

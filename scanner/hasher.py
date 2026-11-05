@@ -75,7 +75,7 @@ class ReadFailure:
     exc_msg: str
 
 try:
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageOps, ImageStat
     import imagehash
     _HASH_AVAILABLE = True
 except ImportError:
@@ -117,6 +117,10 @@ except ImportError:
 # path's working resolution before hashing (#826). Both change hash VALUES for
 # the files they affect; an Orientation-1 non-RAW file is bit-identical to
 # recipe "3" (pinned by tests/test_hasher.py::TestHashRecipeParity).
+# "5" — a ninth element, the 32×32 grey population std-dev ``phash_quality``
+# (a contrast scalar the grouping gate reads, see scanner/dedup.py
+# ``_phash_quality_ok``). Hash VALUES are unchanged (the parity test still
+# pins recipe-"3" values); per-file cost is one extra LANCZOS resize.
 #
 # What the bump does and does NOT do: this token is consumed by exactly one
 # code path — ``scan_runner.hash_pool_fingerprint`` (core/app_service/
@@ -125,7 +129,7 @@ except ImportError:
 # manifest keeps its recipe-"3" hashes with no staleness signal, so its rotated
 # pairs stay ungrouped until the user re-scans that library; the two changes are
 # folded into ONE bump so that re-scan is needed once, not twice.
-HASH_RECIPE_VERSION = "4"
+HASH_RECIPE_VERSION = "5"
 
 # Shrink-on-load target shared by every pixel path, so RAW and JPEG hash at the
 # same working resolution (#569 chose it; #826 pointed the RAW path at it).
@@ -143,11 +147,28 @@ def compute_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _phash_quality(img: "Image.Image") -> float:
+    """Population std-dev of the 32×32 grey LANCZOS working image.
+
+    This is the very image ``imagehash.phash`` hashes (it converts to L and
+    resizes to 32×32 with LANCZOS), so the scalar measures how much contrast
+    the pHash actually sees. A near-flat or near-black frame has a
+    degenerate 64-bit pHash (imagehash's median split gives it popcount 32
+    regardless) — this number is what lets the grouping gate tell it apart.
+    Rounded to 2 dp.
+    """
+    grey = img.convert("L").resize((32, 32), Image.LANCZOS)
+    return round(float(ImageStat.Stat(grey).stddev[0]), 2)
+
+
 def _hashes_from_data(
     path: Path, file_type: str, data: bytes
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict]]:
-    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals)``
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float]]:
+    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality)``
     from bytes that have already been read off disk.
+
+    ``phash_quality`` (recipe "5") is :func:`_phash_quality` of the working
+    image; ``None`` whenever ``phash`` is ``None``.
 
     This is the single implementation used by both :func:`compute_hashes`
     (which reads the bytes) and :func:`compute_from_bytes` (which receives
@@ -162,7 +183,7 @@ def _hashes_from_data(
     sha = hashlib.sha256(data).hexdigest()
 
     if not _HASH_AVAILABLE:
-        return sha, None, None, None, None, None, None, None
+        return sha, None, None, None, None, None, None, None, None
 
     img: Optional[Image.Image] = None
     raw_date: Optional[str] = None
@@ -238,32 +259,34 @@ def _hashes_from_data(
             img = None
 
     if img is None:
-        return sha, None, None, None, raw_date, None, None, inmemory_signals
+        return sha, None, None, None, raw_date, None, None, inmemory_signals, None
     try:
         tiny = img.resize((1, 1), Image.LANCZOS)
         mc = tiny.getpixel((0, 0))[:3]
+        phash = str(imagehash.phash(img))
         return (
             sha,
-            str(imagehash.phash(img)),
+            phash,
             str(imagehash.dhash(img)),
             f"{mc[0]},{mc[1]},{mc[2]}",
             raw_date,
             px_w,
             px_h,
             inmemory_signals,
+            _phash_quality(img),
         )
     except (ValueError, TypeError):
         # #470 — preserve px_w / px_h measured before the phash compute attempt.
         # Wiping them to None would force scoring._score_resolution to 0.0 even
         # though the dimensions are known and valid; phash failure shouldn't
         # cascade into a fake resolution-zero penalty.
-        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals
+        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals, None
 
 
 def compute_hashes(
     path: Path, file_type: str
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict]]:
-    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals)``.
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float]]:
+    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals, phash_quality)``.
 
     All values are derived from one in-memory read — no extra file open.
     ``dhash`` is a second, independent perceptual hash (gradient/brightness
@@ -280,7 +303,7 @@ def compute_hashes(
     For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
     """
     if file_type in ("mp4", "mov", "gif", "skip"):
-        return compute_sha256(path), None, None, None, None, None, None, None
+        return compute_sha256(path), None, None, None, None, None, None, None, None
 
     # Single read: delegate all hash computation to _hashes_from_data.
     return _hashes_from_data(path, file_type, path.read_bytes())
@@ -346,7 +369,7 @@ def run_hash_for_record(
     use) or a ``ProcessPoolExecutor`` (planned, see follow-up to #486).
     """
     try:
-        sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals = (
+        sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality = (
             compute_hashes(record.path, record.file_type)
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -371,6 +394,7 @@ def run_hash_for_record(
         pixel_width=px_w,
         pixel_height=px_h,
         inmemory_signals=inmemory_signals,
+        phash_quality=phash_quality,
     )
 
 
@@ -424,10 +448,12 @@ def compute_from_bytes(
             # video/gif/skip: stream SHA from path, no perceptual hashes.
             sha256 = compute_sha256(record.path)
             phash = dhash = mean_color = raw_date = px_w = px_h = inmemory_signals = None
+            phash_quality = None
         else:
-            sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals = (
-                _hashes_from_data(record.path, record.file_type, data)
-            )
+            (
+                sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals,
+                phash_quality,
+            ) = _hashes_from_data(record.path, record.file_type, data)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return idx, HashFailure(type(exc).__name__, str(exc))
 
@@ -447,6 +473,7 @@ def compute_from_bytes(
         pixel_width=px_w,
         pixel_height=px_h,
         inmemory_signals=inmemory_signals,
+        phash_quality=phash_quality,
     )
 
 

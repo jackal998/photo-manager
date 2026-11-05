@@ -133,6 +133,10 @@ _MIGRATIONS = [
     # as scan time. Nullable with NO DEFAULT: pre-existing rows read NULL,
     # which the gate treats as not-low (the legacy behaviour).
     ("match_confidence", "TEXT"),
+    # Recipe "5" pHash-quality scalar (32×32 grey std-dev) read by the
+    # grouping gate. Nullable, no DEFAULT: pre-"5" rows read NULL, which the
+    # gate treats as "unknown → passes", so legacy manifests group as before.
+    ("phash_quality", "REAL"),
 ]
 
 # #433 — drop the legacy ``dest_path`` column and migrate ``action='MOVE'``
@@ -169,6 +173,9 @@ _POST_DROP_COLUMNS = (
     # #517 — same trap as #820: an ALTER-added column missing here is
     # silently dropped by the copy-table rebuild.
     "match_confidence",
+    # Recipe "5" — same trap as #820: omitted here, the copy-table rebuild
+    # would drop the ALTER-added column. Keep in step with _MIGRATIONS.
+    "phash_quality",
 )
 
 _UPDATE_LOCK_SQL = """
@@ -317,6 +324,7 @@ def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
             subsec_time_original TEXT,
             offset_time_original TEXT,
             match_confidence TEXT,
+            phash_quality   REAL,
             is_locked        INTEGER NOT NULL DEFAULT 0,
             outcome          TEXT    NOT NULL DEFAULT ''
         );

@@ -116,6 +116,23 @@ class TestWriteManifest:
             ).fetchall())
         assert stored["/a/phash_only.jpg"] == "low"
         assert stored["/a/plain.jpg"] is None
+    def test_phash_quality_written_to_new_manifest(self, tmp_path):
+        """Recipe "5" — a fresh manifest carries ``phash_quality`` from its own
+        DDL and ``write_manifest`` inserts the ManifestRow field. A row with no
+        quality (video / legacy) must read NULL, not 0.0."""
+        out = tmp_path / "manifest.sqlite"
+        scored = _row("/a/scored.jpg", "")
+        scored.phash_quality = 16.4
+        unscored = _row("/a/video.mov", "")
+
+        write_manifest([scored, unscored], out)
+
+        with sqlite3.connect(out) as conn:
+            stored = conn.execute(
+                "SELECT source_path, phash_quality FROM migration_manifest "
+                "ORDER BY source_path"
+            ).fetchall()
+        assert stored == [("/a/scored.jpg", 16.4), ("/a/video.mov", None)]
 
     def test_overwrites_existing_file(self, tmp_path):
         import gc
