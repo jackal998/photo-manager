@@ -683,39 +683,49 @@ def _complementary_edges(
     dhash_threshold: int,
 ) -> list[Edge]:
     """#824 — union-find edges for an exact-pHash bucket that takes no dedup
-    decision (RAW+lossy complementary, or all-RAW). These are ``high``: the
-    bucket is one shot, so the group is certain.
+    decision (RAW+lossy complementary, or all-RAW). The bucket is split by shot
+    time, the same way the all-lossy and near-dup paths decide a pair.
 
-    A star from the lexicographically smallest member to every peer: one
-    connected component, and an anchor that cannot depend on the order the
-    hasher finished files in — the same lex-min rule ``_assign_group_ids``
-    uses, so the rescore determinism invariant is preserved by construction.
+    Members are visited in sorted path order. Each joins the first cluster
+    whose anchor it agrees with on shot time (``_demotion_note`` is None; an
+    unknown time counts as agree, as before), else it starts a new cluster.
+    A member is tied to its cluster anchor by a ``high`` edge. Between clusters
+    a ``low`` edge runs from each later anchor to the first anchor, so
+    disagreeing captures are only a hint, never a certain group.
 
-    The same two precision gates the all-lossy path applies decide each spoke,
-    because an edge asserts "these are the same shot" just as an ``EXACT`` row
-    does: #462's mean-color check (skipped when either side lacks a mean color
-    — RAW thumbnails routinely do) and #524's dHash vote, where a definite
-    ``disagree`` means the pHash match is a false positive and there is no
-    pair to draw. No row is written and no action changes.
+    Both gates decide each edge, because an edge asserts "same shot": #462's
+    mean-colour check (skipped when either side lacks a mean colour) and #524's
+    dHash vote, where a definite ``disagree`` means no pair to draw. No row is
+    written and no action changes.
     """
     ordered = sorted(group, key=lambda h: str(h.record.path))
-    anchor = ordered[0]
-    anchor_key = str(anchor.record.path)
+    anchors: list[HashResult] = []
     edges: list[Edge] = []
-    for peer in ordered[1:]:
-        if mean_color_threshold > 0 and anchor.mean_color and peer.mean_color:
-            if _mean_color_distance(anchor.mean_color, peer.mean_color) > mean_color_threshold:
-                continue
-        if _dhash_vote(anchor, peer, dhash_threshold) == "disagree":
-            continue
-        # GROUPING 6: a shot-time or screenshot disagreement means two captures
-        # of one hash, not one shot. With no dedup decision to demote, the pair
-        # gets no edge (as the gates above drop it): a low edge would still
-        # pair the two lone files into a group.
-        if _demotion_note(anchor, peer) is not None:
-            continue
-        edges.append((anchor_key, str(peer.record.path), "high"))
+    for member in ordered:
+        anchor = next(
+            (a for a in anchors if _demotion_note(a, member) is None), None
+        )
+        if anchor is None:
+            anchors.append(member)
+        elif _gates_pass(anchor, member, mean_color_threshold, dhash_threshold):
+            edges.append((str(anchor.record.path), str(member.record.path), "high"))
+    for other in anchors[1:]:
+        if _gates_pass(anchors[0], other, mean_color_threshold, dhash_threshold):
+            edges.append((str(anchors[0].record.path), str(other.record.path), "low"))
     return edges
+
+
+def _gates_pass(
+    a: HashResult,
+    b: HashResult,
+    mean_color_threshold: int,
+    dhash_threshold: int,
+) -> bool:
+    """#462 mean-colour and #524 dHash gates for one exact-bucket edge."""
+    if mean_color_threshold > 0 and a.mean_color and b.mean_color:
+        if _mean_color_distance(a.mean_color, b.mean_color) > mean_color_threshold:
+            return False
+    return _dhash_vote(a, b, dhash_threshold) != "disagree"
 
 
 # ---------------------------------------------------------------------------

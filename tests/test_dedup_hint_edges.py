@@ -327,15 +327,46 @@ class TestComplementaryRawPairsRespectShotTime:
     """M1 — a RAW+RAW bucket with an identical pHash (no dedup decision) groups
     only when the shot times agree."""
 
-    def test_disagreeing_times_stay_separate_rows_not_one_group(self):
+    def test_disagreeing_times_pair_as_a_low_hint_not_a_certain_group(self):
+        """Two lone RAWs with disagreeing shot times form one 2-row hint pair:
+        the low edge between the two cluster anchors pairs them, exactly as the
+        all-lossy branch and the near-dup path pair a time-disagreeing match.
+        Rows stay undecided (no dedup action)."""
         records = [
             _raw("/r/x1.dng", "r1", T1),
             _raw("/r/x2.dng", "r2", T1 + timedelta(hours=5, minutes=10)),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert rows["/r/x1.dng"].group_id is None
-        assert rows["/r/x2.dng"].group_id is None
-        assert _group_sizes(rows) == []
+        assert _group_sizes(rows) == [2]
+        assert rows["/r/x1.dng"].group_id == rows["/r/x2.dng"].group_id
+        assert rows["/r/x1.dng"].action == "" and rows["/r/x2.dng"].action == ""
+
+    def test_cr2_and_its_conversion_stay_together_across_a_moment(self):
+        """#824's own example: x.cr2 and its DNG conversion agree on time with
+        each other but not with m0 (an earlier moment, same pHash). The
+        conversion pair is a high edge, so they group. m0 is a lone file whose
+        only link is low to x.cr2, a high member, so the hint rule attaches it:
+        the outcome is one group of three, with m0 as the hint leaf."""
+        later = T1 + timedelta(hours=5, minutes=13)
+        records = [
+            _raw("/a/m0.dng", "m0", T1),
+            _raw("/b/x.cr2", "xc", later),
+            _raw("/c/x_conv.dng", "xd", later),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert rows["/b/x.cr2"].group_id == rows["/c/x_conv.dng"].group_id
+        assert rows["/b/x.cr2"].group_id is not None
+        assert _group_sizes(rows) == [3]
+        assert rows["/a/m0.dng"].group_id == rows["/b/x.cr2"].group_id
+
+    def test_raw_and_edited_jpeg_at_same_time_group(self):
+        """Complementary RAW+lossy at one shot time stays one high group."""
+        records = [
+            _raw("/b/x.dng", "xr", T1),
+            _hr("/c/x_edit.jpg", "xj", A, T1, "src_a", file_type="jpeg"),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert _group_sizes(rows) == [2]
 
     def test_agreeing_times_group_as_one_shot(self):
         records = [_raw("/r/x1.dng", "r1", T1), _raw("/r/x2.dng", "r2", T1)]
