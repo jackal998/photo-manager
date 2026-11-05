@@ -1,0 +1,1 @@
+Send every file to exiftool as its own -execute with a 300 s + 12 s-per-unit read budget, so a bandwidth-starved but alive exiftool (hash workers plus antivirus re-reads saturating the NAS link) is no longer declared wedged and its batch recorded as exif-missing (#1039)
