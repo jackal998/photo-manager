@@ -972,6 +972,86 @@ class TestApplyBestCopy:
         assert _read_user_decision(manifest, str(fc)) == ""
         assert _read_is_locked(manifest, str(fc)) is False
 
+    def test_low_confidence_duplicate_left_untouched(
+        self, client_with_roots, tmp_path
+    ):
+        """#517 at review time: a pHash-only near-dup (match_confidence='low')
+        is never auto-marked for delete, exactly as at scan time. The
+        EXACT row with 'high' confidence in the same group is still deleted."""
+        client, _root = client_with_roots
+        files_dir = tmp_path / "files"
+        files_dir.mkdir()
+        fa = files_dir / "keeper.jpg"
+        fb = files_dir / "phash_only.jpg"
+        fc = files_dir / "exact.jpg"
+        for f in (fa, fb, fc):
+            f.write_bytes(b"\x00" * 64)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(fa), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": 0.9,
+                "match_confidence": "high",
+            },
+            {
+                "source_path": str(fb), "action": "REVIEW_DUPLICATE",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": 0.5,
+                "match_confidence": "low",
+            },
+            {
+                "source_path": str(fc), "action": "EXACT",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": 0.4,
+                "match_confidence": "high",
+            },
+        ])
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # matched counts the keeper write too (keeper + one delete target).
+        assert body["matched"] == 2
+        assert set(body["affected_paths"]) == {str(fa), str(fc)}
+        assert _read_user_decision(manifest, str(fb)) == ""
+        assert _read_is_locked(manifest, str(fb)) is False
+        assert _read_user_decision(manifest, str(fc)) == "delete"
+
+    def test_legacy_null_confidence_duplicate_still_deleted(
+        self, client_with_roots, tmp_path
+    ):
+        """Backwards compatibility: a pre-#517 row (match_confidence NULL) with
+        an EXACT action is NOT treated as low, so it is still marked delete."""
+        client, _root = client_with_roots
+        files_dir = tmp_path / "files"
+        files_dir.mkdir()
+        fa = files_dir / "keeper.jpg"
+        fb = files_dir / "legacy_exact.jpg"
+        fa.write_bytes(b"\x00" * 64)
+        fb.write_bytes(b"\x00" * 64)
+        manifest = _make_manifest(tmp_path, [
+            {
+                "source_path": str(fa), "action": "EXACT",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": 0.9,
+            },
+            {
+                "source_path": str(fb), "action": "EXACT",
+                "group_id": "g1", "outcome": "", "user_decision": "",
+                "is_locked": 0, "file_size_bytes": 64, "score": 0.5,
+            },
+        ])
+
+        resp = client.post("/api/action/apply-best-copy", json={
+            "manifest_path": str(manifest),
+            "group_number": 1,
+        })
+        assert resp.status_code == 200, resp.text
+        assert _read_user_decision(manifest, str(fb)) == "delete"
+
     def test_no_scored_rows_is_noop(self, client_with_roots, tmp_path):
         client, root = client_with_roots
         files_dir = tmp_path / "files"

@@ -236,12 +236,14 @@ def apply_best_copy(
     untouched — same allowlist :func:`core.services.auto_select.
     non_keepers_for_aggressive_delete` uses for the scan-time aggressive path.
 
-    Deliberately NO ``match_confidence`` filtering: that field lives only on
-    the scanner's transient ``ManifestRow`` shape and is never persisted to
-    the manifest DB, so ``core.models.PhotoRecord`` (what this function reads)
-    has no such attribute — the shared helper's ``getattr(..., None) != "low"``
-    check is naturally always-True here. This is intentional, not a gap (#744
-    scope decision).
+    The #517 confidence gate applies here too (parity with scan time): a
+    duplicate whose persisted ``match_confidence`` is ``"low"`` (pHash-only,
+    no independent dHash agreement) is left untouched and the user confirms
+    it by hand. Rows with NULL confidence (pre-#517 manifests, or non-dup
+    rows) are not treated as low, so legacy manifests behave as before. The
+    gate lives in the shared helper, fed by ``match_confidence`` below. The
+    #744 right-click action originally had no confidence filter because the
+    field was never persisted; persisting it closed that gap (defect D1).
 
     Locked-rows gate mirrors :func:`set_decisions` / ``bulk_decide``: if any
     row that would be WRITTEN (keeper or delete-target) is currently locked,
@@ -293,16 +295,17 @@ def apply_best_copy(
     # aggressive_delete read .group_id/.source_path/.score/.action (the
     # scanner.dedup.ManifestRow shape); PhotoRecord carries the same data
     # under different names (.group_number/.file_path) and has no
-    # .match_confidence attribute at all (never persisted — see docstring).
-    # A single constant group_id is fine: every adapted row belongs to the
-    # one already-resolved group, so the helpers' internal grouping is a
-    # no-op bucket of one.
+    # .match_confidence under the same name (persisted since #517). A single
+    # constant group_id is fine: every adapted row belongs to the one
+    # already-resolved group, so the helpers' internal grouping is a no-op
+    # bucket of one.
     scored = [
         SimpleNamespace(
             group_id="g",
             source_path=rec.file_path,
             score=rec.score,
             action=getattr(rec, "action", ""),
+            match_confidence=getattr(rec, "match_confidence", None),
         )
         for rec in items
     ]

@@ -60,6 +60,11 @@ class PhotoRecord:
     exif_tag_count: int | None = None
     gps_present: bool = False
     xmp_derived: bool = False
+    # #517 — scan-time match confidence: "high" (dHash agrees or SHA-exact),
+    # "low" (pHash-only), None for non-duplicate rows and pre-#517 manifests.
+    # Read by apply_best_copy to honour the aggressive-delete gate; not
+    # serialised to the web API (badge is a deferred decision).
+    match_confidence: str | None = None
 
 
 @dataclass(slots=True)
