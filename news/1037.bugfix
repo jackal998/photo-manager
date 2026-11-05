@@ -1,0 +1,1 @@
+Send each exiftool chunk as -execute calls of at most 25 files with a read budget of 60 s + 4 s per file, so a slow NAS batch is no longer mistaken for a wedged exiftool and recorded as exif-missing (#1037)
