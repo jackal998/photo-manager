@@ -1,0 +1,1 @@
+Rotate a wedged exiftool to a fresh process and retry the batch once, then record the batch as exif-missing, so a NAS stall can no longer deadlock the HASH stage with a full exif queue; a cancel never starts a replacement exiftool (#1035)
