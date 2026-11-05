@@ -657,15 +657,19 @@ class TestUnderGroupingFix:
         g_k2 = rows["/iphone/k2.jpg"].group_id
         g_bx = rows["/jdrive/bx.jpg"].group_id
         # #538 intent, restated for GROUPING 6: k2 (a near-dup of bx, d=8) is
-        # never SILENTLY orphaned. Low-only links pair or hint and do not chain,
-        # so k2 is either grouped, or an explicit hint naming its partner.
+        # never SILENTLY orphaned. Low-only links pair or hint and do not chain.
+        # Pinned sorted outcome: the sorted low pair k1-bx pairs up (bx is the
+        # flagged row, k1 its partner); k2's only link is to bx, a pair member
+        # with no high edge, so k2 is the isolated hint naming bx.
         from scanner.dedup import HINT_ONLY_PREFIX
+        assert g_k1 is not None and g_k1 == g_bx
+        assert Path(rows["/jdrive/bx.jpg"].duplicate_of).name == "k1.jpg"
+        assert g_k2 is None
         k2 = rows["/iphone/k2.jpg"]
-        if g_k2 is None:
-            assert k2.reason.startswith(HINT_ONLY_PREFIX), k2.reason
-            assert Path(k2.duplicate_of).name in k2.reason, k2.reason
-        else:
-            assert g_k2 in (g_k1, g_bx), "a grouped k2 joins a real partner"
+        assert k2.action == "" and k2.match_confidence == "low"
+        assert HINT_ONLY_PREFIX in k2.reason, k2.reason
+        assert Path(k2.duplicate_of).name == "bx.jpg"
+        assert "bx.jpg" in k2.reason, k2.reason
 
     def test_grouping_deterministic_under_input_shuffle(self):
         """group_id (= lex-min path) must be identical regardless of input

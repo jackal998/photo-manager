@@ -708,6 +708,12 @@ def _complementary_edges(
                 continue
         if _dhash_vote(anchor, peer, dhash_threshold) == "disagree":
             continue
+        # GROUPING 6: a shot-time or screenshot disagreement means two captures
+        # of one hash, not one shot. With no dedup decision to demote, the pair
+        # gets no edge (as the gates above drop it): a low edge would still
+        # pair the two lone files into a group.
+        if _demotion_note(anchor, peer) is not None:
+            continue
         edges.append((anchor_key, str(peer.record.path), "high"))
     return edges
 
@@ -1078,27 +1084,50 @@ def _mark_isolated_hints(
             partner = partner_of[row.source_path]
             row.duplicate_of = partner
             row.match_confidence = "low"
-            row.reason = HINT_ONLY_PREFIX + f"low-confidence match with {Path(partner).name}"
+            # Keep the row's own reason (e.g. "no EXIF DateTimeOriginal") and
+            # append the marker, so an UNDATED reason is not overwritten.
+            hint = HINT_ONLY_PREFIX + f"low-confidence match with {Path(partner).name}"
+            row.reason = f"{row.reason}; {hint}" if row.reason else hint
 
 
 def _hint_may_join(
     a: str,
     b: str,
-    find: Callable[[str], str],
     joined: set[str],
-    core_roots: set[str],
+    high_members: set[str],
 ) -> bool:
-    """Whether a low hint ``a``-``b`` may union. Two lone files pair up. A
-    lone file attaches only to a high-cored component (one holding a high
-    edge); a low-only component never grows, so hints cannot chain."""
+    """Whether a low hint ``a``-``b`` may union. Two lone files pair up. A lone
+    file attaches only to a high member (a node a high edge touched), so a leaf
+    attached by a low edge can never anchor the next one: hints do not chain.
+    Anything else is skipped, so a hint never merges two multi-member groups."""
     a_lone, b_lone = a not in joined, b not in joined
     if a_lone and b_lone:
         return True
     if a_lone:
-        return find(b) in core_roots
+        return b in high_members
     if b_lone:
-        return find(a) in core_roots
-    return False  # a hint never merges two multi-member groups
+        return a in high_members
+    return False
+
+
+def _hint_pass(
+    low_pairs: list[tuple[str, str]],
+    find: Callable[[str], str],
+    union: Callable[[str, str], None],
+    joined: set[str],
+    high_members: set[str],
+) -> list[tuple[str, str]]:
+    """Apply the sorted low pairs after the high pass; return the skipped ones."""
+    skipped: list[tuple[str, str]] = []
+    for a, b in low_pairs:
+        if find(a) == find(b):
+            continue
+        if _hint_may_join(a, b, joined, high_members):
+            union(a, b)
+            joined.update((a, b))
+        else:
+            skipped.append((a, b))
+    return skipped
 
 
 def _assign_group_ids(
@@ -1120,11 +1149,13 @@ def _assign_group_ids(
     are processed after every high edge, in sorted order (deterministic, so
     the result never depends on record order): a low edge whose endpoints are
     already in the same component is a no-op; two lone files pair up; a lone
-    file attaches to a component only when that component is high-cored (holds
-    a high edge); everything else is skipped, so a hint never merges two groups
-    and a low-only pair never grows. A file whose only edges were skipped stays
-    ``group_id=None``, and the hint is still visible in its ``reason`` and
-    ``duplicate_of``.
+    file attaches only to a high member (a node a high edge touched), so a leaf
+    attached by a low edge never anchors the next one; everything else is
+    skipped. A file whose only edges were skipped stays ``group_id=None``, and
+    the hint is still visible in its ``reason`` and ``duplicate_of``.
+
+    Which lone file pairs with which follows path spelling (the lex-min rule);
+    that is deliberate, so a rescore reproduces the same groups.
     """
     parent: dict[str, str] = {}
 
@@ -1142,42 +1173,23 @@ def _assign_group_ids(
                 parent[ra] = rb
 
     all_edges = _row_edges(rows) + list(edges or [])
-    # Nodes in a component of two or more members. Every node joined by a
-    # union is one, so membership is exactly "not a lone singleton".
+    # ``joined``: nodes in a component of two or more members (every node a
+    # union touches is one). ``high_members``: nodes a high edge touched. Only a
+    # high member can anchor a lone file, so hints cannot chain.
     joined: set[str] = set()
-    # Roots of components that hold at least one high edge ("high-cored").
-    core_roots: set[str] = set()
-
-    def join(a: str, b: str, core: bool) -> None:
-        ra, rb = find(a), find(b)
-        if ra == rb:
-            if core:
-                core_roots.add(ra)
-            return
-        was_core = core or ra in core_roots or rb in core_roots
-        union(a, b)
-        core_roots.difference_update({ra, rb})
-        if was_core:
-            core_roots.add(find(a))
-        joined.update((a, b))
-
+    high_members: set[str] = set()
     for a, b, confidence in all_edges:
         if confidence == "high":
-            join(a, b, core=True)
+            union(a, b)
+            joined.update((a, b))
+            high_members.update((a, b))
 
     # Normalise orientation and sort: the hint pass must not depend on which
     # side of a pair the classifier happened to write first.
     low_pairs = sorted(
         (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "low"
     )
-    skipped: list[tuple[str, str]] = []
-    for a, b in low_pairs:
-        if find(a) == find(b):
-            continue
-        if _hint_may_join(a, b, find, joined, core_roots):
-            join(a, b, core=False)
-        else:
-            skipped.append((a, b))
+    skipped = _hint_pass(low_pairs, find, union, joined, high_members)
 
     for row in rows.values():
         if row.source_path in joined:

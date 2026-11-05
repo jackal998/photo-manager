@@ -18,7 +18,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from scanner.dedup import HashResult, classify
+from scanner.dedup import HINT_ONLY_PREFIX, HashResult, classify
 from scanner.walker import FileRecord
 
 A = "00000000ffffffff"
@@ -273,3 +273,71 @@ class TestHintWithAnotherEdgeKeepsAction:
         assert x.group_id != rows["/b/b1.jpg"].group_id
         assert x.action == "REVIEW_DUPLICATE"
         assert not x.reason.startswith("hint only")
+
+
+def _chain_hash(k: int) -> str:
+    """64-bit pHash with ones from bit 8k upward. Steps k→k+1 differ by 8 bits,
+    any two steps apart by 16, so only consecutive links are within threshold."""
+    mask = (1 << 64) - 1
+    return f"{mask ^ ((1 << (8 * k)) - 1):016x}"
+
+
+def _png(path: str, sha: str, k: int) -> HashResult:
+    return _hr(path, sha, _chain_hash(k), T1, "src_a", file_type="png")
+
+
+class TestHintsDoNotChainThroughALeaf:
+    """H1 — a leaf attached by a low edge never anchors the next lone file."""
+
+    def test_six_screenshot_chain_with_copy_is_two_two_three(self):
+        records = [_png(f"/s/s{k}.png", f"sha_s{k}", k) for k in range(1, 7)]
+        records.append(_png("/s/s1_copy.png", "sha_s1", 1))  # byte copy of s1
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert max(_group_sizes(rows)) < 7, "no group of 7 through leaves"
+        assert _group_sizes(rows) == [2, 2, 3]
+        assert rows["/s/s2.png"].group_id == rows["/s/s1.png"].group_id
+        assert rows["/s/s1_copy.png"].group_id == rows["/s/s1.png"].group_id
+
+    def test_six_screenshot_chain_without_copy_is_two_two_two(self):
+        records = [_png(f"/s/s{k}.png", f"sha_s{k}", k) for k in range(1, 7)]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert _group_sizes(rows) == [2, 2, 2]
+
+    def test_core_leaf_far_shape_leaves_far_as_isolated_hint(self):
+        records = [
+            _png("/s/a.png", "ga", 1),
+            _png("/s/a_copy.png", "ga", 1),      # core {a, a_copy}: high sha edge
+            _png("/s/b.png", "gb", 2),           # leaf: low to a only
+            _png("/s/c.png", "gc", 3),           # far: low to b only
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert _group_sizes(rows) == [3]
+        far = rows["/s/c.png"]
+        assert far.group_id is None
+        assert far.action == ""
+        assert far.reason.startswith(HINT_ONLY_PREFIX)
+        assert rows["/s/b.png"].group_id == rows["/s/a.png"].group_id
+
+
+def _raw(path: str, sha: str, exif_date: datetime) -> HashResult:
+    return _hr(path, sha, A, exif_date, "src_a", file_type="raw")
+
+
+class TestComplementaryRawPairsRespectShotTime:
+    """M1 — a RAW+RAW bucket with an identical pHash (no dedup decision) groups
+    only when the shot times agree."""
+
+    def test_disagreeing_times_stay_separate_rows_not_one_group(self):
+        records = [
+            _raw("/r/x1.dng", "r1", T1),
+            _raw("/r/x2.dng", "r2", T1 + timedelta(hours=5, minutes=10)),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert rows["/r/x1.dng"].group_id is None
+        assert rows["/r/x2.dng"].group_id is None
+        assert _group_sizes(rows) == []
+
+    def test_agreeing_times_group_as_one_shot(self):
+        records = [_raw("/r/x1.dng", "r1", T1), _raw("/r/x2.dng", "r2", T1)]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert _group_sizes(rows) == [2]
