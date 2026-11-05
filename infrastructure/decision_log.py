@@ -272,8 +272,15 @@ def read_carried_rows(manifest: Path) -> list[tuple]:
     """
     if not manifest.exists():
         return []
-    conn = sqlite3.connect(f"{manifest.resolve().as_uri()}?mode=ro", uri=True)
+    # A plain path, never a ``file:`` URI: on Windows ``Path.resolve()`` turns a
+    # mapped drive (``J:``) into its UNC form (``\\server\share``) and
+    # ``as_uri()`` then yields ``file://server/...``, which SQLite rejects
+    # ("invalid uri authority") — every rescan of a NAS manifest would fail
+    # after the whole hash pass. ``exists()`` above keeps this from creating a
+    # file; ``query_only`` makes the read-only intent explicit.
+    conn = sqlite3.connect(str(manifest))
     try:
+        conn.execute("PRAGMA query_only = 1")
         if conn.execute(_TABLE_EXISTS_SQL).fetchone() is None:
             return []
         return conn.execute(_CARRY_SQL).fetchall()

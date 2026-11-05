@@ -384,6 +384,45 @@ class TestRescan:
         assert after.id == before.id
         assert _state(manifest, f1) == ("", 0, "")  # the decision itself is rescanned away
 
+    def test_carry_read_opens_the_old_manifest_by_plain_path(self, tmp_path):
+        """The previous manifest is opened by its plain path, never a ``file:`` URI.
+
+        On Windows ``Path.resolve()`` turns a mapped drive (``J:``) into its UNC
+        form and ``as_uri()`` then yields ``file://server/...``, which SQLite
+        rejects with "invalid uri authority" — so a rescan of a NAS manifest
+        would fail after the whole hash pass (review finding on the first
+        cut). CI has no network share, so this pins the shape of the open
+        (no URI) and exercises a URI-hostile directory name.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        from infrastructure.decision_log import read_carried_rows
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(read_carried_rows)))
+        uri_keywords = [
+            kw for node in ast.walk(tree) if isinstance(node, ast.Call)
+            for kw in node.keywords if kw.arg == "uri"
+        ]
+        as_uri_calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr == "as_uri"
+        ]
+        assert not uri_keywords and not as_uri_calls, "the old manifest must be opened by plain path"
+
+        hostile = tmp_path / "share #1 50% done"
+        hostile.mkdir()
+        f1 = _file(hostile, "a.jpg")
+        manifest = _scan(hostile, [_row(f1, "g1")])
+        set_decisions(str(manifest), {str(f1): "delete"})
+
+        rows = read_carried_rows(manifest)
+
+        assert len(rows) == 1
+        assert read_carried_rows(hostile / "absent.sqlite") == []
+        assert not (hostile / "absent.sqlite").exists()  # the read never creates a file
+
 
 class TestReconcile:
     def test_skip_directory_dismissal_logs_system_rows_but_not_locked_groups(self, tmp_path):
