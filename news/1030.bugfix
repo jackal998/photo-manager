@@ -1,0 +1,1 @@
+Demote a pHash-identical pair whose shot times disagree, and any pair of PNG screenshots, from EXACT to a low-confidence review row that the aggressive auto-select never deletes (#1030).
