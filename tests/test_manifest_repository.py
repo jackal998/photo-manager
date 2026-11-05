@@ -555,86 +555,93 @@ class TestSubsecTimeOriginalMigration:
         assert row[2] == "+09:00"
 
 
-class TestPhashQualityMigration:
-    """Recipe "5" — the ``phash_quality REAL`` column lands on a manifest that
-    predates it. Pre-"5" rows must read NULL (unknown → the gate passes them,
-    so a legacy library groups exactly as before), and the value must survive
-    the #433 copy-table rebuild (the trap #820 documented at _POST_DROP_COLUMNS).
-    """
+class TestMatchConfidenceMigration:
+    """#517 — ``match_confidence`` is persisted so the review-time
+    apply_best_copy path can honour the same "low is never auto-deleted"
+    gate as scan time. A pre-existing manifest must gain the column with NULL
+    on every old row (NULL is treated as not-low, the legacy behaviour), keep
+    its stored values, and carry a written value through the #433 rebuild."""
 
-    def _pre_5_db(self, tmp_path: Path, ddl: str = _DDL_PRE_820) -> Path:
+    def _pre_confidence_db(self, tmp_path: Path) -> Path:
+        # Two rows in the group: load() drops single-row (orphan) groups.
+        cand = tmp_path / "a.jpg"
+        ref = tmp_path / "b.jpg"
+        cand.write_bytes(b"")
+        ref.write_bytes(b"")
         return _make_manifest(
             tmp_path,
             [
                 {
-                    "source_path": "/legacy/q.jpg",
+                    "source_path": str(cand),
                     "source_label": "jdrive",
                     "action": "REVIEW_DUPLICATE",
                     "hamming_distance": 3,
-                    "group_id": "/group/q",
+                    "group_id": "/group/a",
                     "reason": "near-dup",
                     "executed": 0,
-                    "user_decision": "delete",
+                    "user_decision": "",
                     "score": 0.42,
-                }
+                },
+                {
+                    "source_path": str(ref),
+                    "source_label": "jdrive",
+                    "action": "",
+                    "group_id": "/group/a",
+                    "executed": 0,
+                    "user_decision": "",
+                },
             ],
-            ddl=ddl,
+            ddl=_DDL_PRE_820,
         )
 
-    def test_phash_quality_column_added_to_pre_5_manifest(self, tmp_path):
-        db = self._pre_5_db(tmp_path)
+    def test_match_confidence_column_added_to_pre_confidence_manifest(self, tmp_path):
+        db = self._pre_confidence_db(tmp_path)
         ManifestRepository().ensure_schema(str(db))
         with sqlite3.connect(str(db)) as conn:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
-        assert "phash_quality" in cols
+        assert "match_confidence" in cols
 
-    def test_pre_5_rows_read_back_null(self, tmp_path):
-        """No DEFAULT on the ADD COLUMN: stored rows say "unknown", not 0.0 —
-        a 0.0 would read as a flat frame and be excluded from grouping."""
-        db = self._pre_5_db(tmp_path)
-        ManifestRepository().ensure_schema(str(db))
-        with sqlite3.connect(str(db)) as conn:
-            row = conn.execute(
-                "SELECT phash_quality, score, user_decision "
-                "FROM migration_manifest WHERE source_path = '/legacy/q.jpg'"
-            ).fetchone()
-        assert row[0] is None
-        assert row[1] == pytest.approx(0.42)
-        assert row[2] == "delete"
+    def test_pre_existing_rows_load_with_null_confidence(self, tmp_path):
+        """Old rows read None on PhotoRecord, and the other stored values
+        survive the ALTER untouched."""
+        db = self._pre_confidence_db(tmp_path)
+        records = {
+            r.file_path: r for r in ManifestRepository().load(str(db))
+        }
+        legacy = records[str(tmp_path / "a.jpg")]
+        assert legacy.match_confidence is None
+        assert legacy.score == pytest.approx(0.42)
 
-    def test_phash_quality_value_round_trips_after_migration(self, tmp_path):
-        db = self._pre_5_db(tmp_path)
-        ManifestRepository().ensure_schema(str(db))
-        with sqlite3.connect(str(db)) as conn:
-            conn.execute(
-                "INSERT INTO migration_manifest "
-                "(source_path, source_label, action, phash_quality) "
-                "VALUES (?, ?, ?, ?)",
-                ("/new/q.jpg", "jdrive", "", 16.4),
-            )
-            conn.commit()
-            row = conn.execute(
-                "SELECT phash_quality FROM migration_manifest "
-                "WHERE source_path = '/new/q.jpg'"
-            ).fetchone()
-        assert row[0] == pytest.approx(16.4)
-
-    def test_phash_quality_survives_the_drop_move_rebuild(self, tmp_path):
-        """The #433 copy-table dance rebuilds from a hardcoded DDL and copies
-        only the columns named in ``_POST_DROP_COLUMNS``. Forgetting the name
-        there keeps the column but silently empties every value, so the
-        fixture carries a REAL value (16.4), not NULL."""
+    def test_match_confidence_survives_the_drop_move_rebuild(self, tmp_path):
+        """The #433 copy-table rebuild copies only ``_POST_DROP_COLUMNS``.
+        A column omitted there is created by the ALTER and then dropped on
+        the next open, with its values. The fixture row carries a real
+        'low' value so a dropped value cannot pass as NULL."""
         ddl_with_dest_path = _DDL_PRE_820.replace(
             "outcome          TEXT    NOT NULL DEFAULT ''",
             "outcome          TEXT    NOT NULL DEFAULT '',\n    dest_path        TEXT",
         )
-        db = self._pre_5_db(tmp_path, ddl=ddl_with_dest_path)
+        db = _make_manifest(
+            tmp_path,
+            [
+                {
+                    "source_path": "/legacy/d.jpg",
+                    "source_label": "jdrive",
+                    "action": "REVIEW_DUPLICATE",
+                    "group_id": "/group/d",
+                    "reason": "legacy",
+                    "executed": 0,
+                    "user_decision": "",
+                }
+            ],
+            ddl=ddl_with_dest_path,
+        )
         conn = sqlite3.connect(str(db))
         try:
-            conn.execute("ALTER TABLE migration_manifest ADD COLUMN phash_quality REAL")
+            conn.execute("ALTER TABLE migration_manifest ADD COLUMN match_confidence TEXT")
             conn.execute(
-                "UPDATE migration_manifest SET phash_quality = ? WHERE source_path = ?",
-                (16.4, "/legacy/q.jpg"),
+                "UPDATE migration_manifest SET match_confidence = 'low' "
+                "WHERE source_path = '/legacy/d.jpg'"
             )
             conn.commit()
         finally:
@@ -644,13 +651,41 @@ class TestPhashQualityMigration:
 
         with sqlite3.connect(str(db)) as conn:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
-            row = conn.execute(
-                "SELECT phash_quality FROM migration_manifest "
-                "WHERE source_path = '/legacy/q.jpg'"
-            ).fetchone()
-        assert "dest_path" not in cols  # the dance really ran
-        assert "phash_quality" in cols
-        assert row[0] == pytest.approx(16.4)
+            value = conn.execute(
+                "SELECT match_confidence FROM migration_manifest "
+                "WHERE source_path = '/legacy/d.jpg'"
+            ).fetchone()[0]
+        assert "dest_path" not in cols          # the dance really ran
+        assert "match_confidence" in cols       # column survived the rebuild
+        assert value == "low"                   # and so did its contents
+
+    def test_load_puts_persisted_confidence_on_photo_record(self, tmp_path):
+        """A stored 'low' reaches PhotoRecord.match_confidence; NULL becomes None."""
+        low = tmp_path / "low.jpg"
+        none = tmp_path / "none.jpg"
+        low.write_bytes(b"")
+        none.write_bytes(b"")
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(low), "action": "REVIEW_DUPLICATE",
+                  "group_id": "/group/e"}),
+            _row({"source_path": str(none), "action": "REVIEW_DUPLICATE",
+                  "group_id": "/group/e"}),
+        ])
+        # The base DDL predates the column: migrate first, then write it.
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                "UPDATE migration_manifest SET match_confidence = 'low' "
+                "WHERE source_path = ?",
+                (str(low),),
+            )
+            conn.commit()
+        by_path = {
+            r.file_path: r.match_confidence
+            for r in ManifestRepository().load(str(db))
+        }
+        assert by_path[str(low)] == "low"
+        assert by_path[str(none)] is None
 
 
 _DDL_WITH_OUTCOME = """
@@ -1601,3 +1636,119 @@ class TestDropMoveDestPathMigration:
                 "SELECT COUNT(*) FROM migration_manifest WHERE outcome != ''"
             ).fetchone()[0]
         assert non_empty == 0
+
+
+class TestPhashQualityMigration:
+    """Recipe "5" — the ``phash_quality REAL`` column lands on a manifest that
+    predates it. Pre-"5" rows must read NULL (unknown → the gate passes them,
+    so a legacy library groups exactly as before), and the value must survive
+    the #433 copy-table rebuild (the trap #820 documented at _POST_DROP_COLUMNS).
+    """
+
+    def _pre_5_db(self, tmp_path: Path, ddl: str = _DDL_PRE_820) -> Path:
+        return _make_manifest(
+            tmp_path,
+            [
+                {
+                    "source_path": "/legacy/q.jpg",
+                    "source_label": "jdrive",
+                    "action": "REVIEW_DUPLICATE",
+                    "hamming_distance": 3,
+                    "group_id": "/group/q",
+                    "reason": "near-dup",
+                    "executed": 0,
+                    "user_decision": "delete",
+                    "score": 0.42,
+                }
+            ],
+            ddl=ddl,
+        )
+
+    def test_phash_quality_column_added_to_pre_5_manifest(self, tmp_path):
+        db = self._pre_5_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+        assert "phash_quality" in cols
+
+    def test_pre_5_rows_read_back_null(self, tmp_path):
+        """No DEFAULT on the ADD COLUMN: stored rows say "unknown", not 0.0 —
+        a 0.0 would read as a flat frame and be excluded from grouping."""
+        db = self._pre_5_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            row = conn.execute(
+                "SELECT phash_quality, score, user_decision "
+                "FROM migration_manifest WHERE source_path = '/legacy/q.jpg'"
+            ).fetchone()
+        assert row[0] is None
+        assert row[1] == pytest.approx(0.42)
+        assert row[2] == "delete"
+
+    def test_phash_quality_value_round_trips_after_migration(self, tmp_path):
+        db = self._pre_5_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                "INSERT INTO migration_manifest "
+                "(source_path, source_label, action, phash_quality) "
+                "VALUES (?, ?, ?, ?)",
+                ("/new/q.jpg", "jdrive", "", 16.4),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT phash_quality FROM migration_manifest "
+                "WHERE source_path = '/new/q.jpg'"
+            ).fetchone()
+        assert row[0] == pytest.approx(16.4)
+
+    def test_phash_quality_survives_the_drop_move_rebuild(self, tmp_path):
+        """The #433 copy-table dance rebuilds from a hardcoded DDL and copies
+        only the columns named in ``_POST_DROP_COLUMNS``. Forgetting the name
+        there keeps the column but silently empties every value, so the
+        fixture carries a REAL value (16.4), not NULL."""
+        ddl_with_dest_path = _DDL_PRE_820.replace(
+            "outcome          TEXT    NOT NULL DEFAULT ''",
+            "outcome          TEXT    NOT NULL DEFAULT '',\n    dest_path        TEXT",
+        )
+        db = self._pre_5_db(tmp_path, ddl=ddl_with_dest_path)
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute("ALTER TABLE migration_manifest ADD COLUMN phash_quality REAL")
+            conn.execute(
+                "UPDATE migration_manifest SET phash_quality = ? WHERE source_path = ?",
+                (16.4, "/legacy/q.jpg"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        ManifestRepository().ensure_schema(str(db))
+
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+            row = conn.execute(
+                "SELECT phash_quality FROM migration_manifest "
+                "WHERE source_path = '/legacy/q.jpg'"
+            ).fetchone()
+        assert "dest_path" not in cols  # the dance really ran
+        assert "phash_quality" in cols
+        assert row[0] == pytest.approx(16.4)
+
+
+_DDL_WITH_OUTCOME = """
+CREATE TABLE migration_manifest (
+    id               INTEGER PRIMARY KEY,
+    source_path      TEXT NOT NULL,
+    source_label     TEXT NOT NULL,
+    action           TEXT NOT NULL,
+    source_hash      TEXT,
+    phash            TEXT,
+    hamming_distance INTEGER,
+    group_id         TEXT,
+    reason           TEXT,
+    executed         INTEGER NOT NULL DEFAULT 0,
+    user_decision    TEXT    NOT NULL DEFAULT '',
+    outcome          TEXT    NOT NULL DEFAULT ''
+);
+"""

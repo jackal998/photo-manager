@@ -1,0 +1,1 @@
+Persist match_confidence in the manifest so Apply best copy leaves a low-confidence duplicate untouched, as the scan-time aggressive path already does (#1031).

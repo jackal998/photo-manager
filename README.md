@@ -514,6 +514,11 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
   of a burst shot inside the same second. Both are `NULL` on manifests written
   before #820 and on files whose camera wrote neither tag — a re-scan fills
   them. No scoring weight reads them yet
+- **Persisted match confidence** — `match_confidence` (`"high"` / `"low"` /
+  NULL) is written to the manifest so the review-time "Apply best-copy" action
+  applies the same rule as the scan-time aggressive auto-select: a pHash-only
+  (`"low"`) near-duplicate is never marked for deletion (#517). NULL on
+  manifests written before this column existed, which are treated as not-low
 - **pHash contrast gate** — each image's 32×32 grey std-dev (`phash_quality`, recipe `"5"`)
   is stored; images below 16.0 (near-black / near-flat frames whose degenerate pHash
   bridged unrelated photos) are kept out of pHash grouping but still get exact-SHA dedup.
