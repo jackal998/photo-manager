@@ -7,11 +7,14 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+
+from scanner.media import is_video
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -22,22 +25,49 @@ if TYPE_CHECKING:
 # the buffer fills or at the ``{ready}`` sentinel), so the first line of an
 # ``-execute`` batch can arrive long after the batch started. In practice
 # the timer bounds the longest silent stretch, which can be most of an
-# ``-execute`` call: callers size each call with ``execute_budget()`` (small
-# batches, budget grows with the
-# file count), so a slow-but-alive NAS batch is not mistaken for a wedged
-# process. A wedged exiftool (corrupt input, dropped SMB session, kernel pipe
-# stall) still exceeds the budget and raises ``ExiftoolTimeout``; the caller
-# closes it and rotates to a fresh process.
+#
+# ``-execute`` call: callers size each call with ``execute_budget()``, which
+# grows with the content of the batch (cost units, not file count), so a
+# slow-but-alive NAS batch is not mistaken for a wedged process. A wedged
+# exiftool (corrupt input, dropped SMB session, kernel pipe stall) still
+# exceeds the budget and raises ``ExiftoolTimeout``; the caller closes it and
+# rotates to a fresh process.
 _EXIFTOOL_READ_TIMEOUT_SECONDS = 60.0
-# Max paths per ``-execute`` call (see ``_execute_in_batches``).
-_EXIFTOOL_EXECUTE_BATCH = 25
-# Measured NAS worst case per file under read contention (2026-11-05).
-_EXIFTOOL_PER_FILE_SECONDS = 4.0
+# Cost units per ``-execute`` call (see ``_pack_batches``). An image path is
+# 1 unit; a video path is ``_EXIFTOOL_VIDEO_UNITS``.
+_EXIFTOOL_EXECUTE_UNITS = 25
+_EXIFTOOL_VIDEO_UNITS = 4
+# Measured under scan load on the owner's NAS (2026-11-05): a HEIC costs
+# ~8.6 s per file (40 files: first 8 KB of output after 86 s); 12 s is ~1.4x
+# that. A multi-GB MOV (4 units) gets 48 s.
+_EXIFTOOL_UNIT_SECONDS = 12.0
 
 
-def execute_budget(n_paths: int) -> float:
-    """Read budget (seconds) for one ``-execute`` call over ``n_paths`` files."""
-    return _EXIFTOOL_READ_TIMEOUT_SECONDS + n_paths * _EXIFTOOL_PER_FILE_SECONDS
+def _path_units(path) -> int:
+    """Cost units of one path: a video is ``_EXIFTOOL_VIDEO_UNITS``, else 1."""
+    return _EXIFTOOL_VIDEO_UNITS if is_video(str(path)) else 1
+
+
+def execute_budget(paths) -> float:
+    """Read budget (seconds) for one ``-execute`` call over ``paths``:
+    ``_EXIFTOOL_READ_TIMEOUT_SECONDS`` plus ``_EXIFTOOL_UNIT_SECONDS`` per
+    cost unit of the batch."""
+    units = sum(_path_units(p) for p in paths)
+    return _EXIFTOOL_READ_TIMEOUT_SECONDS + units * _EXIFTOOL_UNIT_SECONDS
+
+
+def _timeout_error(args: list, read_timeout: float, started: float) -> "ExiftoolTimeout":
+    """Build the ``ExiftoolTimeout`` for an idle ``-execute``, carrying the
+    path count and elapsed time so a log line alone can diagnose it. Option
+    arguments start with ``-``; every other argument is a path."""
+    n_paths = sum(1 for a in args if not str(a).startswith("-"))
+    elapsed = time.monotonic() - started
+    return ExiftoolTimeout(
+        f"exiftool stdout idle for {read_timeout}s ({n_paths} paths, "
+        f"{elapsed:.1f}s since -execute) — process appears wedged "
+        "(corrupt input, dropped NAS, kernel pipe stall, or stay_open "
+        "deadlock). Caller should close + rotate to a fresh ExiftoolProcess."
+    )
 
 
 class ExiftoolTimeout(Exception):
@@ -309,6 +339,7 @@ class ExiftoolProcess:
         it (force-kill path) and rotate to a fresh instance.
         """
         cmd = "\n".join(str(a) for a in args) + "\n-execute\n"
+        started = time.monotonic()
         self.proc.stdin.write(cmd)
         self.proc.stdin.flush()
         lines = []
@@ -316,12 +347,7 @@ class ExiftoolProcess:
             try:
                 line = self._stdout_queue.get(timeout=read_timeout)
             except queue.Empty:
-                raise ExiftoolTimeout(
-                    f"exiftool stdout idle for {read_timeout}s — process "
-                    "appears wedged (corrupt input, dropped NAS, kernel "
-                    "pipe stall, or stay_open deadlock). Caller should "
-                    "close + rotate to a fresh ExiftoolProcess."
-                )
+                raise _timeout_error(args, read_timeout, started)
             if line is None:
                 # EOF / read error — process is dead. Break and return
                 # whatever stdout we accumulated; stderr appended below.
@@ -408,18 +434,37 @@ def _parse_exiftool_json(output: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def _pack_batches(paths: list) -> list[list]:
+    """Split ``paths`` into consecutive sub-batches of at most
+    ``_EXIFTOOL_EXECUTE_UNITS`` cost units, filled greedily in path order.
+    A single path always forms a batch by itself, even if its units alone
+    exceed the cap."""
+    batches: list[list] = []
+    current: list = []
+    current_units = 0
+    for path in paths:
+        units = _path_units(path)
+        if current and current_units + units > _EXIFTOOL_EXECUTE_UNITS:
+            batches.append(current)
+            current, current_units = [], 0
+        current.append(path)
+        current_units += units
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _execute_in_batches(
     et: ExiftoolProcess, fixed_args: list, paths: list,
 ) -> list[dict]:
     """Run ``fixed_args + paths`` through exiftool in sub-batches of at most
-    ``_EXIFTOOL_EXECUTE_BATCH`` paths, each with its own read budget.
+    ``_EXIFTOOL_EXECUTE_UNITS`` cost units, each with its own read budget.
     Returns the concatenated JSON records."""
     records: list[dict] = []
-    for start in range(0, len(paths), _EXIFTOOL_EXECUTE_BATCH):
-        sub = paths[start:start + _EXIFTOOL_EXECUTE_BATCH]
+    for sub in _pack_batches(paths):
         output = et.execute(
             fixed_args + [str(p) for p in sub],
-            read_timeout=execute_budget(len(sub)),
+            read_timeout=execute_budget(sub),
         )
         records.extend(_parse_exiftool_json(output))
     return records
