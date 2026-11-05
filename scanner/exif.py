@@ -21,8 +21,9 @@ if TYPE_CHECKING:
 # block-buffers stdout when it writes to a pipe (~8 KB, flushed only when
 # the buffer fills or at the ``{ready}`` sentinel), so the first line of an
 # ``-execute`` batch can arrive long after the batch started. In practice
-# this timeout bounds one whole ``-execute`` call, not one line: callers size
-# each call with ``execute_budget()`` (small batches, budget grows with the
+# the timer bounds the longest silent stretch, which can be most of an
+# ``-execute`` call: callers size each call with ``execute_budget()`` (small
+# batches, budget grows with the
 # file count), so a slow-but-alive NAS batch is not mistaken for a wedged
 # process. A wedged exiftool (corrupt input, dropped SMB session, kernel pipe
 # stall) still exceeds the budget and raises ``ExiftoolTimeout``; the caller
