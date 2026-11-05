@@ -37,7 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 try:
     import imagehash
@@ -404,7 +404,8 @@ def classify(
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
     # pHash transitive edges (#538 near-dup, #824 complementary).
     # Live Photo pair edges are certain (high); pHash edges carry their own.
-    _assign_group_ids(rows, [(a, b, "high") for a, b in pair_edges] + phash_edges)
+    skipped = _assign_group_ids(rows, [(a, b, "high") for a, b in pair_edges] + phash_edges)
+    _mark_isolated_hints(rows, skipped)
 
     return list(rows.values())
 
@@ -730,9 +731,13 @@ def _complementary_edges(
 # "5": the pHash-quality (contrast) gate (min_phash_quality, 16.0) excludes
 # flat/near-black frames whose degenerate pHash bridged unrelated photos
 # (dedup-core research 2026-11-05 class A). Verdict moves on those files.
-# "6": low-confidence edges attach leaves but never merge two multi-member
-# groups (dedup-core research 2026-11-05 §5.1 T3 hint-only), so the torii
-# moments that hash alike stay separate groups.
+# "6": low-confidence edges are hints (dedup-core research 2026-11-05 §5.1 T3).
+# They never merge two multi-member groups, so the torii moments that hash
+# alike stay separate. A lone file attaches only to a high-cored group (one
+# that holds a high edge), and two lone files may pair up; a low-only group
+# never grows, so hints do not chain. A row left out of every group by a
+# skipped hint becomes undecided (UNDATED without a shot date) with the
+# marker "hint only (not grouped): " in its reason.
 # "4" is taken by a separate branch's confidence gates; merged in order.
 GROUPING_STRATEGY_VERSION = "6"
 
@@ -878,7 +883,12 @@ def _classify_near_duplicates(
     if not _IMAGEHASH_AVAILABLE:
         return []
 
-    unclassified = [hr for hr in candidates if str(hr.record.path) not in rows]
+    # GROUPING 6: iterate in path order, so the first pair that flags a row (and
+    # therefore its duplicate_of / reason) does not depend on record order.
+    unclassified = sorted(
+        (hr for hr in candidates if str(hr.record.path) not in rows),
+        key=lambda hr: str(hr.record.path),
+    )
     hashes = [(hr, imagehash.hex_to_hash(hr.phash)) for hr in unclassified if hr.phash]
 
     # #526 — candidate generation via BK-tree (large N) or brute force (small
@@ -1040,10 +1050,61 @@ def _row_edges(rows: dict[str, ManifestRow]) -> list[Edge]:
     ]
 
 
+HINT_ONLY_PREFIX = "hint only (not grouped): "
+
+
+def _mark_isolated_hints(
+    rows: dict[str, ManifestRow], skipped: list[tuple[str, str]]
+) -> None:
+    """GROUPING 6 — a row left out of every group by a skipped low hint must
+    not carry a dedup action: the review UI groups rows by ``group_id``, and a
+    REVIEW row with no group would be a duplicate of nobody. A flagged row goes
+    back to undecided (UNDATED when it has no shot date, as in Pass 3) and keeps
+    its ``duplicate_of``. A row that was never flagged (its hint was the
+    partner's link) gets the partner as ``duplicate_of`` and ``low`` confidence,
+    so no lone file is silently orphaned. Every such reason carries the marker.
+    A row still in a group through another edge is untouched."""
+    partner_of: dict[str, str] = {}
+    for a, b in skipped:
+        partner_of.setdefault(a, b)
+        partner_of.setdefault(b, a)
+    for row in rows.values():
+        if row.group_id is not None:
+            continue
+        if row.duplicate_of:
+            row.action = "" if row.shot_date is not None else "UNDATED"
+            row.reason = HINT_ONLY_PREFIX + row.reason
+        elif row.source_path in partner_of:
+            partner = partner_of[row.source_path]
+            row.duplicate_of = partner
+            row.match_confidence = "low"
+            row.reason = HINT_ONLY_PREFIX + f"low-confidence match with {Path(partner).name}"
+
+
+def _hint_may_join(
+    a: str,
+    b: str,
+    find: Callable[[str], str],
+    joined: set[str],
+    core_roots: set[str],
+) -> bool:
+    """Whether a low hint ``a``-``b`` may union. Two lone files pair up. A
+    lone file attaches only to a high-cored component (one holding a high
+    edge); a low-only component never grows, so hints cannot chain."""
+    a_lone, b_lone = a not in joined, b not in joined
+    if a_lone and b_lone:
+        return True
+    if a_lone:
+        return find(b) in core_roots
+    if b_lone:
+        return find(a) in core_roots
+    return False  # a hint never merges two multi-member groups
+
+
 def _assign_group_ids(
     rows: dict[str, ManifestRow],
     edges: list[Edge] | None = None,
-) -> None:
+) -> list[tuple[str, str]]:
     """Assign group_id via union-find over duplicate_of edges + ``edges``.
 
     Files transitively connected by ``high`` edges (A→B, B→C) all receive the
@@ -1058,11 +1119,12 @@ def _assign_group_ids(
     Low-confidence edges (``GROUPING_STRATEGY_VERSION`` "6") are hints. They
     are processed after every high edge, in sorted order (deterministic, so
     the result never depends on record order): a low edge whose endpoints are
-    already in the same component is a no-op; one with a lone endpoint attaches
-    that file as a leaf; one whose two endpoints each already sit in a group of
-    two or more is skipped, so a hint never merges two groups. A lone file
-    whose only edges were skipped stays ``group_id=None``, and the hint is
-    still visible in its ``reason`` and ``duplicate_of``.
+    already in the same component is a no-op; two lone files pair up; a lone
+    file attaches to a component only when that component is high-cored (holds
+    a high edge); everything else is skipped, so a hint never merges two groups
+    and a low-only pair never grows. A file whose only edges were skipped stays
+    ``group_id=None``, and the hint is still visible in its ``reason`` and
+    ``duplicate_of``.
     """
     parent: dict[str, str] = {}
 
@@ -1083,29 +1145,45 @@ def _assign_group_ids(
     # Nodes in a component of two or more members. Every node joined by a
     # union is one, so membership is exactly "not a lone singleton".
     joined: set[str] = set()
+    # Roots of components that hold at least one high edge ("high-cored").
+    core_roots: set[str] = set()
+
+    def join(a: str, b: str, core: bool) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            if core:
+                core_roots.add(ra)
+            return
+        was_core = core or ra in core_roots or rb in core_roots
+        union(a, b)
+        core_roots.difference_update({ra, rb})
+        if was_core:
+            core_roots.add(find(a))
+        joined.update((a, b))
 
     for a, b, confidence in all_edges:
         if confidence == "high":
-            union(a, b)
-            joined.update((a, b))
+            join(a, b, core=True)
 
     # Normalise orientation and sort: the hint pass must not depend on which
     # side of a pair the classifier happened to write first.
     low_pairs = sorted(
         (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "low"
     )
+    skipped: list[tuple[str, str]] = []
     for a, b in low_pairs:
         if find(a) == find(b):
             continue
-        if a in joined and b in joined:
-            continue  # a hint never merges two multi-member groups
-        union(a, b)
-        joined.update((a, b))
+        if _hint_may_join(a, b, find, joined, core_roots):
+            join(a, b, core=False)
+        else:
+            skipped.append((a, b))
 
     for row in rows.values():
         if row.source_path in joined:
             row.group_id = find(row.source_path)
         # else: stays None (isolated file, or a hint that was not taken)
+    return skipped
 
 
 # ---------------------------------------------------------------------------

@@ -90,7 +90,8 @@ class TestTorii:
 
 
 class TestLeafAttach:
-    """A lone file whose only edge is low joins a two-member group."""
+    """A lone file whose only edge is low joins a two-member group. The target
+    is high-cored: two byte-identical copies (a high sha edge)."""
 
     def test_lone_file_attaches_as_low_leaf(self):
         records = [
@@ -171,3 +172,104 @@ class TestTwoSingletonsByLowHint:
         assert _group_sizes(rows) == [2]
         assert rows["/c/solo_y.jpg"].match_confidence == "low"
         assert rows["/c/solo_y.jpg"].group_id == rows["/a/solo_x.jpg"].group_id
+
+
+# Screenshot pHashes for the chain tests: consecutive links are within the
+# threshold (8), every non-consecutive pair is beyond it (>= 16). Both files
+# are PNG, so every link is low (both-screenshots demotion).
+SHOT = {
+    "s1": "00000000ffffffff",
+    "s2": "00000000ffffff00",
+    "s3": "00000000ffff0000",
+    "s4": "00000000ff000000",
+}
+
+
+def _shot(name: str) -> HashResult:
+    return _hr(f"/s/{name}.png", f"sha_{name}", SHOT[name], T1, "src_a", file_type="png")
+
+
+class TestHintChainStopsAtLonePairs:
+    """Low-only links never chain: a low-only pair does not grow."""
+
+    def test_four_screenshot_chain_gives_two_pairs_not_one_group(self):
+        records = [_shot(n) for n in ("s1", "s2", "s3", "s4")]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert _group_sizes(rows) == [2, 2]
+        assert rows["/s/s1.png"].group_id == rows["/s/s2.png"].group_id
+        assert rows["/s/s3.png"].group_id == rows["/s/s4.png"].group_id
+        assert rows["/s/s1.png"].group_id != rows["/s/s3.png"].group_id
+
+    def test_chain_result_is_identical_when_record_order_is_shuffled(self):
+        base = _rows(classify([_shot(n) for n in ("s1", "s2", "s3", "s4")],
+                              source_priority=PRIORITY))
+        expected = {k: r.group_id for k, r in base.items()}
+        recs = [_shot(n) for n in ("s1", "s2", "s3", "s4")]
+        random.Random(0).shuffle(recs)
+        shuffled = _rows(classify(recs, source_priority=PRIORITY))
+        assert {k: r.group_id for k, r in shuffled.items()} == expected
+
+    def test_lone_file_hinting_a_low_only_pair_stays_isolated(self):
+        # s2 is low-linked to s1 (pair) and to x; x must not join the pair.
+        records = [_shot("s1"), _shot("s2"), _hr("/s/x.png", "sha_x", SHOT["s3"],
+                                                  T1, "src_a", file_type="png")]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        x = rows["/s/x.png"]
+        assert x.group_id is None
+        assert x.duplicate_of is not None
+        assert Path(x.duplicate_of).name == "s2.png"
+        assert "s2.png" in x.reason
+        assert x.match_confidence == "low"
+        assert rows["/s/s1.png"].group_id == rows["/s/s2.png"].group_id
+
+
+def _lone_hint(exif_date: datetime | None) -> list[HashResult]:
+    """s1-s2 low pair plus x low to s2 only: x is an isolated hint."""
+    return [
+        _shot("s1"),
+        _shot("s2"),
+        _hr("/s/x.png", "sha_x", SHOT["s3"], exif_date, "src_a", file_type="png"),
+    ]
+
+
+class TestIsolatedHintIsUndecided:
+    """(h) GROUPING 6: an isolated hint row carries no dedup action."""
+
+    def test_isolated_hint_row_has_undecided_action_and_marker(self):
+        from scanner.dedup import HINT_ONLY_PREFIX
+        rows = _rows(classify(_lone_hint(T1), source_priority=PRIORITY))
+        x = rows["/s/x.png"]
+        assert x.group_id is None
+        assert x.action == ""
+        assert x.match_confidence == "low"
+        assert x.reason.startswith(HINT_ONLY_PREFIX)
+        assert "s2.png" in x.reason
+
+    def test_undated_isolated_hint_becomes_undated(self):
+        from scanner.dedup import HINT_ONLY_PREFIX
+        rows = _rows(classify(_lone_hint(None), source_priority=PRIORITY))
+        x = rows["/s/x.png"]
+        assert x.group_id is None
+        assert x.action == "UNDATED"
+        assert x.reason.startswith(HINT_ONLY_PREFIX)
+
+
+class TestHintWithAnotherEdgeKeepsAction:
+    """(i) GROUPING 6: a row with one skipped hint edge that is still grouped
+    through another edge keeps its REVIEW action."""
+
+    def test_row_grouped_via_one_edge_keeps_review_action(self):
+        records = [
+            _hr("/a/a1.jpg", "ga", A, T1, "src_a"),
+            _hr("/a/a2.jpg", "ga", A, T1, "src_a"),
+            _hr("/b/b1.jpg", "gb", B, T1, "src_b"),
+            _hr("/b/b2.jpg", "gb", B, T1, "src_b"),
+            _hr("/c/x.jpg", "gx", S, T_PLUS_36H, "src_a"),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        x = rows["/c/x.jpg"]
+        assert x.group_id is not None
+        assert x.group_id == rows["/a/a1.jpg"].group_id
+        assert x.group_id != rows["/b/b1.jpg"].group_id
+        assert x.action == "REVIEW_DUPLICATE"
+        assert not x.reason.startswith("hint only")
