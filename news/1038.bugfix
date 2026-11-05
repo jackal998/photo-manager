@@ -1,0 +1,1 @@
+Size each exiftool -execute read budget by content (an image is 1 unit, a video 4; at most 25 units per call, 60 s + 12 s per unit) and report path count and elapsed time in the timeout message, so slow NAS HEIC and multi-GB video batches are no longer recorded as exif-missing (#1038)
