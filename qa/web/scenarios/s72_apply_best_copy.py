@@ -12,9 +12,11 @@ Semantics under test (the review-time twin of scan-time auto-select,
 core.services.auto_select): within the target group, the top-score row
 becomes the keeper (user_decision="" + is_locked=True); every row the
 classifier positively identified as a duplicate (EXACT / REVIEW_DUPLICATE)
-gets user_decision="delete". Deliberately NO match_confidence filtering (that
-field is transient scan-time data, never persisted to the manifest DB — see
-core.app_service.action_service.apply_best_copy's docstring).
+gets user_decision="delete" — except a row whose stored match_confidence is
+"low" (a pHash-only match with no independent dHash agreement, #517), which is
+left untouched exactly as the scan-time aggressive path leaves it. The
+near-duplicates fixture carries no "low" row, so the expected split below is
+the same as s57's (see core.app_service.action_service.apply_best_copy).
 
 Fixture: qa/sandbox/near-duplicates/ (5 JPEGs; neardup_00_q95.jpg is the
 highest-score row — the SAME fixture + expected keeper/non-keeper split as

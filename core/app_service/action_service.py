@@ -294,8 +294,8 @@ def apply_best_copy(
     # Duck-typed adapter — top_score_path_per_group / non_keepers_for_
     # aggressive_delete read .group_id/.source_path/.score/.action (the
     # scanner.dedup.ManifestRow shape); PhotoRecord carries the same data
-    # under different names (.group_number/.file_path) and has no
-    # .match_confidence under the same name (persisted since #517). A single
+    # under different names (.group_number/.file_path) and carries
+    # .match_confidence under the same name (persisted since this fix). A single
     # constant group_id is fine: every adapted row belongs to the one
     # already-resolved group, so the helpers' internal grouping is a no-op
     # bucket of one.
