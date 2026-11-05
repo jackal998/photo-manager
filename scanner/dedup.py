@@ -3,10 +3,15 @@
 Classification rules:
   SHA-256 match                          → EXACT (exact duplicate)
   pHash hamming == 0, both lossy         → EXACT lower priority (format duplicate)
+  pHash hamming == 0, both lossy, shot times disagree or both PNG
+                                         → REVIEW_DUPLICATE, confidence low
+                                            (dedup-core research 2026-11-05 class B)
   pHash hamming == 0, one RAW + lossy    → "" both (complementary, undecided,
                                             but one group_id — #824)
   pHash hamming == 0, all RAW            → "" all (same, #824)
   pHash hamming 1–threshold AND dHash agrees → REVIEW_DUPLICATE (#524 gate)
+  pHash near-dup, shot times disagree or both PNG → REVIEW_DUPLICATE, confidence
+                                            low (dedup-core research 2026-11-05 class B)
   no EXIF date                           → UNDATED
   otherwise                              → "" (undecided non-duplicate file)
 
@@ -230,6 +235,56 @@ def _dhash_vote(a: HashResult, b: HashResult, dhash_threshold: int) -> str:
     except (ValueError, TypeError):
         return "unknown"
     return "agree" if distance <= dhash_threshold else "disagree"
+
+
+def _shot_time_vote(a: HashResult, b: HashResult, tolerance_s: int = 2) -> str:
+    """dedup-core research 2026-11-05 class B — do the two shot times agree?
+
+    Returns one of:
+      * ``"agree"``    — the capture times match within ``tolerance_s``, or
+                         differ by a whole number of half-hours up to 14 h.
+                         The half-hour case is the same instant written as UTC
+                         by one tool and as local time by another (Google
+                         Takeout, some cameras); on the real manifest these
+                         pHash-identical pairs sit almost exactly 8 h apart and
+                         are genuine copies (issue #820 has the tz background).
+      * ``"disagree"`` — both EXIF dates present and the gap is neither: two
+                         different captures that happen to hash alike.
+      * ``"unknown"``  — either side has no EXIF date (RAW, scan, stripped
+                         metadata): no evidence either way, nothing demoted.
+    """
+    if a.exif_date is None or b.exif_date is None:
+        return "unknown"
+    delta = abs((a.exif_date - b.exif_date).total_seconds())
+    if delta <= tolerance_s:
+        return "agree"
+    if delta <= 14 * 3600 + tolerance_s and abs(delta - round(delta / 1800) * 1800) <= tolerance_s:
+        return "agree"
+    return "disagree"
+
+
+def _screenshot_pair(a: HashResult, b: HashResult) -> bool:
+    """dedup-core research 2026-11-05 class B — both files are PNG.
+
+    PNG is the screenshot / UI-render class in a photo library. Two screenshots
+    that hash alike (same app chrome, same status bar) are not one capture, so
+    the pair is capped at the review tier and never earns ``high`` confidence.
+    """
+    return a.record.file_type == "png" and b.record.file_type == "png"
+
+
+def _demotion_note(a: HashResult, b: HashResult) -> Optional[str]:
+    """Short reason a pHash match is capped at ``low`` confidence, or None.
+
+    Shot-time disagreement is named first (it carries the hour gap); a
+    both-PNG pair is the fallback cause.
+    """
+    if _shot_time_vote(a, b) == "disagree":
+        hours = abs((a.exif_date - b.exif_date).total_seconds()) / 3600
+        return f"shot {hours:.1f} h apart"
+    if _screenshot_pair(a, b):
+        return "both screenshots"
+    return None
 
 
 def classify(
@@ -539,6 +594,22 @@ def _classify_format_group(
         vote = _dhash_vote(keeper, duplicate, dhash_threshold)
         if vote == "disagree":
             continue
+        # dedup-core research 2026-11-05 class B — a pHash-0 match is not a
+        # certain duplicate when the shot times disagree (three captures of one
+        # gate hashed identically) or when both files are PNG screenshots. The
+        # duplicate_of edge still groups them; only the label and confidence
+        # move to the review tier, so the aggressive auto-select skips the row.
+        note = _demotion_note(keeper, duplicate)
+        if note is not None:
+            rows[key] = _make_row(
+                duplicate,
+                "REVIEW_DUPLICATE",
+                duplicate_of=str(keeper.record.path),
+                hamming=0,
+                reason=f"same pHash as {keeper.record.path.name} but {note}",
+                match_confidence="low",
+            )
+            continue
         rows[key] = _make_row(
             duplicate,
             "EXACT",
@@ -600,7 +671,9 @@ def _complementary_edges(
 # #516, dimension #523). Opaque cache-keying token; only equality matters.
 # "3" (#824): the exact tier now emits complementary edges for RAW+lossy and
 # all-RAW buckets, so the grouping verdict moved.
-GROUPING_STRATEGY_VERSION = "3"
+# "4" (dedup-core research 2026-11-05 class B): shot-time and PNG-pair gates
+# demote pHash matches to low confidence; edges are unchanged.
+GROUPING_STRATEGY_VERSION = "4"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -799,14 +872,18 @@ def _classify_near_duplicates(
             flagged = ordered[1]
             flagged_key = str(flagged.record.path)
             if flagged_key not in rows:
+                # dedup-core research 2026-11-05 class B — shot-time or PNG-pair
+                # demotion caps confidence at "low" whatever the dHash said.
+                note = _demotion_note(hr_a, hr_b)
+                suffix = f"; {note}" if note is not None else ""
                 rows[flagged_key] = _make_row(
                     flagged,
                     "REVIEW_DUPLICATE",
                     duplicate_of=str(ordered[0].record.path),
                     hamming=distance,
                     reason=f"near-duplicate (hamming={distance}) of "
-                           f"{ordered[0].record.path.name}",
-                    match_confidence="high" if vote == "agree" else "low",
+                           f"{ordered[0].record.path.name}{suffix}",
+                    match_confidence="high" if vote == "agree" and note is None else "low",
                 )
     return edges
 
