@@ -75,6 +75,11 @@ class HashResult:
     # formats in hasher._INMEMORY_EXIF_TYPES only. None for every other
     # format — those still get their scoring signals from exiftool.
     inmemory_signals: Optional[dict] = None
+    # Recipe "5" — population std-dev of the 32×32 grey working image (the
+    # image pHash hashes). Low = flat/near-black, so a degenerate pHash; the
+    # ``_phash_quality_ok`` grouping gate reads it. None for video / legacy
+    # manifests / hash failure — those pass the gate (None-tolerant).
+    phash_quality: Optional[float] = None
 
     def to_media_extract(self) -> "MediaExtract":  # noqa: F821 — runtime import
         """Convert this HashResult into a MediaExtract (#187 — PR 2).
@@ -175,6 +180,7 @@ class ManifestRow:
     group_id: Optional[str] = None       # canonical root path of connected component; written to DB
     pixel_width: Optional[int] = None    # image width in pixels; written to DB
     pixel_height: Optional[int] = None   # image height in pixels; written to DB
+    phash_quality: Optional[float] = None  # 32×32 grey std-dev (recipe "5"); written to DB
     # Scoring system (#187) — raw signals + composite score. Populated by
     # the extended exiftool pass (PR 2) and scorer (PR 3/4). All default to
     # None/False so existing constructors continue to work unchanged.
@@ -240,6 +246,7 @@ def classify(
     dhash_threshold: int = 10,
     min_phash_dimension: int = 128,
     bktree_min_candidates: int | None = None,
+    min_phash_quality: float = 16.0,
 ) -> list[ManifestRow]:
     """Assign an action to every record and return ManifestRows.
 
@@ -276,6 +283,18 @@ def classify(
             the scan worker passes a value measured by the #486 auto-pool
             calibration so the crossover is per-machine, not baked. Trades
             speed only — the grouping verdict is identical either way.
+        min_phash_quality: pHash-quality (contrast) gate. ``hr.phash_quality``
+            is the population std-dev of the 32×32 grey working image — the
+            image ``imagehash.phash`` hashes. Measured on 519 real files
+            (dedup-core research 2026-11-05 contrast probe): dng median 49.7,
+            heic 50.3, jpg 52.7, png 43.9 (p1 8.9). The class-A frames that
+            hashed to ``cccc3333cccc3333`` read 5.67 / 5.63 (two 2020 eclipse
+            frames) and 15.36 (a 2023 photo of two lights in the dark), so
+            16.0 removes all three from pHash grouping, plus ~1 % of real
+            photos (~5 % of PNG screenshots). Such files still get exact-SHA
+            dedup and the same-stem pair edge. A file below this is excluded
+            from pHash near-dup grouping; ``None`` quality (video / legacy
+            manifest / failure) passes. ``0`` disables the gate.
     """
     if source_priority is None:
         seen: dict[str, int] = {}
@@ -301,7 +320,7 @@ def classify(
     phash_edges = _classify_phash(
         records, rows, threshold, source_priority, mean_color_threshold,
         min_phash_entropy_bits, dhash_threshold, min_phash_dimension,
-        bktree_min_candidates,
+        bktree_min_candidates, min_phash_quality,
     )
 
     # Pass 3: remaining unclassified files — all sources treated equally
@@ -417,6 +436,29 @@ def _phash_dimension_ok(hr: HashResult, min_dimension: int) -> bool:
     return min(w, h) >= min_dimension
 
 
+def _phash_quality_ok(hr: HashResult, min_quality: float) -> bool:
+    """True if the image has enough grey-scale contrast for its pHash to mean something.
+
+    A flat or near-black frame downsamples to an almost uniform 32×32 grey
+    image; imagehash's median split then turns noise into bits, so every such
+    frame lands on a degenerate 64-bit pHash (e.g. ``cccc3333cccc3333``) and
+    unrelated frames bridge into one chained group. The popcount guard (#516)
+    cannot see this — the median split gives every photo popcount 32. This
+    gate reads the contrast scalar directly (``HashResult.phash_quality``,
+    recipe "5").
+
+    ``min_quality <= 0`` disables the gate. ``phash_quality is None`` (video,
+    legacy manifest, decode failure) passes — the same None-tolerant handling
+    as the other guards. Exact-SHA dedup is never affected: this gate only
+    runs in pHash candidate selection.
+    """
+    if min_quality <= 0:
+        return True
+    if hr.phash_quality is None:
+        return True
+    return hr.phash_quality >= min_quality
+
+
 def _classify_phash(
     records: list[HashResult],
     rows: dict[str, ManifestRow],
@@ -427,6 +469,7 @@ def _classify_phash(
     dhash_threshold: int = 10,
     min_phash_dimension: int = 128,
     bktree_min_candidates: int | None = None,
+    min_phash_quality: float = 16.0,
 ) -> list[tuple[str, str]]:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE, and
     return the pHash union-find edges — near-duplicate (#538) plus
@@ -446,6 +489,7 @@ def _classify_phash(
         if hr.phash
         and _phash_entropy_ok(hr.phash, min_phash_entropy_bits)
         and _phash_dimension_ok(hr, min_phash_dimension)
+        and _phash_quality_ok(hr, min_phash_quality)
         and str(hr.record.path) not in rows
     ]
 
@@ -599,7 +643,11 @@ def _complementary_edges(
 # #516, dimension #523). Opaque cache-keying token; only equality matters.
 # "3" (#824): the exact tier now emits complementary edges for RAW+lossy and
 # all-RAW buckets, so the grouping verdict moved.
-GROUPING_STRATEGY_VERSION = "3"
+# "5": the pHash-quality (contrast) gate (min_phash_quality, 16.0) excludes
+# flat/near-black frames whose degenerate pHash bridged unrelated photos
+# (dedup-core research 2026-11-05 class A). Verdict moves on those files.
+# "4" is taken by a separate branch's confidence gates; merged in order.
+GROUPING_STRATEGY_VERSION = "5"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -987,5 +1035,6 @@ def _make_row(
         mtime=_mtime,
         pixel_width=hr.pixel_width,
         pixel_height=hr.pixel_height,
+        phash_quality=hr.phash_quality,
         match_confidence=match_confidence,
     )

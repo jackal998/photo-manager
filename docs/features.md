@@ -85,6 +85,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Scan flow — rescan confirm](features/scan.md#scan-flow--rescan-confirm) | Scan |
 | [Scan flow — visual selection of KEEP rows after scan](features/scan.md#scan-flow--visual-selection-of-keep-rows-after-scan) | Scan |
 | [Scan grouping — complementary RAW + lossy pair](features/scan.md#scan-grouping--complementary-raw--lossy-pair) | Scan |
+| [Scan grouping — pHash contrast (quality) gate](features/scan.md#scan-grouping--phash-contrast-quality-gate) | Scan |
 | [Scan walk — recycle-bin / system folders are never walked](features/scan.md#scan-walk--recycle-bin--system-folders-are-never-walked) | Scan |
 | [Scan walk — skip-on-error traversal](features/scan.md#scan-walk--skip-on-error-traversal) | Scan |
 | [Set Action dialog — dual-section Simple + Regex view](features/set-action-dialog.md#set-action-dialog--dual-section-simple--regex-view) | Set Action dialog |

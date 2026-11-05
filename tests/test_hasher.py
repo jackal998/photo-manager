@@ -303,7 +303,7 @@ class TestComputeHashes:
             # (not the dropped rawpy.open_buffer); the path fallback also uses imread.
             mock_rawpy.imread.side_effect = unsupported
 
-            sha, ph, dh, ch, dt, w, h, _ = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
+            sha, ph, dh, ch, dt, w, h, _, _q = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None
@@ -363,7 +363,7 @@ class TestRealDecodeFailures:
         # path fallback — the #75 non-camera-TIFF class, routed to "raw".
         f.write_bytes(b"II*\x00" + b"\x00" * 256)
 
-        sha, ph, dh, ch, dt, w, h, _ = compute_hashes(f, "raw")  # #786 added index 7
+        sha, ph, dh, ch, dt, w, h, _, _q = compute_hashes(f, "raw")  # #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None and dh is None and ch is None
@@ -1014,7 +1014,7 @@ class TestRawSingleLibRawOpen:
 
         f = tmp_path / "shot.dng"
         f.write_bytes(b"\x00" * 64)
-        sha, ph, dh, _mc, _date, px_w, px_h, _sig = hasher.compute_hashes(f, "raw")
+        sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q = hasher.compute_hashes(f, "raw")
 
         assert len(opens) == 1, (
             f"LibRaw opened {len(opens)}× for one RAW file — #826 wants exactly 1 "
@@ -1063,7 +1063,7 @@ class TestRawSingleLibRawOpen:
 
         f = tmp_path / "nothumb.dng"
         f.write_bytes(b"\x00" * 64)
-        _sha, ph, dh, _mc, _date, px_w, px_h, _sig = hasher.compute_hashes(f, "raw")
+        _sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q = hasher.compute_hashes(f, "raw")
 
         assert len(opens) == 1, f"LibRaw opened {len(opens)}× on the full-decode route"
         assert (px_w, px_h) == (8064, 6048)
@@ -1085,6 +1085,101 @@ class TestRawSingleLibRawOpen:
 _PARITY_PHASH = "881a4f1b0b19f56f"
 _PARITY_DHASH = "fbe7befbefbef7ff"
 _PARITY_MEAN = "127,127,117"
+
+
+def _checker_jpeg(path: Path) -> None:
+    """300×300 black/white checkerboard of 30 px blocks.
+
+    Block-scale contrast survives the 32×32 downsample, so this reads high.
+    Per-pixel white noise does NOT: a 32×32 LANCZOS cell averages ~90 random
+    pixels, which flattens the grey image to std ~5 (measured 4.7 / 4.6). The
+    scalar tracks structure at pHash's own scale, not pixel noise.
+    """
+    img = Image.new("RGB", (300, 300))
+    px = img.load()
+    for y in range(300):
+        for x in range(300):
+            if ((x // 30) + (y // 30)) % 2:
+                px[x, y] = (255, 255, 255)
+    img.save(path, "JPEG", quality=95)
+
+
+class TestPhashQuality:
+    """Recipe "5" — the ninth element ``phash_quality`` (population std-dev of
+    the 32×32 grey LANCZOS working image, i.e. the image pHash hashes).
+
+    The grouping gate (``scanner/dedup.py::_phash_quality_ok``) reads this
+    scalar, so its value domain must hold on real decoded bytes: a flat frame
+    reads ~0 and a high-contrast frame reads well above the 16.0 gate.
+    """
+
+    def test_flat_grey_jpeg_quality_near_zero(self, tmp_path):
+        """Catches: a quality that does not track contrast (e.g. measured on the
+        wrong image), which would let a flat degenerate-pHash frame through."""
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "flat.jpg"
+        Image.new("RGB", (300, 300), (128, 128, 128)).save(f, "JPEG", quality=95)
+        out = compute_hashes(f, "jpeg")
+        assert len(out) == 9
+        assert out[1] is not None  # a real pHash was produced
+        assert out[8] is not None and out[8] < 1.0
+
+    def test_high_contrast_jpeg_quality_above_gate(self, tmp_path):
+        """Catches: quality clamped / inverted — block-scale black/white
+        structure must sit comfortably above the 16.0 default gate."""
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "checker.jpg"
+        _checker_jpeg(f)
+        quality = compute_hashes(f, "jpeg")[8]
+        assert quality is not None and quality > 16.0
+
+    def test_undecodable_image_quality_is_none(self, tmp_path):
+        """Catches: a quality reported for a file with no pHash — the contract
+        is None whenever phash is None (decode failure)."""
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "garbage.jpg"
+        f.write_bytes(b"this is not a jpeg at all")
+        out = compute_hashes(f, "jpeg")
+        assert out[1] is None
+        assert out[8] is None
+
+    def test_video_quality_is_none(self, tmp_path):
+        """Catches: video/gif/skip returning a stale or zero quality instead of
+        None, which the gate would then read as a real contrast measurement."""
+        from scanner.hasher import compute_hashes
+
+        v = tmp_path / "clip.mov"
+        v.write_bytes(b"\x00" * 64)
+        out = compute_hashes(v, "mov")
+        assert len(out) == 9
+        assert out[8] is None
+
+    def test_compute_from_bytes_sets_phash_quality(self, tmp_path):
+        """Catches: the pipeline's COMPUTE stage dropping the ninth element —
+        the value would then never reach HashResult, and the gate would be a
+        silent no-op (None passes)."""
+        from scanner.hasher import compute_from_bytes, read_for_record
+
+        f = tmp_path / "checker.jpg"
+        _checker_jpeg(f)
+        rec = _record(f, "jpeg")
+        _i, _r, data = read_for_record(0, rec)
+        _j, outcome = compute_from_bytes(0, rec, data)
+        assert outcome.phash_quality is not None
+        assert outcome.phash_quality > 16.0
+
+    def test_run_hash_for_record_sets_phash_quality(self, tmp_path):
+        """Catches: the fused path (run_hash_for_record) dropping the field."""
+        from scanner.hasher import run_hash_for_record
+
+        f = tmp_path / "flat.png"
+        Image.new("RGB", (300, 300), (40, 40, 40)).save(f, "PNG")
+        _i, outcome = run_hash_for_record(0, _record(f, "png"))
+        assert outcome.phash_quality is not None
+        assert outcome.phash_quality < 1.0
 
 
 class TestHashRecipeParity:
