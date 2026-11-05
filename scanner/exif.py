@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 # the buffer fills or at the ``{ready}`` sentinel), so the first line of an
 # ``-execute`` batch can arrive long after the batch started. In practice
 # the timer bounds the longest silent stretch, which can be most of an
-#
 # ``-execute`` call: callers size each call with ``execute_budget()``, which
 # grows with the content of the batch (cost units, not file count), so a
 # slow-but-alive NAS batch is not mistaken for a wedged process. A wedged

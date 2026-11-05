@@ -1374,7 +1374,7 @@ class TestExecuteBudgetPerBatch:
         from scanner import exif
 
         monkeypatch.setattr(exif, "_EXIFTOOL_READ_TIMEOUT_SECONDS", 0.2)
-        monkeypatch.setattr(exif, "_EXIFTOOL_UNIT_SECONDS", 0.05)
+        monkeypatch.setattr(exif, "_EXIFTOOL_UNIT_SECONDS", 0.05, raising=False)
         # The pre-fix code passed no explicit budget: it used the default
         # bound at def time. Scale that default too, so the old path is
         # measured at the same scaled-down timeout.
