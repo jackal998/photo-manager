@@ -547,7 +547,12 @@ def run_pipeline(
         compute_from_bytes,
     )
     import os
-    from scanner.exif import ExiftoolProcess, batch_read_extracts
+    from scanner.exif import (
+        ExiftoolProcess,
+        ExiftoolTimeout,
+        batch_read_extracts,
+    )
+    from scanner.media_extract import MediaExtract
     from scanner.dedup import HashResult, classify
     from scanner.manifest import write_manifest, print_summary
     from scanner.scoring import apply_scoring_to_rows
@@ -733,58 +738,170 @@ def run_pipeline(
                 exif_total[0] += 1
         return outcome
 
-    def _exif_consumer() -> None:
-        """Drain ``exif_queue`` into 500-batches fed to one ExiftoolProcess.
-        Sentinel = ``None``.  Exits early on cancel_token.
-        """
-        try:
-            proc = ExiftoolProcess()
-        except FileNotFoundError:
-            exiftool_missing[0] = True
-            while True:
-                try:
-                    item = exif_queue.get(timeout=0.5)
-                except _queue.Empty:
-                    if cancel_token.is_set():
-                        return
-                    continue
-                if item is None:
-                    return
-            return
-        # #561 — register so the HASH-cancel branch can kill this exiftool.
-        with exif_procs_lock:
-            exif_procs.append(proc)
-        try:
-            with proc as et:
-                batch: list = []
-                while True:
-                    try:
-                        item = exif_queue.get(timeout=0.5)
-                    except _queue.Empty:
-                        if cancel_token.is_set():
-                            return
-                        continue
-                    if item is None:
-                        if batch:
-                            _flush_exif_batch(batch, et)
-                        return
-                    batch.append(item)
-                    if len(batch) >= chunk_size:
-                        _flush_exif_batch(batch, et)
-                        batch = []
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.exception("exiftool consumer crashed: {}", exc)
+    def _advance_exif_progress(n: int) -> None:
+        with exif_done_lock:
+            exif_done[0] += n
+            done_snapshot = exif_done[0]
+        with exif_total_lock:
+            total_snapshot = exif_total[0]
+        _emit_stage(bus, exif_tracker, done_snapshot, total_snapshot)
 
     def _flush_exif_batch(batch: list, et: "ExiftoolProcess") -> None:
         paths = [r.record.path for r in batch]
         chunk_extracts = batch_read_extracts(paths, et, chunk_size=chunk_size)
         extracts.update(chunk_extracts)
-        with exif_done_lock:
-            exif_done[0] += len(batch)
-            done_snapshot = exif_done[0]
-        with exif_total_lock:
-            total_snapshot = exif_total[0]
-        _emit_stage(bus, exif_tracker, done_snapshot, total_snapshot)
+        _advance_exif_progress(len(batch))
+
+    def _record_exif_missing(batch: list, reason: str) -> None:
+        """Give every path of a failed batch a signal-less MediaExtract so its
+        row still reaches the manifest, then advance progress past it."""
+        extracts.update(
+            {
+                r.record.path: MediaExtract(
+                    path=r.record.path,
+                    extracted_by={"exiftool"},
+                    extraction_errors=[reason],
+                )
+                for r in batch
+            }
+        )
+        _advance_exif_progress(len(batch))
+
+    def _rotate_exif(holder: list) -> bool:
+        """Replace the wedged exiftool in ``holder[0]`` with a fresh one and
+        swap it into ``exif_procs``. Returns False (``holder[0]`` -> None) when
+        a fresh process cannot start; the caller then drains without work."""
+        old = holder[0]
+        old.close()
+        with exif_procs_lock:
+            if old in exif_procs:
+                exif_procs.remove(old)
+        try:
+            fresh = ExiftoolProcess()
+        except OSError as exc:
+            logger.error(
+                "exiftool could not be restarted ({}); EXIF is skipped for the"
+                " rest of this consumer",
+                exc,
+            )
+            holder[0] = None
+            return False
+        with exif_procs_lock:
+            exif_procs.append(fresh)
+        fresh.__enter__()  # what ``with proc as et`` did; registered first (#561)
+        holder[0] = fresh
+        return True
+
+    def _short_exif_reason(prefix: str, exc: BaseException) -> str:
+        detail = str(exc).strip() or type(exc).__name__
+        return f"{prefix}: {detail[:160]}"
+
+    def _flush_exif_batch_safe(batch: list, holder: list) -> None:
+        """Flush one batch without letting a wedged exiftool kill the consumer.
+
+        ExiftoolTimeout -> rotate to a fresh process and retry the SAME batch
+        once. If that fails, or any other failure occurs, every path is
+        recorded as exif-missing and the process is rotated, so the consumer
+        keeps draining and producers never block on a full ``exif_queue``.
+        """
+        try:
+            _flush_exif_batch(batch, holder[0])
+            return
+        except ExiftoolTimeout as exc:
+            logger.warning(
+                "exiftool wedged on a {}-file batch ({}); rotating to a fresh"
+                " process and retrying once",
+                len(batch),
+                exc,
+            )
+            reason = _short_exif_reason("exiftool timeout", exc)
+            if not _rotate_exif(holder):
+                _record_exif_missing(batch, reason)
+                return
+            try:
+                _flush_exif_batch(batch, holder[0])
+                return
+            except Exception as retry_exc:  # pylint: disable=broad-exception-caught
+                reason = _short_exif_reason("exiftool timeout on retry", retry_exc)
+                logger.error(
+                    "exiftool retry on a fresh process also failed ({}); recording"
+                    " {} files as exif-missing",
+                    retry_exc,
+                    len(batch),
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            reason = _short_exif_reason("exiftool error", exc)
+            logger.error(
+                "exiftool batch of {} files failed ({}); recording as exif-missing",
+                len(batch),
+                exc,
+            )
+        _record_exif_missing(batch, reason)
+        _rotate_exif(holder)
+
+    def _drain_exif_queue() -> None:
+        """Discard items until the sentinel or cancel, so producers never block."""
+        while True:
+            try:
+                item = exif_queue.get(timeout=0.5)
+            except _queue.Empty:
+                if cancel_token.is_set():
+                    return
+                continue
+            if item is None:
+                return
+
+    def _run_exif_loop(holder: list) -> None:
+        batch: list = []
+        while True:
+            try:
+                item = exif_queue.get(timeout=0.5)
+            except _queue.Empty:
+                if cancel_token.is_set():
+                    return
+                continue
+            if item is None:
+                if batch:
+                    _flush_exif_batch_safe(batch, holder)
+                return
+            batch.append(item)
+            if len(batch) >= chunk_size:
+                _flush_exif_batch_safe(batch, holder)
+                batch = []
+                if holder[0] is None:  # replacement exiftool could not start
+                    _drain_exif_queue()
+                    return
+
+    def _exif_consumer() -> None:
+        """Drain ``exif_queue`` into 500-batches fed to one ExiftoolProcess.
+        Sentinel = ``None``.  Exits early on cancel_token.
+
+        Never exits while producers may still enqueue: a wedged exiftool is
+        rotated (``_flush_exif_batch_safe``). Only the sentinel, cancel, or a
+        replacement that cannot start (drain-and-discard) end the loop.
+        """
+        try:
+            proc = ExiftoolProcess()
+        except OSError as exc:
+            if isinstance(exc, FileNotFoundError):
+                exiftool_missing[0] = True
+            else:
+                logger.error("exiftool could not be started ({}); EXIF skipped", exc)
+            _drain_exif_queue()
+            return
+        # #561 — register so the HASH-cancel branch can kill this exiftool.
+        with exif_procs_lock:
+            exif_procs.append(proc)
+        holder: list = [proc]
+        try:
+            proc.__enter__()  # what ``with proc as et`` did; registered first (#561)
+            _run_exif_loop(holder)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.exception("exiftool consumer crashed: {}", exc)
+            _drain_exif_queue()
+        finally:
+            if holder[0] is not None:
+                holder[0].close()
 
     # #486-PR3 — resolve "auto" to thread|process.
     resolved_pool = config.hash_pool
