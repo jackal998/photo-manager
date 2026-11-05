@@ -18,7 +18,8 @@ code decides it, and which test or scenario pins it.
   - or the literal `none`.
 - Area codes: LOCK (lock gate), DIALOG (dialog dismissal), EXEC (Execute scope),
   SKIP (Skip now), DELETE (delete mechanics), SCAN (scan dialog), SORT (result
-  sorting), LANG (language switch), LAYOUT (persisted widths and drags).
+  sorting), LANG (language switch), LAYOUT (persisted widths and drags), LOG
+  (decision log).
 
 ## LOCK
 
@@ -160,6 +161,15 @@ code decides it, and which test or scenario pins it.
 - **Rule:** Choosing a language in any language control saves `ui.locale` as the server setting and re-renders the interface in that language.
 - **Owning code:** `frontend/src/i18n/useI18nStore.ts::setLocale`, `frontend/src/components/MenuBar.tsx::MenuBar`
 - **Pins:** `qa/web/scenarios/s22_language_switch.py`
+- **Status:** pinned
+
+## LOG
+
+### R-LOG-1 — Every guarded write to a row's decision, lock or outcome is recorded once per changed row
+
+- **Rule:** Each write that changes a manifest row's decision, lock or outcome (a decision write, a lock toggle, an outcome transition, an Execute delete, a scan-time auto-select, a skip-directory reconcile) appends one decision-log row per changed row, in the same transaction as the write. A write the guard refused appends nothing and rolls back with its lock; a write that left a row's values unchanged appends nothing for it. The log is append-only: a trigger refuses every UPDATE and DELETE of a log row. A rescan carries the existing log forward, with each row's original id and timestamp. The log has no route or view yet; it is read through `ManifestRepository.decision_log`.
+- **Owning code:** `infrastructure/decision_log.py::append_changes`, `infrastructure/manifest_repository.py::ManifestRepository.write_txn`, `infrastructure/manifest_repository.py::ManifestTxn.write_decisions`, `infrastructure/manifest_repository.py::ManifestTxn.transition`, `scanner/manifest.py::write_manifest`
+- **Pins:** `tests/test_decision_log.py::TestDecisionWrites::test_refused_locked_write_leaves_no_log_row`, `tests/test_decision_log.py::TestDecisionWrites::test_guarded_update_skip_logs_unlocked_peer_only`, `tests/test_decision_log.py::TestOutcomeVerbs::test_each_outcome_verb_logs_one_row_with_its_verb`, `tests/test_decision_log.py::TestOutcomeVerbs::test_failing_log_insert_rolls_back_the_outcome_write`, `tests/test_decision_log.py::TestRescan::test_rescan_to_same_output_carries_previous_log_rows`, `tests/test_source_probes.py::test_probe_decision_log_writes_go_through_the_chokepoint`
 - **Status:** pinned
 
 ## LAYOUT

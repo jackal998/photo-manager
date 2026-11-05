@@ -196,7 +196,7 @@ class TestWriteTxn:
     def test_load_inside_write_txn_raises_at_once(self, tmp_path):
         manifest = _make_manifest(tmp_path, _visible_pair())
         repo = ManifestRepository()
-        with repo.write_txn(str(manifest)):
+        with repo.write_txn(str(manifest), verb="set_decision"):
             started = time.monotonic()
             with pytest.raises(RuntimeError):
                 list(repo.load(str(manifest)))  # load() is a generator
@@ -205,7 +205,7 @@ class TestWriteTxn:
     def test_write_txn_auto_migrates_pre_outcome_manifest(self, tmp_path):
         manifest = _make_pre_outcome(tmp_path)
         repo = ManifestRepository()
-        with repo.write_txn(str(manifest)) as tx:
+        with repo.write_txn(str(manifest), verb="set_decision") as tx:
             tx.write_decisions(
                 [mr.DecisionWrite(path="/photos/a.jpg", decision="delete")],
                 confirmed=frozenset(),

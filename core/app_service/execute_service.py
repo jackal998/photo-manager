@@ -169,12 +169,16 @@ def _transition_outcome(
     *,
     from_outcome: str,
     to_outcome: str,
+    verb: str,
     named: Collection[str] | None = None,
 ) -> int:
-    """Plan, refuse and write one outcome transition in one IMMEDIATE txn (A4)."""
+    """Plan, refuse and write one outcome transition in one IMMEDIATE txn (A4).
+
+    ``verb`` is the decision-log verb for the write (WP-D), required.
+    """
     if not paths:
         return 0
-    with repo.write_txn(manifest_path) as tx:
+    with repo.write_txn(manifest_path, verb=verb) as tx:
         return apply_gated_transition(
             tx,
             paths,
@@ -211,7 +215,7 @@ def _gate_execute(
     """Execute's up-front gate: refuse locked rows before any file is touched (A4)."""
     if not paths:
         return
-    with repo.write_txn(manifest_path) as tx:
+    with repo.write_txn(manifest_path, verb="execute_gate") as tx:
         refuse_gated_outcome(tx, paths, verdict, outcome="", named=named)
 
 
@@ -302,7 +306,7 @@ def execute_decisions(
     db_write_failed: list[str] = []
 
     confirmed = frozenset(named or ())
-    with repo.delete_session(manifest_path) as session:
+    with repo.delete_session(manifest_path, verb="execute_delete") as session:
         for path in safe_delete_paths:
             if not os.path.exists(path):
                 missing.append(path)
@@ -355,7 +359,7 @@ def execute_decisions(
         try:
             _transition_outcome(
                 repo, manifest_path, safe_ignore_paths, verdict,
-                from_outcome="", to_outcome="ignored", named=named,
+                from_outcome="", to_outcome="ignored", named=named, verb="execute_skip",
             )
             ignored = safe_ignore_paths
         except Exception as exc:
@@ -440,6 +444,7 @@ def remove_from_review(
     written = _transition_outcome(
         repo, manifest_path, safe_paths, verdict,
         from_outcome="", to_outcome="ignored", named=named,
+        verb="skip_now",
     )
 
     from core.app_service.review_service import load_review
@@ -505,7 +510,7 @@ def restore_to_review(
     verdict, named = _verdict(confirmed_locked)
     restored = _transition_outcome(
         repo, manifest_path, safe_paths, verdict,
-        from_outcome="ignored", to_outcome="", named=named,
+        from_outcome="ignored", to_outcome="", named=named, verb="restore",
     )
 
     from core.app_service.review_service import load_review
@@ -683,6 +688,7 @@ def prune_singletons(
     _transition_outcome(
         repo, manifest_path, to_prune, verdict,
         from_outcome="", to_outcome="ignored", named=named,
+        verb="prune",
     )
 
     from core.app_service.review_service import load_review

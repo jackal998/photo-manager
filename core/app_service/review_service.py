@@ -167,7 +167,7 @@ def set_decisions(
         DecisionWrite(path=p, decision=v, lock_after=locks.get(p))
         for p, v in decisions.items()
     ]
-    with ManifestRepository().write_txn(manifest_path) as tx:
+    with ManifestRepository().write_txn(manifest_path, verb="set_decision") as tx:
         return len(apply_gated_writes(tx, writes, verdict, named=named))
 
 
@@ -188,5 +188,5 @@ def set_locks(manifest_path: str, locks: dict[str, bool]) -> int:
         FileNotFoundError: If manifest_path does not exist on disk.
     """
     _require_manifest(manifest_path)
-    ManifestRepository().batch_update_lock_state(manifest_path, locks)
+    ManifestRepository().batch_update_lock_state(manifest_path, locks, verb="lock_toggle")
     return len(locks)

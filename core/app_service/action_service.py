@@ -199,10 +199,10 @@ def bulk_decide(
     # refuses with 409 (the primitive counts matched_total = len(safe)).
     repo = ManifestRepository()
     if kind in ("lock", "unlock"):
-        repo.batch_update_lock_state(manifest_path, {p: lock_value for p in safe})
+        repo.batch_update_lock_state(manifest_path, {p: lock_value for p in safe}, verb="bulk_lock")
     else:
         writes = [DecisionWrite(path=p, decision=decision_value) for p in safe]
-        with repo.write_txn(manifest_path) as tx:
+        with repo.write_txn(manifest_path, verb="bulk_decide") as tx:
             safe = apply_gated_writes(tx, writes, verdict, named=named)
 
     # Reload for the fresh post-mutation serialisation.
@@ -332,7 +332,7 @@ def apply_best_copy(
         for p, v in decisions.items()
     ]
     repo = ManifestRepository()
-    with repo.write_txn(manifest_path) as tx:
+    with repo.write_txn(manifest_path, verb="apply_best_copy") as tx:
         written = apply_gated_writes(tx, writes, verdict, named=named)
 
     vm2 = _load_vm(manifest_path)

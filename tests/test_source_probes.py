@@ -1159,7 +1159,8 @@ _ALLOWED_SQL_CONSTANTS = frozenset({
 _ALLOWED_CONSTANT_USERS: dict[str, frozenset[tuple[str, str]]] = {
     "_UPDATE_DECISION_SQL": frozenset({("scanner.manifest", "write_manifest")}),
     "_UPDATE_LOCK_SQL": frozenset({
-        ("infrastructure.manifest_repository", "ManifestRepository.batch_update_lock_state"),
+        # WP-D: the lock toggle now runs through ManifestTxn.set_locks (logged).
+        ("infrastructure.manifest_repository", "ManifestTxn.set_locks"),
         ("scanner.manifest", "write_manifest"),
     }),
 }
@@ -1524,3 +1525,123 @@ def test_probe_fails_closed_when_allow_list_entries_are_gone():
 def test_probe_fails_closed_when_it_sees_no_update_sites():
     _, update_sites = _probe_violations({"fixture.empty": "x = 1\n"})
     assert update_sites == 0
+
+
+# ---------------------------------------------------------------------------
+# WP-D — decision log: every manifest write goes through the logged chokepoint
+# ---------------------------------------------------------------------------
+# A write that skips the chokepoint is an unlogged write, so the log would
+# silently miss it. Two bypasses are forbidden outside the write homes:
+#   * a call on the repository to one of the dead writers (no logging, no
+#     guard; production never called them, only tests did). A bare-name call
+#     to a service function of the same name is the live service: not flagged.
+#   * an UPDATE of migration_manifest. Its only homes are the chokepoint in
+#     infrastructure/manifest_repository.py and the scan writer in
+#     scanner/manifest.py, where the diff-after-snapshot logging lives.
+
+_DEAD_REPO_WRITERS = frozenset({
+    "finalize_outcome",
+    "remove_from_review",
+    "restore_to_review",
+    "update_decision",
+    "batch_update_decisions",
+    "batch_update_decisions_and_lock",
+})
+
+_LOG_BYPASS_UPDATE_HOMES = frozenset({
+    "infrastructure/manifest_repository.py",
+    "scanner/manifest.py",
+})
+
+_LOG_BYPASS_SCAN_ROOTS = [REPO / "core", REPO / "scanner", REPO / "infrastructure", REPO / "app"]
+
+
+def _log_bypass_findings(rel: str, src: str) -> list[tuple[int, str]]:
+    """``(line_no, what)`` for each dead-writer call or out-of-home UPDATE in ``src``."""
+    findings: list[tuple[int, str]] = []
+    for node in ast.walk(ast.parse(src)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _DEAD_REPO_WRITERS
+        ):
+            findings.append((node.lineno, f".{node.func.attr}() on the repository"))
+        if rel in _LOG_BYPASS_UPDATE_HOMES:
+            continue
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            text = node.value
+        elif isinstance(node, ast.JoinedStr):
+            text = _joined_text(node)
+        else:
+            continue
+        if _UPDATE_HEAD.search(re.sub(r"\s+", " ", text).lower()):
+            findings.append((node.lineno, "UPDATE migration_manifest outside its write homes"))
+    return findings
+
+
+def _log_bypass_violations(modules: dict[str, str]) -> list[str]:
+    return [
+        f"{rel}:{lineno}: {what}"
+        for rel, src in modules.items()
+        for lineno, what in _log_bypass_findings(rel, src)
+    ]
+
+
+def _current_tree_modules(roots: list[Path]) -> dict[str, str]:
+    return {
+        py.relative_to(REPO).as_posix(): py.read_text(encoding="utf-8")
+        for root in roots
+        if root.exists()
+        for py in root.rglob("*.py")
+    }
+
+
+def test_probe_decision_log_writes_go_through_the_chokepoint():
+    """WP-D forward-defensive: no production module calls a dead repository
+    writer or runs UPDATE migration_manifest outside the two write homes."""
+    leaks = _log_bypass_violations(_current_tree_modules(_LOG_BYPASS_SCAN_ROOTS))
+    assert not leaks, (
+        "A manifest write bypasses the decision log. Route it through "
+        "ManifestRepository.write_txn(verb=...) so ManifestTxn logs it. Leaks: "
+        + "; ".join(leaks)
+    )
+
+
+_LOG_BYPASS_MUST_FAIL_FIXTURES: dict[str, str] = {
+    "dead_writer_on_repository": (
+        "def f(repo):\n"
+        "    repo.remove_from_review('m', ['a'])\n"
+    ),
+    "update_outside_write_homes": (
+        "SQL = 'UPDATE migration_manifest SET is_locked = 0 WHERE id = 1'\n"
+    ),
+    "update_split_across_lines": (
+        "SQL = (\n"
+        "    'UPDATE\\n    migration_manifest SET outcome = ?'\n"
+        ")\n"
+    ),
+}
+
+_LOG_BYPASS_MUST_PASS_FIXTURES: dict[str, str] = {
+    "live_service_function_call": (
+        "from core.app_service.execute_service import remove_from_review\n"
+        "\n"
+        "def f():\n"
+        "    return remove_from_review('m', ['a'])\n"
+    ),
+    "log_table_insert_is_not_a_manifest_update": (
+        "SQL = 'INSERT INTO decision_log (ts) VALUES (?)'\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_LOG_BYPASS_MUST_FAIL_FIXTURES))
+def test_probe_decision_log_bypass_must_fail(name):
+    violations = _log_bypass_violations({"fixture.bad": _LOG_BYPASS_MUST_FAIL_FIXTURES[name]})
+    assert violations, f"probe missed the must-fail fixture {name!r}"
+
+
+@pytest.mark.parametrize("name", sorted(_LOG_BYPASS_MUST_PASS_FIXTURES))
+def test_probe_decision_log_bypass_must_pass(name):
+    violations = _log_bypass_violations({"fixture.ok": _LOG_BYPASS_MUST_PASS_FIXTURES[name]})
+    assert not violations, f"probe flagged the must-pass fixture {name!r}: {violations}"

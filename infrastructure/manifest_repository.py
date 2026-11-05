@@ -33,7 +33,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
-from collections.abc import Collection, Iterable, Iterator
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +42,16 @@ from loguru import logger
 
 from core.app_service.lock_gate import LockedRowsError
 from core.models import PhotoGroup, PhotoRecord
+from infrastructure.decision_log import (
+    DecisionLogEntry,
+    LogContext,
+    append_changes,
+    ensure_decision_log,
+    make_context,
+    snapshot_ids,
+    snapshot_paths,
+)
+from infrastructure.decision_log import read as read_decision_log
 from infrastructure.utils import get_exif_datetime_original, get_filesystem_creation_datetime
 
 
@@ -386,6 +396,7 @@ def migrate_manifest_schema(conn: sqlite3.Connection) -> None:
             if "duplicate column name" not in str(exc).lower():
                 raise
     _drop_move_dest_path(conn)
+    ensure_decision_log(conn)
 
 
 def _photo_record(
@@ -531,8 +542,9 @@ class DecisionWrite:
 class ManifestTxn:
     """The open IMMEDIATE transaction handed out by ``write_txn``."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, ctx: LogContext) -> None:
         self._conn = conn
+        self._ctx = ctx
 
     def _query_locked(self, outcome: str | None) -> set[str]:
         sql = "SELECT source_path FROM migration_manifest WHERE is_locked = 1"
@@ -588,7 +600,21 @@ class ManifestTxn:
             }
             for w in batch
         ]
-        return self._conn.executemany(_WRITE_DECISION_SQL, params).rowcount
+        snapshot_paths(self._conn, [w.path for w in batch], confirmed_set)
+        changed = self._conn.executemany(_WRITE_DECISION_SQL, params).rowcount
+        append_changes(self._conn, self._ctx)
+        return changed
+
+    def set_locks(self, lock_states: Mapping[str, bool]) -> None:
+        """Set ``is_locked`` for each path, logging only the rows that changed."""
+        if not lock_states:
+            return
+        snapshot_paths(self._conn, lock_states, ())
+        self._conn.executemany(
+            _UPDATE_LOCK_SQL,
+            [(1 if v else 0, k) for k, v in lock_states.items()],
+        )
+        append_changes(self._conn, self._ctx)
 
     def transition(
         self,
@@ -623,14 +649,19 @@ class ManifestTxn:
             }
             for path in batch
         ]
-        return self._conn.executemany(_TRANSITION_SQL, params).rowcount
+        snapshot_paths(self._conn, batch, confirmed_set)
+        changed = self._conn.executemany(_TRANSITION_SQL, params).rowcount
+        append_changes(self._conn, self._ctx)
+        return changed
 
     def record_deleted(self, path: str) -> None:
         """Record that Execute deleted ``path``: outcome 'deleted', lock cleared.
 
         Called after the file is gone, so it is a fact, not a guarded write.
         """
+        snapshot_paths(self._conn, [path], ())
         self._conn.execute(_RECORD_DELETED_SQL, (path,))
+        append_changes(self._conn, self._ctx)
 
 
 class DeleteSession:
@@ -641,8 +672,9 @@ class DeleteSession:
     same connection. Both run around one file call.
     """
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, verb: str) -> None:
         self._conn = conn
+        self._verb = verb
 
     def row_states(self, path: str) -> list[tuple[int, str]]:
         """``(is_locked, outcome)`` for every row with this source path."""
@@ -650,13 +682,37 @@ class DeleteSession:
 
     def record_deleted(self, path: str) -> None:
         """Record a successful delete in one IMMEDIATE txn on this connection."""
+        ctx = make_context(verb=self._verb)
         self._conn.execute("BEGIN IMMEDIATE")
         try:
-            ManifestTxn(self._conn).record_deleted(path)
+            ensure_decision_log(self._conn)
+            ManifestTxn(self._conn, ctx).record_deleted(path)
         except BaseException:
             self._conn.rollback()
             raise
         self._conn.commit()
+
+
+def _dismiss_in_txn(conn: sqlite3.Connection, row_ids: list[int]) -> int:
+    """#821 / WP-D — the reconcile's dismissal in one IMMEDIATE transaction.
+
+    Snapshot, the unchanged guarded UPDATE, then log only the rows it moved.
+    Any failure rolls the whole txn back, so the rows stay live.
+    """
+    ctx = make_context(verb="reconcile_skip_directory", source="system")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        ensure_decision_log(conn)
+        snapshot_ids(conn, row_ids)
+        dismissed = conn.executemany(
+            _RECONCILE_DISMISS_SQL, [(rid,) for rid in row_ids]
+        ).rowcount
+        append_changes(conn, ctx)
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+    return dismissed
 
 
 class ManifestRepository:
@@ -696,14 +752,21 @@ class ManifestRepository:
             conn.close()
 
     @contextmanager
-    def write_txn(self, manifest_path: str) -> Iterator[ManifestTxn]:
+    def write_txn(
+        self, manifest_path: str, *, verb: str, source: str = "user"
+    ) -> Iterator[ManifestTxn]:
         """Open one IMMEDIATE transaction on the manifest (A3, design 2.3).
 
         ``ensure_schema`` runs first (auto-migrate, BE-18); then one connection
         takes the write lock with BEGIN IMMEDIATE. Commit on normal exit,
         rollback on any exception. Until exit, this thread may not load or
         migrate the same manifest: such a call raises at once (2.4).
+
+        ``verb`` names the write in the decision log (WP-D) and is required, so
+        a new caller cannot write unlogged by omission. It is checked before
+        anything touches the file.
         """
+        ctx = make_context(verb=verb, source=source)
         self.ensure_schema(manifest_path)
         key = _txn_key(manifest_path)
         conn = _connect(manifest_path)
@@ -712,7 +775,8 @@ class ManifestRepository:
         try:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                yield ManifestTxn(conn)
+                ensure_decision_log(conn)
+                yield ManifestTxn(conn, ctx)
             except BaseException:
                 conn.rollback()
                 raise
@@ -722,18 +786,44 @@ class ManifestRepository:
             conn.close()
 
     @contextmanager
-    def delete_session(self, manifest_path: str) -> Iterator[DeleteSession]:
+    def delete_session(
+        self, manifest_path: str, *, verb: str
+    ) -> Iterator[DeleteSession]:
         """Open one autocommit connection for Execute's per-file loop (A9).
 
         Each row is re-checked with a plain read before its file call, and the
         outcome is written on this same connection afterwards. No transaction
         is open between those steps, so a PATCH is never held up by the read.
+        ``verb`` is the decision-log verb for each recorded delete.
         """
+        make_context(verb=verb)  # validate before the file is touched
         self.ensure_schema(manifest_path)
         conn = _connect(manifest_path)
         conn.isolation_level = None  # autocommit reads; BEGIN is explicit
         try:
-            yield DeleteSession(conn)
+            yield DeleteSession(conn, verb)
+        finally:
+            conn.close()
+
+    def decision_log(
+        self,
+        manifest_path: str,
+        *,
+        source_path: str | None = None,
+        limit: int = 500,
+    ) -> list[DecisionLogEntry]:
+        """Newest-first decision-log entries, optionally for one source_path (WP-D).
+
+        Reads only: the table is created on first use, so an older manifest
+        answers with an empty list.
+        """
+        if not 1 <= limit <= 10000:
+            raise ValueError(f"limit must be between 1 and 10000, got {limit}")
+        _guard_no_open_txn(manifest_path)
+        self.ensure_schema(manifest_path)
+        conn = _connect(manifest_path)
+        try:
+            return read_decision_log(conn, source_path=source_path, limit=limit)
         finally:
             conn.close()
 
@@ -855,11 +945,8 @@ class ManifestRepository:
         try:
             conn = _connect(manifest_path)
             try:
-                cur = conn.executemany(
-                    _RECONCILE_DISMISS_SQL, [(rid,) for rid in row_ids]
-                )
-                dismissed = cur.rowcount
-                conn.commit()
+                conn.isolation_level = None  # BEGIN is issued explicitly
+                dismissed = _dismiss_in_txn(conn, row_ids)
             finally:
                 conn.close()
         except sqlite3.Error as exc:
@@ -985,24 +1072,20 @@ class ManifestRepository:
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)
 
-    def batch_update_lock_state(self, manifest_path: str, lock_states: dict[str, bool]) -> None:
+    def batch_update_lock_state(
+        self, manifest_path: str, lock_states: dict[str, bool], *, verb: str
+    ) -> None:
         """Update is_locked for multiple rows in a single transaction.
 
         Lock state lives on its own column so it persists independently of
         ``user_decision`` (locking pins the current decision; the two are
-        orthogonal at the schema level — see photo-manager#164).
+        orthogonal at the schema level — see photo-manager#164). Runs through
+        ``write_txn`` so the change is logged under ``verb`` (WP-D).
         """
         if not lock_states:
             return
-        conn = _connect(manifest_path)
-        try:
-            conn.executemany(
-                _UPDATE_LOCK_SQL,
-                [(1 if v else 0, k) for k, v in lock_states.items()],
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        with self.write_txn(manifest_path, verb=verb) as tx:
+            tx.set_locks(lock_states)
 
     def rescore(
         self,

@@ -228,7 +228,7 @@ class TestSkipDirectoryReconcile:
         _write_manifest(db, [(str(trashed), "g1"), (str(keep), "g1")])
 
         repo = ManifestRepository()
-        with repo.write_txn(str(db)) as txn:
+        with repo.write_txn(str(db), verb="set_decision") as txn:
             txn.record_deleted(str(trashed))
         assert repo.reconcile_skip_directory_rows(str(db)) == 0
         assert _outcomes(db)[str(trashed)] == "deleted"
@@ -340,7 +340,7 @@ class TestSkipDirectoryReconcile:
         candidates = [ids[str(raced)], ids[str(other)]]   # what the SELECT saw
 
         # …the window: an execute batch trashes one of them for real.
-        with repo.write_txn(str(db)) as txn:
+        with repo.write_txn(str(db), verb="set_decision") as txn:
             txn.record_deleted(str(raced))
 
         dismissed = repo._dismiss_skipped_rows(str(db), candidates)
