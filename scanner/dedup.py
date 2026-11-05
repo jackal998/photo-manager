@@ -37,7 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 try:
     import imagehash
@@ -57,6 +57,12 @@ FORMAT_PRIORITY = {"heic": 0, "jpeg": 1, "png": 2, "gif": 3, "webp": 4, "raw": -
 # raw is intentionally -1 (not comparable with lossy — RAW+lossy always co-exist)
 
 LOSSY_TYPES = {"jpeg", "heic", "png", "gif", "webp"}
+
+# A union-find edge: (path_a, path_b, confidence), confidence "high" or "low".
+# "high" edges merge groups. "low" edges are hints: they may attach a lone file
+# to a group, but never merge two groups that already have two or more members
+# (see ``_assign_group_ids``).
+Edge = tuple[str, str, str]
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -397,7 +403,12 @@ def classify(
 
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
     # pHash transitive edges (#538 near-dup, #824 complementary).
-    _assign_group_ids(rows, pair_edges + phash_edges)
+    # Live Photo pair edges are certain (high); pHash edges carry their own.
+    taken, skipped = _assign_group_ids(
+        rows, [(a, b, "high") for a, b in pair_edges] + phash_edges
+    )
+    _mark_isolated_hints(rows, skipped)
+    _mark_taken_hints(rows, taken)
 
     return list(rows.values())
 
@@ -526,7 +537,7 @@ def _classify_phash(
     min_phash_dimension: int = 128,
     bktree_min_candidates: int | None = None,
     min_phash_quality: float = 16.0,
-) -> list[tuple[str, str]]:
+) -> list[Edge]:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE, and
     return the pHash union-find edges — near-duplicate (#538) plus
     complementary exact-bucket (#824).
@@ -559,7 +570,7 @@ def _classify_phash(
     # Exact pHash match (hamming == 0) → FORMAT_DUPLICATE or complementary
     # RAW+lossy. Complementary buckets take no dedup decision but still return
     # their union-find edges (#824).
-    exact_edges: list[tuple[str, str]] = []
+    exact_edges: list[Edge] = []
     for group in by_phash.values():
         if len(group) < 2:
             continue
@@ -582,7 +593,7 @@ def _classify_format_group(
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
-) -> list[tuple[str, str]]:
+) -> list[Edge]:
     """Within a pHash==0 group, apply RAW+lossy exception and format priority.
 
     Returns the union-find edges the bucket contributes. The all-lossy path
@@ -673,34 +684,54 @@ def _complementary_edges(
     group: list[HashResult],
     mean_color_threshold: int,
     dhash_threshold: int,
-) -> list[tuple[str, str]]:
+) -> list[Edge]:
     """#824 — union-find edges for an exact-pHash bucket that takes no dedup
-    decision (RAW+lossy complementary, or all-RAW).
+    decision (RAW+lossy complementary, or all-RAW). The bucket is split by shot
+    time, the same way the all-lossy and near-dup paths decide a pair.
 
-    A star from the lexicographically smallest member to every peer: one
-    connected component, and an anchor that cannot depend on the order the
-    hasher finished files in — the same lex-min rule ``_assign_group_ids``
-    uses, so the rescore determinism invariant is preserved by construction.
+    Members are visited in path order, dated before undated. Each joins the first cluster
+    whose anchor it agrees with on shot time (``_demotion_note`` is None; an
+    unknown time counts as agree, as before), else it starts a new cluster.
+    A member is tied to its cluster anchor by a ``high`` edge. Between clusters
+    a ``low`` edge runs from each later anchor to the first anchor, so
+    disagreeing captures are only a hint, never a certain group.
 
-    The same two precision gates the all-lossy path applies decide each spoke,
-    because an edge asserts "these are the same shot" just as an ``EXACT`` row
-    does: #462's mean-color check (skipped when either side lacks a mean color
-    — RAW thumbnails routinely do) and #524's dHash vote, where a definite
-    ``disagree`` means the pHash match is a false positive and there is no
-    pair to draw. No row is written and no action changes.
+    Both gates decide each edge, because an edge asserts "same shot": #462's
+    mean-colour check (skipped when either side lacks a mean colour) and #524's
+    dHash vote, where a definite ``disagree`` means no pair to draw. No row is
+    written and no action changes.
     """
-    ordered = sorted(group, key=lambda h: str(h.record.path))
-    anchor = ordered[0]
-    anchor_key = str(anchor.record.path)
-    edges: list[tuple[str, str]] = []
-    for peer in ordered[1:]:
-        if mean_color_threshold > 0 and anchor.mean_color and peer.mean_color:
-            if _mean_color_distance(anchor.mean_color, peer.mean_color) > mean_color_threshold:
-                continue
-        if _dhash_vote(anchor, peer, dhash_threshold) == "disagree":
-            continue
-        edges.append((anchor_key, str(peer.record.path)))
+    # Dated members first: an undated member (unknown time, so it "agrees" with
+    # anything) must never become an anchor while a dated member exists, or it
+    # would pull every moment's dated members into its cluster.
+    ordered = sorted(group, key=lambda h: (h.exif_date is None, str(h.record.path)))
+    anchors: list[HashResult] = []
+    edges: list[Edge] = []
+    for member in ordered:
+        anchor = next(
+            (a for a in anchors if _demotion_note(a, member) is None), None
+        )
+        if anchor is None:
+            anchors.append(member)
+        elif _gates_pass(anchor, member, mean_color_threshold, dhash_threshold):
+            edges.append((str(anchor.record.path), str(member.record.path), "high"))
+    for other in anchors[1:]:
+        if _gates_pass(anchors[0], other, mean_color_threshold, dhash_threshold):
+            edges.append((str(anchors[0].record.path), str(other.record.path), "low"))
     return edges
+
+
+def _gates_pass(
+    a: HashResult,
+    b: HashResult,
+    mean_color_threshold: int,
+    dhash_threshold: int,
+) -> bool:
+    """#462 mean-colour and #524 dHash gates for one exact-bucket edge."""
+    if mean_color_threshold > 0 and a.mean_color and b.mean_color:
+        if _mean_color_distance(a.mean_color, b.mean_color) > mean_color_threshold:
+            return False
+    return _dhash_vote(a, b, dhash_threshold) != "disagree"
 
 
 # ---------------------------------------------------------------------------
@@ -722,8 +753,15 @@ def _complementary_edges(
 # "5": the pHash-quality (contrast) gate (min_phash_quality, 16.0) excludes
 # flat/near-black frames whose degenerate pHash bridged unrelated photos
 # (dedup-core research 2026-11-05 class A). Verdict moves on those files.
+# "6": low-confidence edges are hints (dedup-core research 2026-11-05 §5.1 T3).
+# They never merge two multi-member groups, so the torii moments that hash
+# alike stay separate. A lone file attaches only to a high-cored group (one
+# that holds a high edge), and two lone files may pair up; a low-only group
+# never grows, so hints do not chain. A row left out of every group by a
+# skipped hint becomes undecided (UNDATED without a shot date) with the
+# marker "hint only (not grouped): " in its reason.
 # "4" is taken by a separate branch's confidence gates; merged in order.
-GROUPING_STRATEGY_VERSION = "5"
+GROUPING_STRATEGY_VERSION = "6"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -851,9 +889,9 @@ def _classify_near_duplicates(
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
     bktree_min_candidates: int | None = None,
-) -> list[tuple[str, str]]:
+) -> list[Edge]:
     """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE,
-    and return their ``(path_a, path_b)`` union-find edges.
+    and return their ``(path_a, path_b, confidence)`` union-find edges.
 
     #538 — edge collection is DECOUPLED from classification. Every pair that
     passes the distance + mean-color (#462) + dHash (#524) gates yields a
@@ -867,7 +905,12 @@ def _classify_near_duplicates(
     if not _IMAGEHASH_AVAILABLE:
         return []
 
-    unclassified = [hr for hr in candidates if str(hr.record.path) not in rows]
+    # GROUPING 6: iterate in path order, so the first pair that flags a row (and
+    # therefore its duplicate_of / reason) does not depend on record order.
+    unclassified = sorted(
+        (hr for hr in candidates if str(hr.record.path) not in rows),
+        key=lambda hr: str(hr.record.path),
+    )
     hashes = [(hr, imagehash.hex_to_hash(hr.phash)) for hr in unclassified if hr.phash]
 
     # #526 — candidate generation via BK-tree (large N) or brute force (small
@@ -879,7 +922,7 @@ def _classify_near_duplicates(
     int_hashes = [int(hr.phash, 16) for hr, _ in hashes]
     neighbors = _near_dup_neighbors(int_hashes, threshold, bktree_min_candidates)
 
-    edges: list[tuple[str, str]] = []
+    edges: list[Edge] = []
     for i, (hr_a, hash_a) in enumerate(hashes):
         # hr_a may already be classified — it still serves as a comparator so
         # transitively-similar files connect into one component.
@@ -906,7 +949,12 @@ def _classify_near_duplicates(
             # only behavioural change: the edge stands even when hr_b is already
             # classified (exactly the case the old top-of-loop guard dropped →
             # orphan). Redundant edges are union-find no-ops.
-            edges.append((str(hr_a.record.path), str(hr_b.record.path)))
+            # dedup-core research 2026-11-05 class B — shot-time or PNG-pair
+            # demotion caps confidence at "low" whatever the dHash said. The
+            # edge and the row share this one verdict.
+            note = _demotion_note(hr_a, hr_b)
+            confidence = _edge_confidence(vote, note)
+            edges.append((str(hr_a.record.path), str(hr_b.record.path), confidence))
             # Classification (unchanged from pre-#538): flag the lower-priority
             # side, but only when hr_b is still unclassified — so the
             # REVIEW_DUPLICATE / match_confidence assignment is byte-identical.
@@ -922,9 +970,6 @@ def _classify_near_duplicates(
             flagged = ordered[1]
             flagged_key = str(flagged.record.path)
             if flagged_key not in rows:
-                # dedup-core research 2026-11-05 class B — shot-time or PNG-pair
-                # demotion caps confidence at "low" whatever the dHash said.
-                note = _demotion_note(hr_a, hr_b)
                 suffix = f"; {note}" if note is not None else ""
                 rows[flagged_key] = _make_row(
                     flagged,
@@ -933,9 +978,15 @@ def _classify_near_duplicates(
                     hamming=distance,
                     reason=f"near-duplicate (hamming={distance}) of "
                            f"{ordered[0].record.path.name}{suffix}",
-                    match_confidence="high" if vote == "agree" and note is None else "low",
+                    match_confidence=confidence,
                 )
     return edges
+
+
+def _edge_confidence(vote: str, note: Optional[str]) -> str:
+    """Confidence of a pHash near-dup pair: ``high`` only when dHash agrees
+    and no demotion note (shot-time / both-PNG, class B) applies."""
+    return "high" if vote == "agree" and note is None else "low"
 
 
 def _collect_pair_edges(
@@ -1011,25 +1062,140 @@ def _collect_pair_edges(
     return edges
 
 
+def _row_edges(rows: dict[str, ManifestRow]) -> list[Edge]:
+    """``duplicate_of`` links as edges. A link's confidence is its row's
+    ``match_confidence``: a ``low`` link is a hint, everything else is high."""
+    return [
+        (row.source_path, row.duplicate_of,
+         "low" if row.match_confidence == "low" else "high")
+        for row in rows.values() if row.duplicate_of
+    ]
+
+
+HINT_ONLY_PREFIX = "hint only (not grouped): "
+
+
+def _mark_isolated_hints(
+    rows: dict[str, ManifestRow], skipped: list[tuple[str, str]]
+) -> None:
+    """GROUPING 6 — a row left out of every group by a skipped low hint must
+    not carry a dedup action: the review UI groups rows by ``group_id``, and a
+    REVIEW row with no group would be a duplicate of nobody. A flagged row goes
+    back to undecided (UNDATED when it has no shot date, as in Pass 3) and keeps
+    its ``duplicate_of``. A row that was never flagged (its hint was the
+    partner's link) gets the partner as ``duplicate_of`` and ``low`` confidence,
+    so no lone file is silently orphaned. Every such reason carries the marker.
+    A row still in a group through another edge is untouched."""
+    partner_of: dict[str, str] = {}
+    for a, b in skipped:
+        partner_of.setdefault(a, b)
+        partner_of.setdefault(b, a)
+    for row in rows.values():
+        if row.group_id is not None:
+            continue
+        if row.duplicate_of:
+            row.action = "" if row.shot_date is not None else "UNDATED"
+            row.reason = HINT_ONLY_PREFIX + row.reason
+        elif row.source_path in partner_of:
+            partner = partner_of[row.source_path]
+            row.duplicate_of = partner
+            row.match_confidence = "low"
+            # Keep the row's own reason (e.g. "no EXIF DateTimeOriginal") and
+            # append the marker, so an UNDATED reason is not overwritten.
+            hint = HINT_ONLY_PREFIX + f"low-confidence match with {Path(partner).name}"
+            row.reason = f"{row.reason}; {hint}" if row.reason else hint
+
+
+def _mark_taken_hints(
+    rows: dict[str, ManifestRow], taken: list[tuple[str, str]]
+) -> None:
+    """A lone row joined by a taken low edge, that carries no dedup decision
+    (undecided, or UNDATED), is marked low and names its partner. Without this
+    it would read as "unique" with no sign it was grouped on a hint."""
+    partner_of: dict[str, str] = {}
+    for lone, partner in taken:
+        partner_of.setdefault(lone, partner)
+    for row in rows.values():
+        partner = partner_of.get(row.source_path)
+        if partner is None or row.duplicate_of or row.action not in ("", "UNDATED"):
+            continue
+        row.match_confidence = "low"
+        row.reason = f"{row.reason}; hint: low-confidence match with {Path(partner).name}"
+
+
+def _hint_may_join(
+    a: str,
+    b: str,
+    joined: set[str],
+    high_members: set[str],
+) -> bool:
+    """Whether a low hint ``a``-``b`` may union. Two lone files pair up. A lone
+    file attaches only to a high member (a node a high edge touched), so a leaf
+    attached by a low edge can never anchor the next one: hints do not chain.
+    Anything else is skipped, so a hint never merges two multi-member groups."""
+    a_lone, b_lone = a not in joined, b not in joined
+    if a_lone and b_lone:
+        return True
+    if a_lone:
+        return b in high_members
+    if b_lone:
+        return a in high_members
+    return False
+
+
+def _hint_pass(
+    low_pairs: list[tuple[str, str]],
+    find: Callable[[str], str],
+    union: Callable[[str, str], None],
+    joined: set[str],
+    high_members: set[str],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Apply the sorted low pairs after the high pass.
+
+    Returns ``(taken, skipped)``. ``taken`` holds ``(lone, partner)`` for every
+    lone endpoint a taken edge joined, so the caller can mark rows that were
+    only ever hinted at. ``skipped`` holds the pairs that were not taken."""
+    taken: list[tuple[str, str]] = []
+    skipped: list[tuple[str, str]] = []
+    for a, b in low_pairs:
+        if find(a) == find(b):
+            continue
+        if _hint_may_join(a, b, joined, high_members):
+            taken.extend((x, y) for x, y in ((a, b), (b, a)) if x not in joined)
+            union(a, b)
+            joined.update((a, b))
+        else:
+            skipped.append((a, b))
+    return taken, skipped
+
+
 def _assign_group_ids(
     rows: dict[str, ManifestRow],
-    pair_edges: list[tuple[str, str]] | None = None,
-) -> None:
-    """Assign group_id via union-find over duplicate_of edges + pair edges.
+    edges: list[Edge] | None = None,
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Assign group_id via union-find over duplicate_of edges + ``edges``.
+    Returns ``(taken, skipped)`` hint endpoints; see ``_hint_pass``.
 
-    Files transitively connected (A→B, B→C) all receive the same group_id —
-    the lexicographically smallest source_path in the component.
-    Isolated files (no similarity edge AND no pair edge) receive
-    group_id = None.
+    Files transitively connected by ``high`` edges (A→B, B→C) all receive the
+    same group_id — the lexicographically smallest source_path in the
+    component. Isolated files (no edge at all) receive group_id = None.
 
-    ``pair_edges`` carries the non-``duplicate_of`` union edges: Live Photo
-    HEIC ↔ MOV/MP4 pairs from ``_collect_pair_edges`` (photo-manager#88) AND
-    the near-duplicate transitive edges from ``_classify_near_duplicates``
-    (#538). They participate in the same union-find as ``duplicate_of`` edges,
-    so a unique pair (neither side a duplicate of anything else) still gets its
-    own 2-row group; a pair where each side belongs to a different SHA-group
-    still transitively closes into a single component; and a genuine near-dup
-    whose only bridge was already classified is no longer orphaned (#538).
+    ``edges`` carries the non-``duplicate_of`` union edges: Live Photo
+    HEIC ↔ MOV/MP4 pairs (photo-manager#88, always high) and the pHash
+    near-duplicate and complementary edges (#538 / #824), each with its own
+    confidence.
+
+    Low-confidence edges (``GROUPING_STRATEGY_VERSION`` "6") are hints. They
+    are processed after every high edge, in sorted order (deterministic, so
+    the result never depends on record order): a low edge whose endpoints are
+    already in the same component is a no-op; two lone files pair up; a lone
+    file attaches only to a high member (a node a high edge touched), so a leaf
+    attached by a low edge never anchors the next one; everything else is
+    skipped. A file whose only edges were skipped stays ``group_id=None``, and
+    the hint is still visible in its ``reason`` and ``duplicate_of``.
+
+    Which lone file pairs with which follows path spelling (the lex-min rule);
+    that is deliberate, so a rescore reproduces the same groups.
     """
     parent: dict[str, str] = {}
 
@@ -1046,29 +1212,30 @@ def _assign_group_ids(
             else:
                 parent[ra] = rb
 
-    for row in rows.values():
-        if row.duplicate_of:
-            union(row.source_path, row.duplicate_of)
+    all_edges = _row_edges(rows) + list(edges or [])
+    # ``joined``: nodes in a component of two or more members (every node a
+    # union touches is one). ``high_members``: nodes a high edge touched. Only a
+    # high member can anchor a lone file, so hints cannot chain.
+    joined: set[str] = set()
+    high_members: set[str] = set()
+    for a, b, confidence in all_edges:
+        if confidence == "high":
+            union(a, b)
+            joined.update((a, b))
+            high_members.update((a, b))
 
-    # Pair edges (#88): pair partners always share a group regardless
-    # of whether either side is itself a SHA/pHash duplicate.
-    for a, b in (pair_edges or []):
-        union(a, b)
-
-    # Collect every path that participates in at least one edge
-    has_edge: set[str] = set()
-    for row in rows.values():
-        if row.duplicate_of:
-            has_edge.add(row.source_path)
-            has_edge.add(row.duplicate_of)
-    for a, b in (pair_edges or []):
-        has_edge.add(a)
-        has_edge.add(b)
+    # Normalise orientation and sort: the hint pass must not depend on which
+    # side of a pair the classifier happened to write first.
+    low_pairs = sorted(
+        (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "low"
+    )
+    taken, skipped = _hint_pass(low_pairs, find, union, joined, high_members)
 
     for row in rows.values():
-        if row.source_path in has_edge:
+        if row.source_path in joined:
             row.group_id = find(row.source_path)
-        # else: stays None (isolated file)
+        # else: stays None (isolated file, or a hint that was not taken)
+    return taken, skipped
 
 
 # ---------------------------------------------------------------------------

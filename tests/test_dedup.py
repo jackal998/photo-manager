@@ -579,8 +579,14 @@ class TestGroupId:
         assert rows["/a.jpg"].group_id == rows["/b.jpg"].group_id
 
     def test_transitive_grouping_three_files(self):
-        """A near-dup of B, and B near-dup of C → all three in the same group."""
+        """A near-dup of B, and B near-dup of C → all three in the same group.
+
+        GROUPING 6 changed this expectation: the links are low-only (dHash
+        unavailable), and low-only links pair or hint, they do not chain. So
+        A and B pair up, and C is an isolated hint, not a third member.
+        """
         import imagehash
+        from scanner.dedup import HINT_ONLY_PREFIX
         # Three hashes: a~b (distance≈4), b~c (distance≈4), but a and c may not match
         h_a = imagehash.hex_to_hash("aaaaaaaaaaaaaaaa")
         h_b = imagehash.hex_to_hash("aaaaaaaaaaaaaaa5")  # 4 bits from a
@@ -590,9 +596,15 @@ class TestGroupId:
         c = _hr("/c.jpg", sha256="s3", phash=str(h_c), source_label="src", exif_date=_dt())
         # threshold=5: a~b (dist=4) ✓, b~c (dist=4) ✓, a~c (dist=8) beyond threshold
         rows = _rows(classify([a, b, c], threshold=5))
-        gids = {rows[p].group_id for p in ("/a.jpg", "/b.jpg", "/c.jpg")}
-        assert None not in gids, "All three should have a group_id"
-        assert len(gids) == 1, "All three should share the same group_id"
+        grouped = {p for p in ("/a.jpg", "/b.jpg", "/c.jpg") if rows[p].group_id}
+        assert grouped == {"/a.jpg", "/b.jpg"}, "sorted low pair A-B pairs up"
+        assert rows["/a.jpg"].group_id == rows["/b.jpg"].group_id
+        hint = rows["/c.jpg"]
+        assert hint.group_id is None
+        assert hint.action in ("", "UNDATED"), hint.action
+        assert hint.match_confidence == "low"
+        assert hint.reason.startswith(HINT_ONLY_PREFIX)
+        assert "b.jpg" in hint.reason, "hint names its partner"
 
     def test_live_photo_pair_shares_group_id(self):
         heic_path = Path("/iphone/IMG.HEIC")
@@ -644,8 +656,20 @@ class TestUnderGroupingFix:
         g_k1 = rows["/iphone/k1.jpg"].group_id
         g_k2 = rows["/iphone/k2.jpg"].group_id
         g_bx = rows["/jdrive/bx.jpg"].group_id
-        assert g_k2 is not None, "k2 (a genuine near-dup of bx, d=8) must not be orphaned (#538)"
-        assert g_k1 == g_k2 == g_bx, "bridge component must close transitively"
+        # #538 intent, restated for GROUPING 6: k2 (a near-dup of bx, d=8) is
+        # never SILENTLY orphaned. Low-only links pair or hint and do not chain.
+        # Pinned sorted outcome: the sorted low pair k1-bx pairs up (bx is the
+        # flagged row, k1 its partner); k2's only link is to bx, a pair member
+        # with no high edge, so k2 is the isolated hint naming bx.
+        from scanner.dedup import HINT_ONLY_PREFIX
+        assert g_k1 is not None and g_k1 == g_bx
+        assert Path(rows["/jdrive/bx.jpg"].duplicate_of).name == "k1.jpg"
+        assert g_k2 is None
+        k2 = rows["/iphone/k2.jpg"]
+        assert k2.action == "" and k2.match_confidence == "low"
+        assert HINT_ONLY_PREFIX in k2.reason, k2.reason
+        assert Path(k2.duplicate_of).name == "bx.jpg"
+        assert "bx.jpg" in k2.reason, k2.reason
 
     def test_grouping_deterministic_under_input_shuffle(self):
         """group_id (= lex-min path) must be identical regardless of input
@@ -665,10 +689,17 @@ class TestUnderGroupingFix:
         r1 = build([a, b, c])
         r2 = build([c, b, a])
         r3 = build([b, c, a])
+        # GROUPING 6: low-only links pair or hint (they do not chain), so an
+        # isolated row is legitimate. Assert identical group_ids AND identical
+        # hint rows (action + reason) in every input order.
         for path in ("/iphone/k1.jpg", "/iphone/k2.jpg", "/jdrive/bx.jpg"):
             gids = {r1[path].group_id, r2[path].group_id, r3[path].group_id}
             assert len(gids) == 1, f"{path} group_id is order-dependent: {gids}"
-            assert None not in gids, f"{path} orphaned in some order"
+            sigs = {
+                (r[path].group_id, r[path].action, r[path].reason)
+                for r in (r1, r2, r3)
+            }
+            assert len(sigs) == 1, f"{path} hint row is order-dependent: {sigs}"
 
 
 # ---------------------------------------------------------------------------
@@ -1019,13 +1050,17 @@ class TestPhashEntropyGuard:
     def test_flat_images_falsely_grouped_without_guard(self):
         """Reproduces #516: with the guard disabled the three distinct icons
         collapse into one false duplicate group."""
+        from scanner.dedup import HINT_ONLY_PREFIX
         rows = _rows(classify(self._three_flat(), min_phash_entropy_bits=0))
-        actions = {p: r.action for p, r in rows.items()}
-        # At least two of the three get marked as duplicates of the third.
-        dup = [a for a in actions.values() if a in ("EXACT", "REVIEW_DUPLICATE")]
-        assert len(dup) >= 2, actions
-        gids = {r.group_id for r in rows.values()}
-        assert gids != {None}  # they were unioned into a (false) group
+        # GROUPING 6: the guard-off false pair still groups (two of the three),
+        # and the third is an explicit hint, not a third member: low-only
+        # links pair or hint, they do not chain.
+        grouped = [r for r in rows.values() if r.group_id is not None]
+        hints = [r for r in rows.values() if r.group_id is None]
+        assert len(grouped) == 2, {p: r.action for p, r in rows.items()}
+        assert len(hints) == 1
+        assert hints[0].action in ("", "UNDATED")
+        assert hints[0].reason.startswith(HINT_ONLY_PREFIX)
 
     def test_flat_images_not_grouped_with_guard(self):
         """The fix: at the default guard the degenerate-pHash icons are

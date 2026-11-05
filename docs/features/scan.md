@@ -193,6 +193,15 @@ Entries for the **Scan** area of the feature inventory. The index and the sectio
 - **Conditions / variants:** The threshold is `classify(min_phash_quality=…)`, default `16.0`; `0` disables the gate. Measured on 519 real files (dedup-core research 2026-11-05, contrast probe): the three class-A frames read 5.67 / 5.63 (2020 eclipse) and 15.36 (2023 lights in the dark); the population medians are DNG 49.7, HEIC 50.3, JPEG 52.7, PNG 43.9, so the gate removes about 1 % of real photos (about 5 % of PNG screenshots). A manifest written before recipe `"5"` stores no quality (`NULL`) and such rows pass the gate, so an existing library groups exactly as before **until it is re-scanned**. Videos, GIFs and decode failures have no quality and also pass.
 - **Related:** the sibling pHash gates — the entropy guard (#516, which cannot catch this case because the median split gives every photo popcount 32) and the dimension gate (#523); unit tests `tests/test_dedup_quality_gate.py` and `tests/test_hasher.py::TestPhashQuality`.
 
+### Scan grouping — low-confidence hints never chain
+- **Area:** Scan
+
+- **Entry point:** The result tree after a scan — three moments of one scene that hash alike stay separate groups, and a chain of screenshots no longer forms one group through low-confidence links. Classifier: [scanner/dedup.py](../../scanner/dedup.py) `_assign_group_ids` / `_hint_pass` / `_mark_isolated_hints`, edge producers `_classify_near_duplicates` and `_classify_format_group`.
+- **Trigger:** Every scan's classify pass (Pass 5, union-find over `duplicate_of` and pHash edges). No user action.
+- **Behaviour:** High-confidence edges group as before. A low-confidence match (shot times disagree, a screenshot pair, or dHash unavailable) can pair two lone files, or attach one lone file to a node that a high-confidence edge touched; it never merges two groups, and a file attached by a low edge never anchors another lone file. An isolated row never keeps a dedup action: it is undecided (`action` empty, or `UNDATED` without a shot date) with `match_confidence` low, and its `reason` carries the marker `hint only (not grouped):` and names the partner. A grouped review row's reason may name a partner outside its own group; that partner is the hint. An exact-pHash RAW bucket is split by shot time the same way: members whose times agree group with high confidence, and disagreeing clusters only hint at each other.
+- **Conditions / variants:** `GROUPING_STRATEGY_VERSION` is `"6"`; a manifest scanned under `"5"` keeps its old groups until it is re-scanned. Ordering is deterministic: low edges are processed in sorted order, so the result does not depend on record order.
+- **Related:** [#1030](https://github.com/jackal998/photo-manager/issues/1030), [#1032](https://github.com/jackal998/photo-manager/issues/1032); research report `docs/audits/dedup-core-research-2026-11-05.md` §5.1 (T3 similar — hint only, never chains). Pinned by `tests/test_dedup_hint_edges.py`.
+
 ---
 
 ### Developer tool — memory probe

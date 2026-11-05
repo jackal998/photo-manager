@@ -1,0 +1,1 @@
+Treat low-confidence similarity matches (shot times disagree, screenshot pairs, dHash unavailable) as hints: they may pair two lone files or attach a lone file to a file that has a high-confidence edge, but never merge two groups or chain through a leaf; exact-pHash RAW buckets are split by shot time the same way (grouping strategy 6) (#1040)
