@@ -20,21 +20,21 @@ if TYPE_CHECKING:
     from PIL import Image
 
 
-# #465 — base read budget for ``ExiftoolProcess.execute()``. Perl
-# block-buffers stdout when it writes to a pipe (~8 KB, flushed only when
-# the buffer fills or at the ``{ready}`` sentinel), so the first line of an
-# ``-execute`` batch can arrive long after the batch started. In practice
-# the timer bounds the longest silent stretch, which can be most of an
-# ``-execute`` call: callers size each call with ``execute_budget()``, which
-# grows with the content of the batch (cost units, not file count), so a
-# slow-but-alive NAS batch is not mistaken for a wedged process. A wedged
-# exiftool (corrupt input, dropped SMB session, kernel pipe stall) still
-# exceeds the budget and raises ``ExiftoolTimeout``; the caller closes it and
-# rotates to a fresh process.
-_EXIFTOOL_READ_TIMEOUT_SECONDS = 60.0
-# Cost units per ``-execute`` call (see ``_pack_batches``). An image path is
-# 1 unit; a video path is ``_EXIFTOOL_VIDEO_UNITS``.
-_EXIFTOOL_EXECUTE_UNITS = 25
+# #465 — base read budget for ``ExiftoolProcess.execute()``, per file. Each
+# file is sent as its OWN ``-execute`` (see ``_execute_in_batches``). Perl
+# block-buffers stdout when it writes to a pipe and flushes at the ``{ready}``
+# sentinel, so with one path per call the flush lands once per file and the
+# idle timer in ``execute()`` measures one file's silence, not a batch's.
+# The base covers a bandwidth-starved NAS during the HASH stage: 8 hash
+# workers saturating the link (~12 MB/s) left whole 16-file calls silent for
+# more than 360 s while exiftool was still alive. A wedged exiftool (corrupt
+# input, dropped SMB session, kernel pipe stall) still exceeds the budget and
+# raises ``ExiftoolTimeout``; the caller closes it and rotates to a fresh
+# process.
+_EXIFTOOL_READ_TIMEOUT_SECONDS = 300.0
+# Cost units of one path (see ``_path_units``): an image is 1 unit, a video is
+# ``_EXIFTOOL_VIDEO_UNITS``. The per-unit term of the budget covers
+# file-size-dependent seeks, which is what makes a long video need more time.
 _EXIFTOOL_VIDEO_UNITS = 4
 # Measured under scan load on the owner's NAS (2026-11-05): a HEIC costs
 # ~8.6 s per file (40 files: first 8 KB of output after 86 s); 12 s is ~1.4x
@@ -50,7 +50,7 @@ def _path_units(path) -> int:
 def execute_budget(paths) -> float:
     """Read budget (seconds) for one ``-execute`` call over ``paths``:
     ``_EXIFTOOL_READ_TIMEOUT_SECONDS`` plus ``_EXIFTOOL_UNIT_SECONDS`` per
-    cost unit of the batch."""
+    cost unit. Callers pass a single path (one path per ``-execute``)."""
     units = sum(_path_units(p) for p in paths)
     return _EXIFTOOL_READ_TIMEOUT_SECONDS + units * _EXIFTOOL_UNIT_SECONDS
 
@@ -330,10 +330,11 @@ class ExiftoolProcess:
         up to the ``{ready}`` sentinel.
 
         Raises :class:`ExiftoolTimeout` if the stdout reader thread
-        doesn't yield a line within ``read_timeout`` seconds. Because Perl
-        block-buffers stdout on a pipe, that wait can span a whole
-        ``-execute`` batch, so ``read_timeout`` is a per-call budget
-        (callers size it with :func:`execute_budget`). Exceeding it
+        doesn't yield a line within ``read_timeout`` seconds. Perl
+        block-buffers stdout on a pipe, so that wait can span the whole
+        ``-execute``; callers send one path per call and size
+        ``read_timeout`` with :func:`execute_budget`, which makes it a
+        per-file budget. Exceeding it
         indicates a wedged exiftool process — the caller should ``close()``
         it (force-kill path) and rotate to a fresh instance.
         """
@@ -433,37 +434,18 @@ def _parse_exiftool_json(output: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def _pack_batches(paths: list) -> list[list]:
-    """Split ``paths`` into consecutive sub-batches of at most
-    ``_EXIFTOOL_EXECUTE_UNITS`` cost units, filled greedily in path order.
-    A single path always forms a batch by itself, even if its units alone
-    exceed the cap."""
-    batches: list[list] = []
-    current: list = []
-    current_units = 0
-    for path in paths:
-        units = _path_units(path)
-        if current and current_units + units > _EXIFTOOL_EXECUTE_UNITS:
-            batches.append(current)
-            current, current_units = [], 0
-        current.append(path)
-        current_units += units
-    if current:
-        batches.append(current)
-    return batches
-
-
 def _execute_in_batches(
     et: ExiftoolProcess, fixed_args: list, paths: list,
 ) -> list[dict]:
-    """Run ``fixed_args + paths`` through exiftool in sub-batches of at most
-    ``_EXIFTOOL_EXECUTE_UNITS`` cost units, each with its own read budget.
+    """Run each path through exiftool as its own ``-execute`` call, with that
+    file's read budget (:func:`execute_budget`). One path per call makes the
+    ``{ready}`` flush per file, so the idle timer is a per-file timer.
     Returns the concatenated JSON records."""
     records: list[dict] = []
-    for sub in _pack_batches(paths):
+    for path in paths:
         output = et.execute(
-            fixed_args + [str(p) for p in sub],
-            read_timeout=execute_budget(sub),
+            fixed_args + [str(path)],
+            read_timeout=execute_budget([path]),
         )
         records.extend(_parse_exiftool_json(output))
     return records
