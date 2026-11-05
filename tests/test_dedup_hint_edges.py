@@ -358,6 +358,31 @@ class TestComplementaryRawPairsRespectShotTime:
         assert rows["/b/x.cr2"].group_id is not None
         assert _group_sizes(rows) == [3]
         assert rows["/a/m0.dng"].group_id == rows["/b/x.cr2"].group_id
+        # The hint leaf is visible as a hint, not as a bare "unique" row.
+        m0 = rows["/a/m0.dng"]
+        assert m0.match_confidence == "low"
+        assert "x.cr2" in m0.reason
+
+    def test_undated_member_does_not_anchor_every_moment(self):
+        """F1: an undated RAW sorting first (/0/z.dng) must not become the
+        anchor of the whole bucket. Dated members form the clusters first, and
+        the undated member joins the first one: the shape is [2,2,2] (m0 with z,
+        x.cr2 with x_conv, y.dng with y.jpg), not one group of six. The renamed
+        /f/z.dng gives the same shape."""
+        later = T1 + timedelta(hours=5, minutes=13)
+        for z_path in ("/0/z.dng", "/f/z.dng"):
+            records = [
+                _raw(z_path, "zz", None),
+                _raw("/a/m0.dng", "m0", T1),
+                _raw("/b/x.cr2", "xc", later),
+                _raw("/c/x_conv.dng", "xd", later),
+                _raw("/d/y.dng", "yd", T1 + timedelta(hours=9, minutes=7)),
+                _hr("/e/y.jpg", "yj", A, T1 + timedelta(hours=9, minutes=7),
+                    "src_a", file_type="jpeg"),
+            ]
+            rows = _rows(classify(records, source_priority=PRIORITY))
+            assert _group_sizes(rows) == [2, 2, 2], z_path
+            assert rows[z_path].group_id == rows["/a/m0.dng"].group_id
 
     def test_raw_and_edited_jpeg_at_same_time_group(self):
         """Complementary RAW+lossy at one shot time stays one high group."""

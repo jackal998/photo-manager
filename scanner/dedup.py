@@ -404,8 +404,11 @@ def classify(
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
     # pHash transitive edges (#538 near-dup, #824 complementary).
     # Live Photo pair edges are certain (high); pHash edges carry their own.
-    skipped = _assign_group_ids(rows, [(a, b, "high") for a, b in pair_edges] + phash_edges)
+    taken, skipped = _assign_group_ids(
+        rows, [(a, b, "high") for a, b in pair_edges] + phash_edges
+    )
     _mark_isolated_hints(rows, skipped)
+    _mark_taken_hints(rows, taken)
 
     return list(rows.values())
 
@@ -686,7 +689,7 @@ def _complementary_edges(
     decision (RAW+lossy complementary, or all-RAW). The bucket is split by shot
     time, the same way the all-lossy and near-dup paths decide a pair.
 
-    Members are visited in sorted path order. Each joins the first cluster
+    Members are visited in path order, dated before undated. Each joins the first cluster
     whose anchor it agrees with on shot time (``_demotion_note`` is None; an
     unknown time counts as agree, as before), else it starts a new cluster.
     A member is tied to its cluster anchor by a ``high`` edge. Between clusters
@@ -698,7 +701,10 @@ def _complementary_edges(
     dHash vote, where a definite ``disagree`` means no pair to draw. No row is
     written and no action changes.
     """
-    ordered = sorted(group, key=lambda h: str(h.record.path))
+    # Dated members first: an undated member (unknown time, so it "agrees" with
+    # anything) must never become an anchor while a dated member exists, or it
+    # would pull every moment's dated members into its cluster.
+    ordered = sorted(group, key=lambda h: (h.exif_date is None, str(h.record.path)))
     anchors: list[HashResult] = []
     edges: list[Edge] = []
     for member in ordered:
@@ -1100,6 +1106,23 @@ def _mark_isolated_hints(
             row.reason = f"{row.reason}; {hint}" if row.reason else hint
 
 
+def _mark_taken_hints(
+    rows: dict[str, ManifestRow], taken: list[tuple[str, str]]
+) -> None:
+    """A lone row joined by a taken low edge, that carries no dedup decision
+    (undecided, or UNDATED), is marked low and names its partner. Without this
+    it would read as "unique" with no sign it was grouped on a hint."""
+    partner_of: dict[str, str] = {}
+    for lone, partner in taken:
+        partner_of.setdefault(lone, partner)
+    for row in rows.values():
+        partner = partner_of.get(row.source_path)
+        if partner is None or row.duplicate_of or row.action not in ("", "UNDATED"):
+            continue
+        row.match_confidence = "low"
+        row.reason = f"{row.reason}; hint: low-confidence match with {Path(partner).name}"
+
+
 def _hint_may_join(
     a: str,
     b: str,
@@ -1126,25 +1149,32 @@ def _hint_pass(
     union: Callable[[str, str], None],
     joined: set[str],
     high_members: set[str],
-) -> list[tuple[str, str]]:
-    """Apply the sorted low pairs after the high pass; return the skipped ones."""
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Apply the sorted low pairs after the high pass.
+
+    Returns ``(taken, skipped)``. ``taken`` holds ``(lone, partner)`` for every
+    lone endpoint a taken edge joined, so the caller can mark rows that were
+    only ever hinted at. ``skipped`` holds the pairs that were not taken."""
+    taken: list[tuple[str, str]] = []
     skipped: list[tuple[str, str]] = []
     for a, b in low_pairs:
         if find(a) == find(b):
             continue
         if _hint_may_join(a, b, joined, high_members):
+            taken.extend((x, y) for x, y in ((a, b), (b, a)) if x not in joined)
             union(a, b)
             joined.update((a, b))
         else:
             skipped.append((a, b))
-    return skipped
+    return taken, skipped
 
 
 def _assign_group_ids(
     rows: dict[str, ManifestRow],
     edges: list[Edge] | None = None,
-) -> list[tuple[str, str]]:
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Assign group_id via union-find over duplicate_of edges + ``edges``.
+    Returns ``(taken, skipped)`` hint endpoints; see ``_hint_pass``.
 
     Files transitively connected by ``high`` edges (A→B, B→C) all receive the
     same group_id — the lexicographically smallest source_path in the
@@ -1199,13 +1229,13 @@ def _assign_group_ids(
     low_pairs = sorted(
         (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "low"
     )
-    skipped = _hint_pass(low_pairs, find, union, joined, high_members)
+    taken, skipped = _hint_pass(low_pairs, find, union, joined, high_members)
 
     for row in rows.values():
         if row.source_path in joined:
             row.group_id = find(row.source_path)
         # else: stays None (isolated file, or a hint that was not taken)
-    return skipped
+    return taken, skipped
 
 
 # ---------------------------------------------------------------------------
