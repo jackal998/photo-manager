@@ -535,7 +535,9 @@ def _classify_phash(
     near-duplicate scan when their pHash is degenerate (flat image — see
     :func:`_phash_entropy_ok`, #516) OR the image is too small for a 64-bit
     pHash to discriminate (:func:`_phash_dimension_ok` — tiny UI icons /
-    thumbnails). Both classes still get exact-SHA dedup.
+    thumbnails) OR the working image is too low-contrast for its pHash to
+    mean anything (:func:`_phash_quality_ok`, recipe "5" — near-black /
+    near-flat frames). All three classes still get exact-SHA dedup.
     """
     # Only consider records not already classified, with a valid pHash,
     # whose pHash is trustworthy (#516 entropy) and whose image is large
