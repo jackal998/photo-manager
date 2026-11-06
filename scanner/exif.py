@@ -58,11 +58,13 @@ def execute_budget(paths) -> float:
 def _timeout_error(args: list, read_timeout: float, started: float) -> "ExiftoolTimeout":
     """Build the ``ExiftoolTimeout`` for an idle ``-execute``, carrying the
     path count and elapsed time so a log line alone can diagnose it. Option
-    arguments start with ``-``; every other argument is a path."""
-    n_paths = sum(1 for a in args if not str(a).startswith("-"))
+    arguments start with ``-``; every other argument is a path. With one path
+    (one path per ``-execute``) the message names the file that wedged."""
+    paths = [str(a) for a in args if not str(a).startswith("-")]
     elapsed = time.monotonic() - started
+    where = f" reading {paths[0]}" if len(paths) == 1 else ""
     return ExiftoolTimeout(
-        f"exiftool stdout idle for {read_timeout}s ({n_paths} paths, "
+        f"exiftool stdout idle for {read_timeout}s{where} ({len(paths)} paths, "
         f"{elapsed:.1f}s since -execute) — process appears wedged "
         "(corrupt input, dropped NAS, kernel pipe stall, or stay_open "
         "deadlock). Caller should close + rotate to a fresh ExiftoolProcess."
@@ -75,6 +77,31 @@ class ExiftoolTimeout(Exception):
     wedged exiftool — caller should ``close()`` the process (force-kill
     path) and rotate to a fresh instance.
     """
+
+
+class ExiftoolBatchTimeout(ExiftoolTimeout):
+    """An :class:`ExiftoolTimeout` from :func:`_execute_in_batches` that says
+    how far the batch got, so the caller can resume after the wedged file.
+
+    ``completed`` holds the parsed records of ``completed_paths`` (the files
+    read before the wedge); ``failed_path`` is the file that wedged;
+    ``remaining`` holds the files after it, none of which were sent.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        completed: list,
+        completed_paths: list,
+        failed_path,
+        remaining: list,
+    ) -> None:
+        super().__init__(message)
+        self.completed = completed
+        self.completed_paths = completed_paths
+        self.failed_path = failed_path
+        self.remaining = remaining
 
 # Suppress the fresh-console window Windows allocates for a console-subsystem
 # child (exiftool) spawned by a windowed-subsystem parent (PyInstaller
@@ -440,13 +467,23 @@ def _execute_in_batches(
     """Run each path through exiftool as its own ``-execute`` call, with that
     file's read budget (:func:`execute_budget`). One path per call makes the
     ``{ready}`` flush per file, so the idle timer is a per-file timer.
-    Returns the concatenated JSON records."""
+    Returns the concatenated JSON records. On a wedge it raises
+    :class:`ExiftoolBatchTimeout` carrying the records read so far."""
     records: list[dict] = []
-    for path in paths:
-        output = et.execute(
-            fixed_args + [str(path)],
-            read_timeout=execute_budget([path]),
-        )
+    for i, path in enumerate(paths):
+        try:
+            output = et.execute(
+                fixed_args + [str(path)],
+                read_timeout=execute_budget([path]),
+            )
+        except ExiftoolTimeout as exc:
+            raise ExiftoolBatchTimeout(
+                str(exc),
+                completed=records,
+                completed_paths=list(paths[:i]),
+                failed_path=path,
+                remaining=list(paths[i + 1:]),
+            ) from exc
         records.extend(_parse_exiftool_json(output))
     return records
 
@@ -879,8 +916,6 @@ def _read_extract_chunk(
     (verified live against ``qa/sandbox/`` GPS-tagged JPEGs during #187
     research).
     """
-    from scanner.media_extract import MediaExtract
-
     args = [
         "-j", "-G",
         # Date fallback chain (same as batch_read_dates).
@@ -906,6 +941,17 @@ def _read_extract_chunk(
         # NB: NO -fast here.
     ]
     records = _execute_in_batches(et, args, paths)
+    return extracts_from_records(paths, records)
+
+
+def extracts_from_records(
+    paths: list[Path], records: list[dict],
+) -> dict[Path, "MediaExtract"]:
+    """Bind exiftool JSON ``records`` to ``paths`` by ``SourceFile`` and build
+    one MediaExtract per path. A path with no record gets a partial extract
+    whose ``extraction_errors`` says so. Split out so a resumed batch can turn
+    the records read before a wedge into extracts."""
+    from scanner.media_extract import MediaExtract  # local import — avoid cycle
 
     by_path: dict[Path, dict] = {}
     for rec in records:
