@@ -58,6 +58,12 @@ FORMAT_PRIORITY = {"heic": 0, "jpeg": 1, "png": 2, "gif": 3, "webp": 4, "raw": -
 
 LOSSY_TYPES = {"jpeg", "heic", "png", "gif", "webp"}
 
+# Same-moment burst gap (dedup-core research 2026-11-06, T2). Two shot times
+# within this many seconds "agree" (``_shot_time_vote``), and every gap between
+# consecutive frames of a burst must sit within it too (``_is_burst``). One
+# constant, so the two cannot drift apart.
+BURST_MAX_GAP_S = 2
+
 # A union-find edge: (path_a, path_b, confidence), confidence "high" or "low".
 # "high" edges merge groups. "low" edges are hints: they may attach a lone file
 # to a group, but never merge two groups that already have two or more members
@@ -249,7 +255,7 @@ def _dhash_vote(a: HashResult, b: HashResult, dhash_threshold: int) -> str:
     return "agree" if distance <= dhash_threshold else "disagree"
 
 
-def _shot_time_vote(a: HashResult, b: HashResult, tolerance_s: int = 2) -> str:
+def _shot_time_vote(a: HashResult, b: HashResult, tolerance_s: int = BURST_MAX_GAP_S) -> str:
     """dedup-core research 2026-11-05 class B — do the two shot times agree?
 
     Returns one of:
@@ -409,6 +415,7 @@ def classify(
     )
     _mark_isolated_hints(rows, skipped)
     _mark_taken_hints(rows, taken)
+    _mark_burst_stacks(rows, {lone for lone, _ in taken})
 
     return list(rows.values())
 
@@ -760,8 +767,11 @@ def _gates_pass(
 # never grows, so hints do not chain. A row left out of every group by a
 # skipped hint becomes undecided (UNDATED without a shot date) with the
 # marker "hint only (not grouped): " in its reason.
+# "7": a same-moment burst (consecutive frames <= BURST_MAX_GAP_S apart, span
+# longer than that) becomes a keep-all stack: no frame is a delete candidate
+# (``_mark_burst_stacks``). Relabels only; no edge is added or removed.
 # "4" is taken by a separate branch's confidence gates; merged in order.
-GROUPING_STRATEGY_VERSION = "6"
+GROUPING_STRATEGY_VERSION = "7"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -1073,6 +1083,7 @@ def _row_edges(rows: dict[str, ManifestRow]) -> list[Edge]:
 
 
 HINT_ONLY_PREFIX = "hint only (not grouped): "
+BURST_PREFIX = "burst stack (keep all): "
 
 
 def _mark_isolated_hints(
@@ -1121,6 +1132,72 @@ def _mark_taken_hints(
             continue
         row.match_confidence = "low"
         row.reason = f"{row.reason}; hint: low-confidence match with {Path(partner).name}"
+
+
+def _burst_frames(
+    group_rows: list[ManifestRow], hint_leaves: set[str]
+) -> list[ManifestRow]:
+    """The rows of one group that can be burst frames, in (shot time, path)
+    order. A frame is pHash-bearing and dated: a Live-Photo video peer has no
+    pHash and a UTC date that would open a fake gap. A hint leaf is never a
+    frame; it keeps its REVIEW/low verdict and reason."""
+    frames = [
+        r for r in group_rows
+        if r.phash and r.shot_date and r.source_path not in hint_leaves
+    ]
+    return sorted(
+        frames, key=lambda r: (datetime.fromisoformat(r.shot_date), r.source_path)
+    )
+
+
+def _is_burst(times: list[datetime]) -> bool:
+    """A same-moment burst: the span is longer than ``BURST_MAX_GAP_S`` (a
+    fast burst inside it keeps its status quo) and every consecutive gap is
+    within it. One wider gap is a non-burst bridge (undated node, tz-shifted
+    copy, Live-Photo pair edge), and the group is left alone."""
+    if len(times) < 2:
+        return False
+    gaps = [(b - a).total_seconds() for a, b in zip(times, times[1:])]
+    span = (times[-1] - times[0]).total_seconds()
+    return span > BURST_MAX_GAP_S and all(g <= BURST_MAX_GAP_S for g in gaps)
+
+
+def _relabel_burst(frames: list[ManifestRow], rows: dict[str, ManifestRow]) -> None:
+    """Every frame that is not a byte copy becomes undecided ("") at high
+    confidence, so no frame is a delete candidate. A byte copy (same sha256 as
+    its ``duplicate_of``) keeps its EXACT/high verdict and reason. ``duplicate_of``
+    and the group are untouched."""
+    span = (
+        datetime.fromisoformat(frames[-1].shot_date)
+        - datetime.fromisoformat(frames[0].shot_date)
+    ).total_seconds()
+    n = len({r.source_hash for r in frames})
+    for row in frames:
+        keeper = rows.get(row.duplicate_of) if row.duplicate_of else None
+        if keeper is not None and keeper.source_hash == row.source_hash:
+            continue
+        old = row.reason
+        row.action = ""
+        row.match_confidence = "high"
+        row.reason = BURST_PREFIX + f"{n} frames over {span:.0f} s"
+        if old not in ("", "unique"):
+            row.reason += f"; {old}"
+
+
+def _mark_burst_stacks(
+    rows: dict[str, ManifestRow], hint_leaves: set[str]
+) -> None:
+    """GROUPING 7 — a same-moment burst inside an already-formed group becomes
+    a keep-all stack. Groups are visited in sorted group_id order. Only the
+    verdicts of the burst's frames change; no edge is added or merged."""
+    by_group: dict[str, list[ManifestRow]] = {}
+    for row in rows.values():
+        if row.group_id is not None:
+            by_group.setdefault(row.group_id, []).append(row)
+    for group_id in sorted(by_group):
+        frames = _burst_frames(by_group[group_id], hint_leaves)
+        if _is_burst([datetime.fromisoformat(r.shot_date) for r in frames]):
+            _relabel_burst(frames, rows)
 
 
 def _hint_may_join(
