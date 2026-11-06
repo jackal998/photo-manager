@@ -548,9 +548,11 @@ def run_pipeline(
     )
     import os
     from scanner.exif import (
+        ExiftoolBatchTimeout,
         ExiftoolProcess,
         ExiftoolTimeout,
         batch_read_extracts,
+        extracts_from_records,
     )
     from scanner.media_extract import MediaExtract
     from scanner.dedup import HashResult, classify
@@ -697,6 +699,7 @@ def run_pipeline(
     exif_total = [0]  # grows as hash threads enqueue eligible records
     exif_done_lock = threading.Lock()
     exif_total_lock = threading.Lock()
+    exif_wedges = [0]  # wedged-exiftool rotations this scan (guarded by exif_done_lock)
     exiftool_missing = [False]
 
     def _route_outcome(record, outcome):
@@ -814,49 +817,98 @@ def run_pipeline(
     def _flush_exif_batch_safe(batch: list, holder: list) -> None:
         """Flush one batch without letting a wedged exiftool kill the consumer.
 
-        ExiftoolTimeout -> rotate to a fresh process and retry the SAME batch
-        once. If that fails, or any other failure occurs, every path is
-        recorded as exif-missing and the process is rotated, so the consumer
-        keeps draining and producers never block on a full ``exif_queue``.
-        Once cancelled, nothing is flushed or retried: the batch is recorded
-        and the consumer drops its process.
+        A wedge costs exactly one file: see ``_resume_exif_batch``. One
+        progress line per flushed batch follows. Producers never block on a
+        full ``exif_queue`` because the consumer keeps draining.
         """
-        if cancel_token():
-            _record_exif_missing(batch, "exiftool cancelled")
-            _exit_exif(holder[0])
-            holder[0] = None
+        _resume_exif_batch(batch, holder)
+        _log_exif_progress()
+
+    def _log_exif_progress() -> None:
+        with exif_done_lock:
+            done = exif_done[0]
+        with exif_total_lock:
+            total = exif_total[0]
+        bus.log(f"  EXIF {done:,} read ({total:,} queued)")
+
+    def _resume_exif_batch(batch: list, holder: list) -> None:
+        """Flush ``batch``, resuming after each wedged file on a fresh process.
+
+        A wedge on file i (``ExiftoolBatchTimeout``) banks files before i,
+        records file i exif-missing, rotates once, and resumes with the files
+        after i in the SAME batch. A timeout that names no file retries the
+        whole batch once; any other failure records the rest of the batch as
+        exif-missing and rotates. Once cancelled, nothing is flushed or retried.
+        """
+        pending = batch
+        while pending:
+            if cancel_token():
+                _record_exif_missing(pending, "exiftool cancelled")
+                _exit_exif(holder[0])
+                holder[0] = None
+                return
+            try:
+                _flush_exif_batch(pending, holder[0])
+                return
+            except ExiftoolBatchTimeout as exc:
+                pending = _resume_after_wedge(exc, pending, holder)
+            except ExiftoolTimeout as exc:
+                _retry_whole_batch(pending, exc, holder)
+                return
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error(
+                    "exiftool batch of {} files failed ({}); recording as exif-missing",
+                    len(pending),
+                    exc,
+                )
+                _record_exif_missing(pending, _short_exif_reason("exiftool error", exc))
+                _rotate_exif(holder)
+                return
+
+    def _resume_after_wedge(exc: ExiftoolBatchTimeout, pending: list, holder: list) -> list:
+        """Bank the files read before the wedge, record the wedged file as
+        exif-missing, rotate, and return the files still to read. Returns an
+        empty list when the replacement cannot start (nothing can run then)."""
+        n_done = len(exc.completed_paths)
+        if n_done:
+            extracts.update(extracts_from_records(exc.completed_paths, exc.completed))
+            _advance_exif_progress(n_done)
+        failed, rest = pending[n_done], pending[n_done + 1:]
+        name = os.path.basename(str(exc.failed_path))
+        with exif_done_lock:
+            exif_wedges[0] += 1
+        bus.log(
+            f"  exiftool wedged reading {name}; rotating and resuming with"
+            f" {len(rest):,} files"
+        )
+        _record_exif_missing([failed], _short_exif_reason(f"exiftool wedged reading {name}", exc))
+        if not _rotate_exif(holder):
+            _record_exif_missing(rest, "exiftool could not be restarted after a wedge")
+            return []
+        return rest
+
+    def _retry_whole_batch(batch: list, exc: ExiftoolTimeout, holder: list) -> None:
+        """A timeout that names no file: rotate and retry the whole batch once."""
+        logger.warning(
+            "exiftool wedged on a {}-file batch ({}); rotating to a fresh"
+            " process and retrying once",
+            len(batch),
+            exc,
+        )
+        reason = _short_exif_reason("exiftool timeout", exc)
+        if not _rotate_exif(holder):
+            _record_exif_missing(batch, reason)
             return
         try:
             _flush_exif_batch(batch, holder[0])
             return
-        except ExiftoolTimeout as exc:
-            logger.warning(
-                "exiftool wedged on a {}-file batch ({}); rotating to a fresh"
-                " process and retrying once",
-                len(batch),
-                exc,
-            )
-            reason = _short_exif_reason("exiftool timeout", exc)
-            if not _rotate_exif(holder):
-                _record_exif_missing(batch, reason)
-                return
-            try:
-                _flush_exif_batch(batch, holder[0])
-                return
-            except Exception as retry_exc:  # pylint: disable=broad-exception-caught
-                reason = _short_exif_reason("exiftool timeout on retry", retry_exc)
-                logger.error(
-                    "exiftool retry on a fresh process also failed ({}); recording"
-                    " {} files as exif-missing",
-                    retry_exc,
-                    len(batch),
-                )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            reason = _short_exif_reason("exiftool error", exc)
+        except Exception as retry_exc:  # pylint: disable=broad-exception-caught
+            reason = _short_exif_reason("exiftool timeout on retry", retry_exc)
             logger.error(
-                "exiftool batch of {} files failed ({}); recording as exif-missing",
+                "exiftool retry on a fresh process also failed ({}); recording"
+                " {} files as exif-missing",
+                retry_exc,
                 len(batch),
-                exc,
             )
         _record_exif_missing(batch, reason)
         _rotate_exif(holder)
@@ -1287,9 +1339,10 @@ def run_pipeline(
         _emit_stage(bus, exif_tracker, exif_done[0], exif_total[0], force=True)
         found_dates = sum(1 for e in extracts.values() if e.exif_date is not None)
         with_gps = sum(1 for e in extracts.values() if e.gps_present)
+        wedge_note = f", {exif_wedges[0]:,} wedged" if exif_wedges[0] else ""
         bus.log(
             f"  EXIF done — {len(extracts):,} files,"
-            f" {found_dates:,} dates, {with_gps:,} with GPS"
+            f" {found_dates:,} dates, {with_gps:,} with GPS{wedge_note}"
         )
 
     # Backfill exif_date from the extracts dict for any record still missing
