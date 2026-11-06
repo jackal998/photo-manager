@@ -314,3 +314,36 @@ worktree, opus reviews, owner says "yes" per merge; the owner launches the app; 
   40k-row library. Step 1 = selection script + summary (read-only, `docs/audits/testset-2026-11/`);
   step 2 = owner picks the NAS destination and says yes (writing outside the repo is gated); step 3 =
   copy + sha256 verification; step 4 = `settings.json` sources → the test set.
+- Test set step 1 DONE 2026-11-06: `docs/audits/testset-2026-11/select_testset.py` + `selection.csv`
+  (local, gitignored, full paths) + `summary.md`. 1,381 files / 12.0 GiB across the local disk (504 files)
+  and the two NAS shares (334 / 543); 14 categories, whole groups, all quotas met, fixtures + 11 bursts
+  included; layout `<ROOT>\D|H|J\<original relative path>`.
+- Docs PR **#1044 MERGED 2026-11-06 as e94e859** (owner's yes; opus privacy review round 1 NEEDS-FIX — four
+  probes hardcoded the testdata labels path → argv/env, a CR artefact, owner quote → paraphrase — fixed;
+  independent positive-controlled blob scan clean except the generic `%LOCALAPPDATA%`). This file is TRACKED
+  from here on: the path-bearing untracked original was backed up to the session scratchpad
+  (`pre-1044-backup/`) and removed; every later note goes here without personal paths. Updates to this file
+  are committed through the next docs PR, so the working tree may carry uncommitted lines between PRs.
+- Test set steps 2–3 STARTED 2026-11-06: the owner named the NAS QA folder as `<ROOT>` (kept locally in
+  `docs/audits/testset-2026-11/ROOT.local.txt`, gitignored) and approved the copy. `copy_testset.py
+  selection.csv <ROOT> copy-report.csv` runs in the background: `shutil.copy2` (keeps mtime), skip when the
+  target already matches, verify size + sha256 against the manifest, one report row per file
+  (ok / skipped / mismatch / missing-source / error; `copy-report.csv` gitignored). Step 4 after a clean
+  report: point `settings.json` `sources.list` at `<ROOT>\D`, `<ROOT>\H`, `<ROOT>\J` (recursive) and
+  `sources.output` at `migration_manifest_testset.sqlite`; keep the three full-library entries for swapping back.
+- Test set steps 2–4 DONE 2026-11-06: copy finished in 495 s, report `1,381 ok / 0 skipped / 0 mismatch /
+  0 missing / 0 error` (size + sha256 verified against the v6 manifest). `settings.json` now points
+  `sources.list` at `<ROOT>/D`, `<ROOT>/H`, `<ROOT>/J` (recursive) and `sources.output` at
+  `migration_manifest_testset.sqlite`; the full-library sources are saved in
+  `docs/audits/testset-2026-11/settings.full-library.local.json` (gitignored) and the test-set block in
+  `settings.testset.local.json` — swap by copying either block back into `settings.json`. NEXT: the owner
+  runs `.\run.bat` → Start Scan once on the test set (minutes, not hours) to produce the baseline
+  `migration_manifest_testset.sqlite` under GROUPING "7"; then compare it against `selection.csv` joined on
+  sha256 (same groups / actions as v6 except the 11 burst groups, which must now read `burst stack`).
+  Tooling to commit in the next docs PR: `select_testset.py`, `copy_testset.py`, `summary.md`, `.gitignore`.
+- Test set BASELINE DONE 2026-11-06 16:08 (owner scanned; about 4 min vs 1 h 37 m): 1,381/1,381 files,
+  sha256 all equal to v6, grouping partition identical (312 groups), 121 `burst stack` rows in 12 groups,
+  13 byte copies inside bursts still EXACT; 14 label changes are subset artefacts (first pHash candidate
+  differs when the deciding partner is outside the set). Details + method: `docs/audits/testset-2026-11/
+  summary.md` §Baseline; `compare_testset.py` added (UNC-aware path mapping). From here, grouping changes
+  are measured on the test set first; the full library only for a final confirmation.
