@@ -916,8 +916,6 @@ def _read_extract_chunk(
     (verified live against ``qa/sandbox/`` GPS-tagged JPEGs during #187
     research).
     """
-    from scanner.media_extract import MediaExtract
-
     args = [
         "-j", "-G",
         # Date fallback chain (same as batch_read_dates).

@@ -550,7 +550,6 @@ def run_pipeline(
     from scanner.exif import (
         ExiftoolBatchTimeout,
         ExiftoolProcess,
-        ExiftoolTimeout,
         batch_read_extracts,
         extracts_from_records,
     )
@@ -852,9 +851,6 @@ def run_pipeline(
                 return
             except ExiftoolBatchTimeout as exc:
                 pending = _resume_after_wedge(exc, pending, holder)
-            except ExiftoolTimeout as exc:
-                _retry_whole_batch(pending, exc, holder)
-                return
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error(
                     "exiftool batch of {} files failed ({}); recording as exif-missing",
@@ -883,35 +879,11 @@ def run_pipeline(
         )
         _record_exif_missing([failed], _short_exif_reason(f"exiftool wedged reading {name}", exc))
         if not _rotate_exif(holder):
-            _record_exif_missing(rest, "exiftool could not be restarted after a wedge")
+            stop = "exiftool cancelled" if cancel_token() else "exiftool could not be restarted after a wedge"
+            _record_exif_missing(rest, stop)
             return []
         return rest
 
-    def _retry_whole_batch(batch: list, exc: ExiftoolTimeout, holder: list) -> None:
-        """A timeout that names no file: rotate and retry the whole batch once."""
-        logger.warning(
-            "exiftool wedged on a {}-file batch ({}); rotating to a fresh"
-            " process and retrying once",
-            len(batch),
-            exc,
-        )
-        reason = _short_exif_reason("exiftool timeout", exc)
-        if not _rotate_exif(holder):
-            _record_exif_missing(batch, reason)
-            return
-        try:
-            _flush_exif_batch(batch, holder[0])
-            return
-        except Exception as retry_exc:  # pylint: disable=broad-exception-caught
-            reason = _short_exif_reason("exiftool timeout on retry", retry_exc)
-            logger.error(
-                "exiftool retry on a fresh process also failed ({}); recording"
-                " {} files as exif-missing",
-                retry_exc,
-                len(batch),
-            )
-        _record_exif_missing(batch, reason)
-        _rotate_exif(holder)
 
     def _drain_exif_queue() -> None:
         """Discard items until the sentinel or cancel, so producers never block."""
