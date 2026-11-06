@@ -33,6 +33,13 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     # web ScanDialog pre-fill/display the exif worker count the way the
     # POST /api/scan resolver (WebScanRequest.resolved_with) reads it.
     "scan.exif_workers",
+    # Cloud-analysis opt-in (privacy policy, 2026-11-06). Boolean, default
+    # false. Setting only: NOTHING reads this flag yet — no cloud call exists.
+    # Any future cloud tier must check it and send media only when true. The
+    # allowlist does no per-key type checks (like every other key here), so a
+    # non-boolean PATCH value is stored as sent; the ScanDialog only honours a
+    # strict boolean on load and treats anything else as off.
+    "scan.cloud_analysis_opt_in",
     # #741 sub-item B — ActionDialog "Recent" patterns. Value is a list of
     # [field-or-null, pattern] 2-element arrays (JSON serialisation of the
     # Qt select_dialog.py tuple shape), most-recent-first, capped at 10.
@@ -43,6 +50,12 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     # written after a successful non-numeric-field Apply.
     "ui.action_dialog.recent_patterns",
 )
+
+# Served in place of None when the key has never been written. Only the
+# cloud-analysis opt-in needs a non-None default: absent means OFF.
+_WEB_SETTINGS_DEFAULTS: dict[str, object] = {
+    "scan.cloud_analysis_opt_in": False,
+}
 
 
 @router.get("/api/settings")
@@ -70,6 +83,9 @@ def get_settings() -> dict:
 
     settings = load_settings()
     result = {key: settings.get(key) for key in _WEB_SETTINGS_KEYS}
+    for key, default in _WEB_SETTINGS_DEFAULTS.items():
+        if result.get(key) is None:
+            result[key] = default
     if not result.get("sources.list"):
         resolved = resolve_source_entries(settings)
         if resolved:

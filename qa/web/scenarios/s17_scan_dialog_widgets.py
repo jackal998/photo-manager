@@ -65,6 +65,7 @@ from qa.web.testid_constants import (
     FS_BROWSER_CONFIRM,
     FS_BROWSER_FILENAME,
     SCAN_ADVANCED,
+    SCAN_CLOUD_ANALYSIS_OPT_IN,
     SCAN_COLOR_THRESHOLD,
     SCAN_DHASH_PARITY_NOTE,
     SCAN_DHASH_THRESHOLD,
@@ -268,6 +269,20 @@ def _phase_alphabetized_display_order(page) -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _phase_cloud_analysis_opt_in_default(page) -> None:
+    """The cloud-analysis opt-in checkbox sits in the Advanced settings section
+    and renders unchecked by default (privacy policy: off until the user opts in)."""
+    open_scan_dialog(page)
+    page.get_by_test_id(SCAN_ADVANCED).click()
+    advanced = page.get_by_test_id(SCAN_ADVANCED).locator("xpath=ancestor::details[1]")
+    opt_in = advanced.get_by_test_id(SCAN_CLOUD_ANALYSIS_OPT_IN)
+    assert opt_in.count() == 1, "cloud analysis opt-in checkbox missing from Advanced settings"
+    opt_in.wait_for(state="visible", timeout=5_000)
+    assert not opt_in.is_checked(), "cloud analysis opt-in must render unchecked by default"
+    page.keyboard.press("Escape")
+    page.get_by_test_id(SCAN_DIALOG).wait_for(state="hidden", timeout=5_000)
+
+
 def run(*, base_url: str) -> None:
     """Drive the scan dialog's Browse buttons, threshold inputs, and source
     list display-only alphabetization."""
@@ -326,3 +341,6 @@ def run(*, base_url: str) -> None:
 
         # --- #736: display-only alphabetized source list -----------------------
         _phase_alphabetized_display_order(page)
+
+        # --- cloud analysis opt-in: present in Advanced, unchecked by default -
+        _phase_cloud_analysis_opt_in_default(page)

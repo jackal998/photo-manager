@@ -179,6 +179,28 @@ class TestPatchSettings:
         on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
         assert on_disk["scan"]["exif_workers"] == 6
 
+    def test_cloud_analysis_opt_in_round_trip(self, client, tmp_settings: Path):
+        """scan.cloud_analysis_opt_in (privacy policy) is a boolean switch that
+        defaults to false when unset, round-trips true and false through PATCH
+        and GET, and lands in settings.json. Nothing reads it yet; this pins the
+        storage contract a future cloud tier will depend on.
+        """
+        assert client.get("/api/settings").json()["scan.cloud_analysis_opt_in"] is False
+
+        resp = client.patch("/api/settings", json={
+            "updates": {"scan.cloud_analysis_opt_in": True}
+        })
+        assert resp.status_code == 200
+        assert client.get("/api/settings").json()["scan.cloud_analysis_opt_in"] is True
+        on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
+        assert on_disk["scan"]["cloud_analysis_opt_in"] is True
+
+        resp = client.patch("/api/settings", json={
+            "updates": {"scan.cloud_analysis_opt_in": False}
+        })
+        assert resp.status_code == 200
+        assert client.get("/api/settings").json()["scan.cloud_analysis_opt_in"] is False
+
     def test_recent_patterns_round_trip(self, client, tmp_settings: Path):
         """ui.action_dialog.recent_patterns (#741 sub-item B) round-trips a
         list of [field-or-null, pattern] 2-element arrays — the JSON shape

@@ -73,6 +73,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Save Manifest Decisions — base flow](features/file-operations.md#save-manifest-decisions--base-flow) | File operations |
 | [Scan dialog — auto-select after scan](features/scan.md#scan-dialog--auto-select-after-scan) | Scan |
 | [Scan dialog — auto-select aggressive ("delete all others")](features/scan.md#scan-dialog--auto-select-aggressive-delete-all-others) | Scan |
+| [Scan dialog — cloud analysis opt-in (setting-only)](features/scan.md#scan-dialog--cloud-analysis-opt-in-setting-only) | Scan |
 | [Scan dialog — collapse Advanced Settings](features/scan.md#scan-dialog--collapse-advanced-settings) | Scan |
 | [Scan dialog — exiftool workers (setting-only)](features/scan.md#scan-dialog--exiftool-workers-setting-only) | Scan |
 | [Scan dialog — folder list (no priority arrows)](features/scan.md#scan-dialog--folder-list-no-priority-arrows) | Scan |

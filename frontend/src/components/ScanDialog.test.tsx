@@ -38,6 +38,7 @@ import {
   SCAN_ADD_SOURCE,
   SCAN_AUTO_SELECT,
   SCAN_AUTOTUNE,
+  SCAN_CLOUD_ANALYSIS_OPT_IN,
   SCAN_CANCEL_BUTTON,
   SCAN_COLOR_THRESHOLD,
   SCAN_DHASH_PARITY_NOTE,
@@ -506,6 +507,44 @@ describe("ScanDialog", () => {
 
     const knee = await screen.findByTestId(SCAN_AUTOTUNE);
     await waitFor(() => expect(knee).not.toBeChecked());
+  });
+
+  it("cloud analysis opt-in renders unchecked by default and PATCHes the key on change", async () => {
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [],
+      "sources.output": "",
+    } as never);
+
+    renderDialog();
+
+    const optIn = await screen.findByTestId(SCAN_CLOUD_ANALYSIS_OPT_IN);
+    expect(optIn).not.toBeChecked();
+
+    const user = userEvent.setup();
+    await user.click(optIn);
+    expect(optIn).toBeChecked();
+    expect(mockPatchSettings).toHaveBeenLastCalledWith({
+      "scan.cloud_analysis_opt_in": true,
+    });
+
+    await user.click(optIn);
+    expect(optIn).not.toBeChecked();
+    expect(mockPatchSettings).toHaveBeenLastCalledWith({
+      "scan.cloud_analysis_opt_in": false,
+    });
+  });
+
+  it("loads a persisted cloud analysis opt-in of true as checked", async () => {
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [],
+      "sources.output": "",
+      "scan.cloud_analysis_opt_in": true,
+    } as never);
+
+    renderDialog();
+
+    const optIn = await screen.findByTestId(SCAN_CLOUD_ANALYSIS_OPT_IN);
+    await waitFor(() => expect(optIn).toBeChecked());
   });
 
   it("does not clobber user-typed input when a non-empty settings load resolves late", async () => {

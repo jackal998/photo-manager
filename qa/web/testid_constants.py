@@ -363,6 +363,7 @@ SCAN_AGGRESSIVE_DELETE = "scan-aggressive-delete"
 auto-select is on; tags every non-keeper in a scored group user_decision=delete."""
 
 SCAN_AUTOTUNE = "scan-autotune"
+SCAN_CLOUD_ANALYSIS_OPT_IN = "scan-cloud-analysis-opt-in"
 """'Auto-tune reader concurrency' checkbox (Advanced settings) — default ON
 (opt-out, #551 Phase 4); never changes grouping."""
 

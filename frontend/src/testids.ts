@@ -78,6 +78,7 @@ export const SCAN_ADVANCED = "scan-advanced";
 export const SCAN_AUTO_SELECT = "scan-auto-select";
 export const SCAN_AGGRESSIVE_DELETE = "scan-aggressive-delete";
 export const SCAN_AUTOTUNE = "scan-autotune";
+export const SCAN_CLOUD_ANALYSIS_OPT_IN = "scan-cloud-analysis-opt-in";
 export const SCAN_PHASH_THRESHOLD = "scan-phash-threshold";
 export const SCAN_PHASH_PARITY_NOTE = "scan-phash-parity-note";
 export const SCAN_DHASH_THRESHOLD = "scan-dhash-threshold";
