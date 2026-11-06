@@ -97,6 +97,11 @@ class HashResult:
     # ``_phash_quality_ok`` grouping gate reads it. None for video / legacy
     # manifests / hash failure — those pass the gate (None-tolerant).
     phash_quality: Optional[float] = None
+    # Scan-time only, never persisted to the manifest: the 32×32 RGB pixel
+    # signature (3,072 bytes) of the EXACT pixel-identity gate
+    # (``_pixels_identical``). None for video, hash failure, and any
+    # HashResult rebuilt without it; a None on either side demotes EXACT.
+    rgb32: Optional[bytes] = None
 
     def to_media_extract(self) -> "MediaExtract":  # noqa: F821 — runtime import
         """Convert this HashResult into a MediaExtract (#187 — PR 2).
@@ -594,6 +599,43 @@ def _classify_phash(
     )
 
 
+# Pixel-identity gate for an EXACT format duplicate (pHash 0, different bytes).
+# Mean absolute difference of the 32×32 RGB signatures, per channel value
+# (0-255), must be <= this. Measured 2026-11 on the dev test set
+# (docs/audits/testset-2026-11/probe_exact_colour.py): of 65 decodable pairs
+# the gate keeps 40 EXACT and demotes 8 of 9 pixel-different pairs plus 1 of 6
+# honest re-encodes.
+FORMAT_DUP_MAX_RGB_DIFF = 6.0
+
+
+def _pixels_identical(a: HashResult, b: HashResult) -> Optional[bool]:
+    """Pixel-identity verdict for two pHash-0 members: ``None`` when either
+    signature is missing (cannot verify), ``False`` when the pixel dimensions
+    differ, else whether the mean absolute RGB difference is within
+    :data:`FORMAT_DUP_MAX_RGB_DIFF`."""
+    if a.rgb32 is None or b.rgb32 is None:
+        return None
+    if (a.pixel_width, a.pixel_height) != (b.pixel_width, b.pixel_height):
+        return False
+    diff = sum(abs(x - y) for x, y in zip(a.rgb32, b.rgb32)) / len(a.rgb32)
+    return diff <= FORMAT_DUP_MAX_RGB_DIFF
+
+
+def _format_review_row(
+    duplicate: HashResult, keeper: HashResult, reason: str
+) -> ManifestRow:
+    """A format duplicate that the pixel gate will not call EXACT: same group
+    (``duplicate_of`` the keeper), REVIEW_DUPLICATE at high confidence."""
+    return _make_row(
+        duplicate,
+        "REVIEW_DUPLICATE",
+        duplicate_of=str(keeper.record.path),
+        hamming=0,
+        reason=reason,
+        match_confidence="high",
+    )
+
+
 def _classify_format_group(
     group: list[HashResult],
     rows: dict[str, ManifestRow],
@@ -672,6 +714,21 @@ def _classify_format_group(
                 hamming=0,
                 reason=f"same pHash as {keeper.record.path.name} but {note}",
                 match_confidence="low",
+            )
+            continue
+        # EXACT means pixel-identical, not just pHash 0: pHash is greyscale, so
+        # a colour grade, a resize or the next frame of a burst also hashes 0.
+        # Last gate before EXACT; byte copies never reach this loop.
+        same_pixels = _pixels_identical(keeper, duplicate)
+        if same_pixels is False:
+            rows[key] = _format_review_row(
+                duplicate, keeper,
+                "same pHash, pixels differ (edited, resized or another shot)",
+            )
+            continue
+        if same_pixels is None:
+            rows[key] = _format_review_row(
+                duplicate, keeper, "same pHash, pixel check unavailable",
             )
             continue
         rows[key] = _make_row(
@@ -771,7 +828,11 @@ def _gates_pass(
 # longer than that) becomes a keep-all stack: no frame is a delete candidate
 # (``_mark_burst_stacks``). Relabels only; no edge is added or removed.
 # "4" is taken by a separate branch's confidence gates; merged in order.
-GROUPING_STRATEGY_VERSION = "7"
+# "8": EXACT for a pHash-0 match with different bytes now requires pixel
+# identity (``_pixels_identical``: same dimensions, 32×32 RGB mean difference
+# <= FORMAT_DUP_MAX_RGB_DIFF). Otherwise the row is REVIEW_DUPLICATE/high.
+# Relabels only; the edges are unchanged.
+GROUPING_STRATEGY_VERSION = "8"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
