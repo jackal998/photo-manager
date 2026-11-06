@@ -88,6 +88,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Scan grouping — complementary RAW + lossy pair](features/scan.md#scan-grouping--complementary-raw--lossy-pair) | Scan |
 | [Scan grouping — low-confidence hints never chain](features/scan.md#scan-grouping--low-confidence-hints-never-chain) | Scan |
 | [Scan grouping — pHash contrast (quality) gate](features/scan.md#scan-grouping--phash-contrast-quality-gate) | Scan |
+| [Scan grouping — same-moment bursts become a stack](features/scan.md#scan-grouping--same-moment-bursts-become-a-stack) | Scan |
 | [Scan walk — recycle-bin / system folders are never walked](features/scan.md#scan-walk--recycle-bin--system-folders-are-never-walked) | Scan |
 | [Scan walk — skip-on-error traversal](features/scan.md#scan-walk--skip-on-error-traversal) | Scan |
 | [Set Action dialog — dual-section Simple + Regex view](features/set-action-dialog.md#set-action-dialog--dual-section-simple--regex-view) | Set Action dialog |

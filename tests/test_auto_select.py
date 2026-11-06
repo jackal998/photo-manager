@@ -237,6 +237,36 @@ class TestNonKeepersForAggressiveDelete:
         targets = non_keepers_for_aggressive_delete(rows, keepers={"/keep.jpg"})
         assert targets == set()
 
+    def test_burst_frames_never_delete_eligible(self):
+        """GROUPING 7 — a same-moment burst is a keep-all stack. Its frames are
+        "" / high, so none is aggressive-delete eligible; only the byte copy
+        (EXACT / high, same sha as a frame) is. Master: the frames were
+        REVIEW_DUPLICATE / high and the non-keepers all delete-eligible."""
+        from datetime import datetime, timedelta
+        from pathlib import Path
+
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+        from scanner.dedup import classify
+        from tests.test_dedup_hint_edges import _hr
+
+        t0 = datetime(2024, 6, 12, 20, 38, 0)
+        records = [
+            _hr("/a/f0.jpg", "s0", "00000000ffffffff", t0),
+            _hr("/a/f1.jpg", "s1", "00000001fffffffe", t0 + timedelta(seconds=2)),
+            _hr("/a/f2.jpg", "s2", "00000003fffffffc", t0 + timedelta(seconds=4)),
+            _hr("/z/copy.jpg", "s1", "00000001fffffffe", t0 + timedelta(seconds=2)),
+        ]
+        rows = classify(records, source_priority={"src_a": 0})
+        scores = {"/a/f0.jpg": 0.9, "/a/f1.jpg": 0.5, "/a/f2.jpg": 0.4, "/z/copy.jpg": 0.3}
+        for row in rows:
+            row.score = scores[Path(row.source_path).as_posix()]
+        keepers = top_score_path_per_group(rows)
+        targets = non_keepers_for_aggressive_delete(rows, keepers=keepers)
+        assert targets == {str(Path("/z/copy.jpg"))}
+
     def test_raw_keeper_does_not_demote_the_best_lossy_copy(self):
         """#824 — a RAW that merges in via the new exact-tier complementary
         edge can outscore the incumbent and take keepership. The lossy row it
