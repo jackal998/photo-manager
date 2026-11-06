@@ -1501,6 +1501,54 @@ class TestExecuteBudgetPerBatch:
         assert set(result) == set(paths)
         assert len(result) == 60
 
+    def test_timeout_message_names_the_wedged_file(self, monkeypatch):
+        """Master's message counted paths but never said which one wedged, so
+        the log could not name the file. One path per -execute now names it."""
+        from scanner import exif
+
+        self._scale_down(monkeypatch)
+        paths = [Path("/fake/wedged.heic")]
+        proc = _per_file_block_buffered_proc(lambda p: 3.0)
+        monkeypatch.setattr(exif.subprocess, "Popen", lambda *a, **k: proc)
+
+        with exif.ExiftoolProcess() as et:
+            with pytest.raises(exif.ExiftoolTimeout) as info:
+                exif.batch_read_extracts(paths, et)
+
+        assert str(paths[0]) in str(info.value)
+
+    def test_batch_timeout_carries_records_read_and_resume_point(self):
+        """Third of five files wedges. The timeout carries the two records read
+        before it, the wedged path, and the two unsent paths after it, so the
+        consumer can resume after the wedged file. Master has no such type:
+        it would re-raise a bare timeout and the caller could only retry all five."""
+        import json as _json
+        from scanner import exif
+
+        paths = [Path(f"/fake/{i}.jpg") for i in range(5)]
+        sent: list[str] = []
+
+        def fake_execute(args, read_timeout=None):
+            path = args[-1]
+            sent.append(path)
+            if path == str(paths[2]):
+                raise exif.ExiftoolTimeout("stalled")
+            return _json.dumps([{"SourceFile": path}])
+
+        et = MagicMock()
+        et.execute.side_effect = fake_execute
+
+        with pytest.raises(exif.ExiftoolBatchTimeout) as info:
+            exif._execute_in_batches(et, ["-j", "-G"], paths)
+
+        exc = info.value
+        assert isinstance(exc, exif.ExiftoolTimeout)
+        assert [r["SourceFile"] for r in exc.completed] == [str(p) for p in paths[:2]]
+        assert exc.completed_paths == paths[:2]
+        assert exc.failed_path == paths[2]
+        assert exc.remaining == paths[3:]
+        assert sent == [str(p) for p in paths[:3]], "no file after the wedge is sent"
+
 
 # ── Sub-second / offset on the exiftool path (#820) ────────────────────────
 

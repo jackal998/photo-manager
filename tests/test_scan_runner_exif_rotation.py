@@ -19,7 +19,6 @@ from PIL import Image
 from core.app_service.cancel_token import _CancelToken
 from core.app_service.dtos import ScanConfig
 from core.app_service.scan_runner import run_pipeline
-from scanner.exif import ExiftoolTimeout
 from scanner.media_extract import MediaExtract
 
 _FAKE_EXIF_DATE = datetime(2021, 5, 6, 7, 8, 9)
@@ -172,12 +171,13 @@ class TestWedgedExiftoolRotation:
     def test_timeout_on_batch_rotates_and_retries_same_batch(
         self, tmp_path, monkeypatch
     ):
-        """A stalled first batch is retried on a fresh exiftool and every
-        record gets its EXIF data; the wedged process is closed."""
+        """A stalled read costs only its own file: the wedged process is closed,
+        the files after it resume on a fresh exiftool, and every other record
+        gets its EXIF data."""
 
-        def _on_batch(call_no, _proc, _paths):
+        def _on_batch(call_no, _proc, paths):
             if call_no == 1:
-                raise ExiftoolTimeout("read stalled")
+                raise _wedge_on(paths, 0)
 
         created, calls = _install_fake_exiftool(monkeypatch, _on_batch)
 
@@ -188,35 +188,35 @@ class TestWedgedExiftoolRotation:
         assert len(created) == 2, f"expected original + one rotation; got {len(created)}"
         assert created[0].closed, "the wedged process must be closed on rotation"
         assert [c[1] for c in calls] == [0, 1], (
-            f"the same batch must be retried on the fresh process; calls={calls!r}"
+            f"the rest of the batch must resume on the fresh process; calls={calls!r}"
         )
-        assert calls[0][2] == calls[1][2], "retry must carry the same paths"
+        assert calls[1][2] == calls[0][2][1:], "resume must skip the wedged file"
         assert len(rows) == 3
-        assert all(_has_fake_date(r) for r in rows), f"rows lack EXIF: {rows!r}"
+        assert sum(_has_fake_date(r) for r in rows) == 2, "only the wedged file lacks EXIF"
 
     def test_batch_failing_twice_is_recorded_and_later_batch_uses_rotated_proc(
         self, tmp_path, monkeypatch
     ):
-        """Both attempts on the first 500-file batch time out: its rows still
-        reach the manifest with no EXIF date, and the next batch succeeds on
-        the process rotated in after the failed retry."""
+        """Two wedges on the first 500-file batch each cost one file: those two
+        rows reach the manifest with no EXIF date, every other row is dated,
+        and the next batch succeeds on the process rotated in last."""
 
-        def _on_batch(call_no, _proc, _paths):
+        def _on_batch(call_no, _proc, paths):
             if call_no in (1, 2):
-                raise ExiftoolTimeout("read stalled")
+                raise _wedge_on(paths, 0)
 
         created, calls = _install_fake_exiftool(monkeypatch, _on_batch)
 
         rows, bus, finished = _run_scan(tmp_path, 501)
 
-        assert finished, "scan must finish when every attempt on a batch fails"
+        assert finished, "scan must finish when reads keep wedging"
         assert bus.failed_msgs == []
         assert len(rows) == 501, f"all 501 records must reach the manifest; got {len(rows)}"
-        failed_batch = set(calls[0][2])
+        wedged = {str(calls[0][2][0]), str(calls[1][2][0])}
         dated = [r for r in rows if _has_fake_date(r)]
         undated = [r for r in rows if not _has_fake_date(r)]
-        assert {r["source_path"] for r in undated} == {str(p) for p in failed_batch}
-        assert len(dated) == 1, f"the later batch must succeed; dated={len(dated)}"
+        assert {r["source_path"] for r in undated} == wedged
+        assert len(dated) == 499, f"every other file must be dated; dated={len(dated)}"
         assert calls[-1][1] == len(created) - 1, (
             "the later batch must run on the most recently rotated process"
         )
@@ -229,8 +229,8 @@ class TestWedgedExiftoolRotation:
         worker). Before the fix the consumer died after its first batch and
         the HASH stage blocked forever on ``exif_queue.put``."""
 
-        def _on_batch(_call_no, _proc, _paths):
-            raise ExiftoolTimeout("read stalled")
+        def _on_batch(_call_no, _proc, paths):
+            raise _wedge_on(paths, 0)
 
         _install_fake_exiftool(monkeypatch, _on_batch)
 
@@ -246,8 +246,8 @@ class TestWedgedExiftoolRotation:
         more records than ``_EXIF_QUEUE_MAXSIZE``. The consumer must drain and
         discard, so producers never block; every row still reaches the manifest."""
 
-        def _on_batch(_call_no, _proc, _paths):
-            raise ExiftoolTimeout("read stalled")
+        def _on_batch(_call_no, _proc, paths):
+            raise _wedge_on(paths, 0)
 
         def _on_construct(attempt):
             if attempt == 2:
@@ -318,8 +318,8 @@ class TestWedgedExiftoolRotation:
         """A non-OSError from creating the replacement must degrade, not kill
         the consumer with items still in flight."""
 
-        def _on_batch(_call_no, _proc, _paths):
-            raise ExiftoolTimeout("read stalled")
+        def _on_batch(_call_no, _proc, paths):
+            raise _wedge_on(paths, 0)
 
         def _on_construct(attempt):
             if attempt == 2:
@@ -364,3 +364,136 @@ class TestWedgedExiftoolRotation:
 
         assert finished, "consumer waited for a second sentinel after a crash"
         assert len(rows) == 3
+
+
+def _wedge_on(paths, idx: int):
+    """The ``ExiftoolBatchTimeout`` ``_execute_in_batches`` raises when
+    ``paths[idx]`` wedges: parsed records for the files before it, then the
+    wedged path, then the files after it."""
+    from scanner.exif import ExiftoolBatchTimeout
+
+    done = list(paths[:idx])
+    return ExiftoolBatchTimeout(
+        f"exiftool stdout idle for 300.0s reading {paths[idx]} (1 paths, 300.5s since -execute)",
+        completed=[
+            {"SourceFile": str(p), "EXIF:DateTimeOriginal": "2021:05:06 07:08:09"}
+            for p in done
+        ],
+        completed_paths=done,
+        failed_path=paths[idx],
+        remaining=list(paths[idx + 1:]),
+    )
+
+
+class TestWedgeResumesFromFailedFile:
+    def test_one_wedge_costs_one_file_and_one_rotation(self, tmp_path, monkeypatch):
+        """Wedge on the 3rd of 5 files. Master re-runs all five on a fresh
+        process; now the 2 files before it are kept, the wedged one is
+        exif-missing, and only the 2 after it are re-read."""
+
+        def _on_batch(call_no, _proc, paths):
+            if call_no == 1:
+                raise _wedge_on(paths, 2)
+
+        created, calls = _install_fake_exiftool(monkeypatch, _on_batch)
+
+        rows, bus, finished = _run_scan(tmp_path, 5)
+
+        assert finished, "scan must finish after one wedge"
+        assert bus.failed_msgs == []
+        assert len(created) == 2, f"one wedge = one rotation; got {len(created)}"
+        assert len(calls) == 2, f"resume is one more read, not a retry; calls={calls!r}"
+        batch = calls[0][2]
+        assert calls[1][2] == batch[3:], "resume must start after the wedged file"
+        wedged = str(batch[2])
+        assert [r["source_path"] for r in rows if not _has_fake_date(r)] == [wedged]
+        assert sum(_has_fake_date(r) for r in rows) == 4
+        name = Path(wedged).name
+        assert any(
+            f"exiftool wedged reading {name}" in m and "resuming with 2 files" in m
+            for m in bus.logs
+        ), f"log must name the wedged file; logs={bus.logs!r}"
+
+    def test_two_wedges_in_one_batch_cost_two_files_and_two_rotations(
+        self, tmp_path, monkeypatch
+    ):
+        """Wedge on file 2 of 5, then on file 2 of the remaining 3. Three files
+        get EXIF, two are exif-missing, and the summary counts both wedges."""
+
+        def _on_batch(call_no, _proc, paths):
+            if call_no in (1, 2):
+                raise _wedge_on(paths, 1)
+
+        created, calls = _install_fake_exiftool(monkeypatch, _on_batch)
+
+        rows, bus, finished = _run_scan(tmp_path, 5)
+
+        assert finished
+        assert bus.failed_msgs == []
+        assert len(created) == 3, f"two wedges = two rotations; got {len(created)}"
+        batch = calls[0][2]
+        assert calls[1][2] == batch[2:], f"calls={calls!r}"
+        assert calls[2][2] == batch[4:], f"calls={calls!r}"
+        undated = {r["source_path"] for r in rows if not _has_fake_date(r)}
+        assert undated == {str(batch[1]), str(batch[3])}
+        assert sum(_has_fake_date(r) for r in rows) == 3
+        assert any(m.startswith("  EXIF done") and "2 wedged" in m for m in bus.logs)
+
+    def test_cancel_during_resume_rotation_starts_no_replacement(
+        self, tmp_path, monkeypatch
+    ):
+        """Cancel lands on the second wedge. The rotation must not start a
+        process nothing will kill: every process created is closed, and no
+        third read happens. Master would re-read the whole batch instead."""
+        token = _CancelToken()
+
+        def _on_batch(call_no, _proc, paths):
+            if call_no == 1:
+                raise _wedge_on(paths, 1)
+            token.request()
+            raise _wedge_on(paths, 0)
+
+        created, calls = _install_fake_exiftool(monkeypatch, _on_batch)
+
+        _rows, _bus, finished = _run_scan(tmp_path, 5, token=token)
+
+        assert finished, "cancelled scan must return"
+        assert len(created) == 2, f"cancel must not rotate again; got {len(created)}"
+        assert all(p.closed for p in created), "every exiftool must be closed"
+        assert len(calls) == 2, f"no read after the cancel; calls={calls!r}"
+        assert calls[1][2] == calls[0][2][2:], "resume uses the remaining files only"
+
+    def test_flushed_batch_logs_exif_progress_and_a_final_summary(
+        self, tmp_path, monkeypatch
+    ):
+        _install_fake_exiftool(monkeypatch, lambda *_a: None)
+
+        _rows, bus, finished = _run_scan(tmp_path, 3)
+
+        assert finished
+        assert any(m.startswith("  EXIF ") and " read (" in m for m in bus.logs), (
+            f"no EXIF progress line after the flushed batch; logs={bus.logs!r}"
+        )
+        assert any(m.startswith("  EXIF done") for m in bus.logs)
+
+    def test_replacement_failing_after_a_wedge_records_the_rest_and_finishes(
+        self, tmp_path, monkeypatch
+    ):
+        """Wedge on file 0 of 5, then the replacement cannot start. Exactly one
+        process is ever created, all five rows still reach the manifest, and
+        the scan finishes instead of hanging on the drained queue."""
+
+        def _on_batch(_call_no, _proc, paths):
+            raise _wedge_on(paths, 0)
+
+        def _on_construct(attempt):
+            if attempt == 2:
+                raise OSError("exiftool.exe vanished")
+
+        created, _calls = _install_fake_exiftool(monkeypatch, _on_batch, _on_construct)
+
+        rows, bus, finished = _run_scan(tmp_path, 5)
+
+        assert finished, "scan hung after a failed replacement"
+        assert len(created) == 1, f"no process may start after a failed rotation; got {len(created)}"
+        assert len(rows) == 5

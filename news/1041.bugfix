@@ -1,0 +1,1 @@
+A wedged exiftool now costs one file and one process rotation instead of its whole 500-file batch; the timeout names the file and the app log shows EXIF-stage progress (#1041)
