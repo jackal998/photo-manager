@@ -1,0 +1,1 @@
+EXACT now requires pixel-identical content: a pHash-0 match with different bytes stays EXACT only when dimensions match and the 32×32 RGB difference and per-channel shift are small; graded edits, resized copies and neighbouring burst frames become REVIEW near-duplicates (#1048)

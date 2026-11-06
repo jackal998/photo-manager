@@ -86,6 +86,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Scan flow — rescan confirm](features/scan.md#scan-flow--rescan-confirm) | Scan |
 | [Scan flow — visual selection of KEEP rows after scan](features/scan.md#scan-flow--visual-selection-of-keep-rows-after-scan) | Scan |
 | [Scan grouping — complementary RAW + lossy pair](features/scan.md#scan-grouping--complementary-raw--lossy-pair) | Scan |
+| [Scan grouping — EXACT requires pixel identity](features/scan.md#scan-grouping--exact-requires-pixel-identity) | Scan |
 | [Scan grouping — low-confidence hints never chain](features/scan.md#scan-grouping--low-confidence-hints-never-chain) | Scan |
 | [Scan grouping — pHash contrast (quality) gate](features/scan.md#scan-grouping--phash-contrast-quality-gate) | Scan |
 | [Scan grouping — same-moment bursts become a stack](features/scan.md#scan-grouping--same-moment-bursts-become-a-stack) | Scan |

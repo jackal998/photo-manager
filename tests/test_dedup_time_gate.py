@@ -44,6 +44,7 @@ def _hr(
         exif_date=exif_date,
         pixel_width=4000,
         pixel_height=3000,
+        rgb32=bytes(3072),  # constant signature: format dups read as same pixels
     )
 
 

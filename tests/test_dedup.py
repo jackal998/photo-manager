@@ -54,6 +54,9 @@ def _hr(
     dhash: str | None = None,
     pixel_width: int | None = 4000,
     pixel_height: int | None = 3000,
+    # Constant signature: every row reads as the same pixels, so a pHash-0
+    # format duplicate keeps EXACT (the pixel gate, GROUPING "8", passes).
+    rgb32: bytes | None = bytes(3072),
 ) -> HashResult:
     return HashResult(
         record=_record(
@@ -67,6 +70,7 @@ def _hr(
         exif_date=exif_date,
         pixel_width=pixel_width,
         pixel_height=pixel_height,
+        rgb32=rgb32,
     )
 
 
