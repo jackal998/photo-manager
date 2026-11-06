@@ -1,0 +1,13 @@
+== 1. the 1,555 EXACT->UNDATED JPGs: are they byte-identical copies? ==
+sha256 shared with >=2 rows in new: 1535
+in a group now: 1538  hamming 0: 0
+June reason samples: [('exact duplicate of $RQRS0A8.jpg', 19), ('exact duplicate of $R6MRWXL.jpg', 14), ('exact duplicate of $R6XBJSK.jpg', 14), ('exact duplicate of $R3G4QSD.jpg', 7)]
+new reason samples: [('no EXIF DateTimeOriginal', 1555)]
+June shot_date / creation_date / mtime present: 0 1555 1555
+new shot_date / creation_date / mtime present: 0 1555 1555
+
+== 2. PNG-only pHash-0 groups still 'high': byte-identical? ==
+groups: 188  with a single sha256 (true byte copies): 188
+
+== 3. the one exif-missing batch: rows with exif_tag_count NULL/0 but a date in June ==
+files dated in June, undated now: 39  ext: [('.mov', 23), ('.heic', 13), ('.mp4', 3)]
