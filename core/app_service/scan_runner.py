@@ -835,9 +835,9 @@ def run_pipeline(
 
         A wedge on file i (``ExiftoolBatchTimeout``) banks files before i,
         records file i exif-missing, rotates once, and resumes with the files
-        after i in the SAME batch. A timeout that names no file retries the
-        whole batch once; any other failure records the rest of the batch as
-        exif-missing and rotates. Once cancelled, nothing is flushed or retried.
+        after i in the SAME batch. A timeout that names no file is treated like
+        any other failure: the rest of the batch is recorded as
+        exif-missing and the process rotates. Once cancelled, nothing is flushed.
         """
         pending = batch
         while pending:
