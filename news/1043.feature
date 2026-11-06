@@ -1,0 +1,1 @@
+Scan dialog gains an off-by-default "Allow cloud analysis of thumbnails" switch with a plain disclosure that media leaves this computer; nothing reads it yet, and no future cloud feature may run without it (#1043)
