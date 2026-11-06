@@ -3,7 +3,7 @@
 Source: `migration_manifest_v6.sqlite` (grouping 6 scan of the full library, 40k rows). Selector:
 `select_testset.py <manifest> <outdir>` (read-only, seeded `random.Random(20261106)`, whole groups only).
 `selection.csv` beside this file holds the full source paths and is a LOCAL work file (gitignored here).
-Nothing has been copied yet; the copy step needs the owner's destination and "yes".
+The copy to the owner's NAS folder was done on 2026-11-06 (see §Baseline); `ROOT.local.txt` holds the root.
 
 ## Totals
 
@@ -11,9 +11,9 @@ Nothing has been copied yet; the copy step needs the owner's destination and "ye
 |---|---:|
 | files | 1,381 |
 | bytes | 12,890,807,009 (12.0 GiB) |
-| local disk (D) | 504 files, 3.15 GB |
-| NAS share 1 (H) | 334 files, 3.64 GB |
-| NAS share 2 (J) | 543 files, 5.22 GB |
+| local disk (D) | 504 files, 3.15 GiB |
+| NAS share 1 (H) | 334 files, 3.64 GiB |
+| NAS share 2 (J) | 543 files, 5.22 GiB |
 
 Checks the script asserts: no duplicate `source_path`; every selected `group_id` is complete (all manifest
 rows of that group are included); the seven regression fixture basenames (eclipse `MVIMG_20200621_160439.jpg`,
@@ -86,7 +86,7 @@ Size cap: a group containing any file > 400 MiB is skipped whole (counts compute
 (this is the schema the app's `settings.json` uses today: `sources.list[]` of `{path, recursive}` plus
 `sources.output`; keep the full-library entries somewhere safe to swap back.)
 
-## Copy and verification recipe (text only — not executed)
+## Copy and verification recipe (what `copy_testset.py` does; run once on 2026-11-06)
 
 1. For each row of `selection.csv`, map `source_path` → target as above and copy with a method that
    preserves last-write time (robocopy `/COPY:DAT`, or `shutil.copy2`).

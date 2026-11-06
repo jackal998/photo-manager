@@ -428,8 +428,11 @@ def write_outputs(outdir: str, out: list) -> str:
         for name, why, gid, r in out:
             writer.writerow([name, why, gid, r.path, r.source_hash or "",
                              r.size, r.action, r.confidence or ""])
-    with open(os.path.join(outdir, ".gitignore"), "w", encoding="utf-8", newline="") as fh:
-        fh.write("selection.csv\n")
+    gitignore = os.path.join(outdir, ".gitignore")
+    existing = open(gitignore, encoding="utf-8").read().splitlines() if os.path.exists(gitignore) else []
+    if "selection.csv" not in existing:  # never overwrite: the folder's .gitignore also hides other local files
+        with open(gitignore, "a", encoding="utf-8", newline="") as fh:
+            fh.write("selection.csv\n")
     return csv_path
 
 
