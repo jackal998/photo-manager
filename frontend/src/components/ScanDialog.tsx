@@ -10,7 +10,7 @@
 //   open: boolean            — controlled by parent (main toolbar Scan button)
 //   onOpenChange: (open: boolean) => void   — fed to Radix Dialog.Root
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 import {
   Dialog,
@@ -245,6 +245,10 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   // Cloud-analysis opt-in (privacy policy) — default OFF. Persisted on change
   // and loaded on open; nothing reads it yet (no cloud call exists).
   const [cloudAnalysisOptIn, setCloudAnalysisOptIn] = useState(false);
+  // Set once the user ticks the box in this open. A settings GET that resolves
+  // late must not overwrite that click (it would show OFF while the PATCH has
+  // already stored ON). Reset on every open, like the other pristine guards.
+  const cloudOptInTouched = useRef(false);
 
   // Grouping-sensitivity thresholds (#736) — per-scan React state, NEVER
   // persisted (no patchSettings key; s23b_verify_settings.py pins the
@@ -303,6 +307,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     setAggressiveDelete(false);
     setAutotuneReadKnee(true);
     setCloudAnalysisOptIn(false);
+    cloudOptInTouched.current = false;
     setPhashThresholdInput(String(DEFAULT_PHASH_THRESHOLD));
     setDhashThresholdInput(String(DEFAULT_DHASH_THRESHOLD));
     setMeanColorThresholdInput(String(DEFAULT_MEAN_COLOR_THRESHOLD));
@@ -331,7 +336,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         // Cloud-analysis opt-in: only a strict boolean is honoured; unset or
         // any other stored value leaves it OFF.
         const cloud = settings["scan.cloud_analysis_opt_in"];
-        if (typeof cloud === "boolean") {
+        if (typeof cloud === "boolean" && !cloudOptInTouched.current) {
           setCloudAnalysisOptIn(cloud);
         }
       })
@@ -809,6 +814,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                   disabled={isRunning}
                   onCheckedChange={(checked) => {
                     const on = checked === true;
+                    cloudOptInTouched.current = true;
                     setCloudAnalysisOptIn(on);
                     void patchSettings({ "scan.cloud_analysis_opt_in": on }).catch(
                       (err) => {

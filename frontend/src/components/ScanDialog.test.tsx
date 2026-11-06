@@ -534,6 +534,37 @@ describe("ScanDialog", () => {
     });
   });
 
+  it("a late settings load does not untick a cloud opt-in the user already ticked", async () => {
+    // The settings GET is held open; the user ticks the box first (PATCH true
+    // is stored), then the stale GET resolves with false. The click must win.
+    let resolveSettings!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      resolveSettings = resolve;
+    });
+    mockGetSettings.mockReturnValue(pending as never);
+
+    renderDialog();
+
+    const optIn = await screen.findByTestId(SCAN_CLOUD_ANALYSIS_OPT_IN);
+    expect(optIn).not.toBeChecked();
+
+    const user = userEvent.setup();
+    await user.click(optIn);
+    expect(optIn).toBeChecked();
+    expect(mockPatchSettings).toHaveBeenLastCalledWith({
+      "scan.cloud_analysis_opt_in": true,
+    });
+
+    await act(async () => {
+      resolveSettings({
+        "sources.list": [],
+        "sources.output": "",
+        "scan.cloud_analysis_opt_in": false,
+      });
+    });
+    expect(optIn).toBeChecked();
+  });
+
   it("loads a persisted cloud analysis opt-in of true as checked", async () => {
     mockGetSettings.mockResolvedValue({
       "sources.list": [],

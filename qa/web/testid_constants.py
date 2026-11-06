@@ -363,9 +363,12 @@ SCAN_AGGRESSIVE_DELETE = "scan-aggressive-delete"
 auto-select is on; tags every non-keeper in a scored group user_decision=delete."""
 
 SCAN_AUTOTUNE = "scan-autotune"
-SCAN_CLOUD_ANALYSIS_OPT_IN = "scan-cloud-analysis-opt-in"
 """'Auto-tune reader concurrency' checkbox (Advanced settings) — default ON
 (opt-out, #551 Phase 4); never changes grouping."""
+
+SCAN_CLOUD_ANALYSIS_OPT_IN = "scan-cloud-analysis-opt-in"
+"""'Allow cloud analysis of thumbnails' checkbox (Advanced settings) — default
+OFF; persisted as scan.cloud_analysis_opt_in. Setting only: no feature reads it yet."""
 
 SCAN_PHASH_THRESHOLD = "scan-phash-threshold"
 """pHash Similarity Threshold number input (Advanced settings, #736) —
