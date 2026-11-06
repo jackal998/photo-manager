@@ -10,7 +10,7 @@
 //   open: boolean            — controlled by parent (main toolbar Scan button)
 //   onOpenChange: (open: boolean) => void   — fed to Radix Dialog.Root
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 import {
   Dialog,
@@ -32,6 +32,7 @@ import {
   SCAN_AGGRESSIVE_DELETE,
   SCAN_AUTO_SELECT,
   SCAN_AUTOTUNE,
+  SCAN_CLOUD_ANALYSIS_OPT_IN,
   SCAN_COLOR_THRESHOLD,
   SCAN_DHASH_PARITY_NOTE,
   SCAN_DHASH_THRESHOLD,
@@ -241,6 +242,13 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   const [autoSelect, setAutoSelect] = useState(false);
   const [aggressiveDelete, setAggressiveDelete] = useState(false);
   const [autotuneReadKnee, setAutotuneReadKnee] = useState(true);
+  // Cloud-analysis opt-in (privacy policy) — default OFF. Persisted on change
+  // and loaded on open; nothing reads it yet (no cloud call exists).
+  const [cloudAnalysisOptIn, setCloudAnalysisOptIn] = useState(false);
+  // Set once the user ticks the box in this open. A settings GET that resolves
+  // late must not overwrite that click (it would show OFF while the PATCH has
+  // already stored ON). Reset on every open, like the other pristine guards.
+  const cloudOptInTouched = useRef(false);
 
   // Grouping-sensitivity thresholds (#736) — per-scan React state, NEVER
   // persisted (no patchSettings key; s23b_verify_settings.py pins the
@@ -298,6 +306,8 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     setAutoSelect(false);
     setAggressiveDelete(false);
     setAutotuneReadKnee(true);
+    setCloudAnalysisOptIn(false);
+    cloudOptInTouched.current = false;
     setPhashThresholdInput(String(DEFAULT_PHASH_THRESHOLD));
     setDhashThresholdInput(String(DEFAULT_DHASH_THRESHOLD));
     setMeanColorThresholdInput(String(DEFAULT_MEAN_COLOR_THRESHOLD));
@@ -322,6 +332,12 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         const knee = settings["ui.scan_dialog.autotune_read_knee"];
         if (typeof knee === "boolean") {
           setAutotuneReadKnee(knee);
+        }
+        // Cloud-analysis opt-in: only a strict boolean is honoured; unset or
+        // any other stored value leaves it OFF.
+        const cloud = settings["scan.cloud_analysis_opt_in"];
+        if (typeof cloud === "boolean" && !cloudOptInTouched.current) {
+          setCloudAnalysisOptIn(cloud);
         }
       })
       .catch(() => {
@@ -788,6 +804,44 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 )}
               </span>
             </label>
+
+            {/* Cloud analysis opt-in — default OFF. Persists on change via
+                /api/settings. Setting only: no feature reads it yet. */}
+            <div className="flex flex-col gap-1">
+              <label className="flex items-center gap-2 text-sm select-none">
+                <Checkbox
+                  checked={cloudAnalysisOptIn}
+                  disabled={isRunning}
+                  onCheckedChange={(checked) => {
+                    const on = checked === true;
+                    cloudOptInTouched.current = true;
+                    setCloudAnalysisOptIn(on);
+                    void patchSettings({ "scan.cloud_analysis_opt_in": on }).catch(
+                      (err) => {
+                        console.warn("Failed to persist cloud analysis opt-in:", err);
+                      }
+                    );
+                  }}
+                  data-testid={SCAN_CLOUD_ANALYSIS_OPT_IN}
+                  aria-label={t(
+                    "web.scan.cloud_analysis_opt_in_label",
+                    "Allow cloud analysis of thumbnails (experimental)"
+                  )}
+                />
+                <span className="text-ink">
+                  {t(
+                    "web.scan.cloud_analysis_opt_in_label",
+                    "Allow cloud analysis of thumbnails (experimental)"
+                  )}
+                </span>
+              </label>
+              <p className="pl-6 text-xs text-ink-muted">
+                {t(
+                  "web.scan.cloud_analysis_opt_in_help",
+                  "When on, 1024-pixel thumbnails with EXIF removed are sent to a cloud model to help pick the keeper. Your media leaves this computer. Off by default; nothing is sent while this is off, and no cloud feature runs without it."
+                )}
+              </p>
+            </div>
 
             {/* Grouping sensitivity — pHash/dHash/mean-color thresholds
                 (#736). Number inputs (the spinbox half of Qt's slider+

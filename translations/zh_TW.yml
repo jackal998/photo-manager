@@ -643,6 +643,8 @@ web:
     output_placeholder: "例如：C:/output/scan.db"
     advanced_settings_label: "進階設定"
     autotune_read_knee_label: "自動調整讀取並行度（實驗性）"
+    cloud_analysis_opt_in_label: "允許雲端分析縮圖（實驗性）"
+    cloud_analysis_opt_in_help: "開啟後，去除 EXIF 的 1024 px 縮圖會送到雲端模型協助挑選保留檔。你的媒體會離開這台電腦。預設關閉；關閉時不會傳送任何資料，也不會啟用任何雲端功能。"
     auto_select_label: "掃描後自動選取"
     auto_select_aggressive_label: "同時將其他檔案標記為刪除"
     grouping_sensitivity_label: "分組敏感度"

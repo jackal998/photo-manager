@@ -8,5 +8,5 @@ Leaf keys per catalogue: every scalar or list value, excluding `_meta`. `web.*` 
 
 | Locale | File | Keys (total) | Keys under `web.*` |
 |---|---|---|---|
-| `en` | `en.yml` | 676 | 378 |
-| `zh_TW` | `zh_TW.yml` | 676 | 378 |
+| `en` | `en.yml` | 678 | 380 |
+| `zh_TW` | `zh_TW.yml` | 678 | 380 |

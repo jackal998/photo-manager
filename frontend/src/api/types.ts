@@ -189,6 +189,11 @@ export interface SettingsMap {
    * declare it to stay in sync with the backend contract (#796).
    */
   "scan.exif_workers"?: number | null;
+  /**
+   * Cloud-analysis opt-in (privacy policy): GET /api/settings serves it.
+   * Default false; setting only — no backend consumer reads it yet.
+   */
+  "scan.cloud_analysis_opt_in"?: boolean | null;
 }
 
 // ---------------------------------------------------------------------------

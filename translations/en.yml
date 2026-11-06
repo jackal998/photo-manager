@@ -784,6 +784,8 @@ web:
     output_placeholder: "e.g. C:/output/scan.db"
     advanced_settings_label: "Advanced settings"
     autotune_read_knee_label: "Auto-tune reader concurrency (experimental)"
+    cloud_analysis_opt_in_label: "Allow cloud analysis of thumbnails (experimental)"
+    cloud_analysis_opt_in_help: "When on, 1024-pixel thumbnails with EXIF removed are sent to a cloud model to help pick the keeper. Your media leaves this computer. Off by default; nothing is sent while this is off, and no cloud feature runs without it."
     auto_select_label: "Auto select after scan"
     auto_select_aggressive_label: "Also mark all other files for delete"
     grouping_sensitivity_label: "Grouping sensitivity"

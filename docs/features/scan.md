@@ -69,6 +69,17 @@ Entries for the **Scan** area of the feature inventory. The index and the sectio
 
 ---
 
+### Scan dialog — cloud analysis opt-in (setting-only)
+- **Area:** Scan
+
+- **Entry point:** `scan.cloud_analysis_opt_in` key in `settings.json`, served and written through `GET`/`PATCH /api/settings` ([app/web/routes/settings.py](../../app/web/routes/settings.py)). The Scan dialog's Advanced settings show the checkbox (testid `SCAN_CLOUD_ANALYSIS_OPT_IN`) after the aggressive auto-select option, with its label and a disclosure sentence rendered below it ([frontend/src/components/ScanDialog.tsx](../../frontend/src/components/ScanDialog.tsx)).
+- **Trigger:** On dialog open (the value is loaded from `GET /api/settings`) and on every change of the checkbox (`PATCH /api/settings` with `{"scan.cloud_analysis_opt_in": true|false}`).
+- **Behaviour:** An opt-in switch for a future cloud tier that may send 1024 px EXIF-stripped thumbnails to a cloud model. The disclosure states that media leaves the machine and that nothing is sent while the switch is off. Default OFF; an unset key reads back as `false`. **Today nothing reads the flag**: no cloud call exists anywhere in the codebase, so turning the switch on changes no behaviour. Any future cloud tier must check this flag and run only when it is `true`.
+- **Conditions / variants:** Disabled while a scan runs. It is not a scan-request field and is not sent with `POST /api/scan`. The allowlist performs no per-key type check (same as the other keys), so a non-boolean value is stored as sent; the dialog honours only a strict boolean on load and treats anything else as off.
+- **Related:** Privacy policy decision of 2026-11-06 (cloud thumbnails only after an explicit, disclosed opt-in); `tests/test_web_settings_routes.py::test_cloud_analysis_opt_in_round_trip` (default false, PATCH true/false round-trip); QA scenario [`qa/web/scenarios/s17_scan_dialog_widgets.py`](../../qa/web/scenarios/s17_scan_dialog_widgets.py) (checkbox present in Advanced settings, unchecked by default); [`docs/reference/settings-keys.md`](../reference/settings-keys.md).
+
+---
+
 ### Scan dialog — read-knee autotune opt-out
 - **Area:** Scan
 
