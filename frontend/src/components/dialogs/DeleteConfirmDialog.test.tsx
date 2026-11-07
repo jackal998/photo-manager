@@ -49,7 +49,9 @@ function mkRow(
     file_path: `${folder}/${basename}`,
     basename,
     folder,
-    action: "",
+    // A percent-100 fixture stands for a byte-identical copy, the only row the
+    // "Exact duplicate" wording is for (#1047: the action decides, not 100).
+    action: similarity.kind === "percent" && similarity.percent === 100 ? "EXACT" : "",
     user_decision: decision,
     is_locked: false,
     is_ref_winner: similarity.kind === "ref",

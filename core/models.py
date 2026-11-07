@@ -62,9 +62,13 @@ class PhotoRecord:
     xmp_derived: bool = False
     # #517 — scan-time match confidence: "high" (dHash agrees or SHA-exact),
     # "low" (pHash-only), None for non-duplicate rows and pre-#517 manifests.
-    # Read by apply_best_copy to honour the aggressive-delete gate; not
-    # serialised to the web API (badge is a deferred decision).
+    # Read by apply_best_copy to honour the aggressive-delete gate, and served
+    # to the web review tree (#1047) so the badge tooltip can say how sure.
     match_confidence: str | None = None
+    # The classifier's reason for this row's grouping (dedup's reason string,
+    # e.g. "near-duplicate (hamming=3)" or "unique"); "" when the manifest
+    # predates the column or the row is ungrouped. Served to the web tree.
+    reason: str = ""
 
 
 @dataclass(slots=True)

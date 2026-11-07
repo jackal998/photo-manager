@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 
 import core.app_service.review_view as rv
+from scanner.dedup import BURST_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,9 @@ class _FakeRecord:
     exif_tag_count: int | None = None
     gps_present: bool = False
     xmp_derived: bool = False
+    # #1047 — same types/defaults as core.models.PhotoRecord.
+    reason: str = ""
+    match_confidence: str | None = None
 
 
 # Phashes for deterministic hamming-distance tests
@@ -246,6 +250,7 @@ class TestSerializeGroups:
             "shot_date", "creation_date", "phash", "hamming_distance",
             "thumbnail_url",
             "exif_tag_count", "gps_present", "xmp_derived",
+            "reason", "match_confidence", "keep_all",
         }
         items = [_FakeRecord("/x.jpg", action="")]
         group = self._make_group(items)
@@ -332,3 +337,53 @@ class TestScoringSignalSerialisation:
         assert row["score"] is None
         assert row["exif_tag_count"] == 3
         assert row["gps_present"] is True
+
+
+# ---------------------------------------------------------------------------
+# #1047 — why a row is grouped and how sure the classifier is
+# ---------------------------------------------------------------------------
+
+class TestReasonAndConfidenceSerialisation:
+    """``reason`` and ``match_confidence`` reach the web tree, and ``keep_all``
+    is derived server-side from the scanner's burst prefix — the client never
+    parses an English string to decide the keep-whole chip."""
+
+    def _row(self, record):
+        class _Group:
+            def __init__(self, its):
+                self.group_number = 1
+                self.items = its
+        return rv.serialize_groups([_Group([record])])[0]["items"][0]
+
+    def test_reason_and_confidence_serialised_from_record(self):
+        row = self._row(_FakeRecord(
+            "/photos/b.jpg", action="REVIEW_DUPLICATE", hamming_distance=3,
+            reason="near-duplicate (hamming=3)", match_confidence="high",
+        ))
+        assert row["reason"] == "near-duplicate (hamming=3)"
+        assert row["match_confidence"] == "high"
+        assert row["keep_all"] is False
+
+    def test_burst_reason_sets_keep_all(self):
+        """Deleting the BURST_PREFIX derivation in _build_file_row would leave
+        keep_all False here and fail this test."""
+        row = self._row(_FakeRecord(
+            "/photos/burst_2.jpg", action="KEEP",
+            reason=BURST_PREFIX + "3 frames over 2 s",
+        ))
+        assert row["keep_all"] is True
+
+    def test_burst_byte_copy_is_not_keep_all(self):
+        """A byte-identical copy is not a burst member: a keep_all that merely
+        tested for a non-empty reason would wrongly flag it."""
+        row = self._row(_FakeRecord(
+            "/photos/copy.jpg", action="EXACT",
+            reason="exact duplicate of a.jpg",
+        ))
+        assert row["keep_all"] is False
+
+    def test_null_reason_serialises_empty_and_confidence_none(self):
+        row = self._row(_FakeRecord("/photos/solo.jpg", action="", reason=None, match_confidence=None))
+        assert row["reason"] == ""
+        assert row["match_confidence"] is None
+        assert row["keep_all"] is False

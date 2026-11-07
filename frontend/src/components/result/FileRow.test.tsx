@@ -68,24 +68,25 @@ function badgeOf(rowEl: HTMLElement): HTMLElement {
 }
 
 describe("FileRow similarity badge", () => {
-  const cases: [string, Similarity, SimilarityBadgeState][] = [
-    ["ref winner", { kind: "ref", percent: null }, "ref"],
-    ["byte-identical", { kind: "percent", percent: 100 }, "exact"],
-    ["near match", { kind: "percent", percent: 95 }, "near"],
-    ["distance-less near match", { kind: "near_dup", percent: null }, "near"],
-    ["indirect member", { kind: "passenger", percent: 92 }, "indirect"],
-    ["no comparable image", { kind: "none", percent: null }, "none"],
+  // The action is part of the case (#1047): only "EXACT" wears the exact pill.
+  const cases: [string, Similarity, string, SimilarityBadgeState][] = [
+    ["ref winner", { kind: "ref", percent: null }, "", "ref"],
+    ["byte-identical", { kind: "percent", percent: 100 }, "EXACT", "exact"],
+    ["near match", { kind: "percent", percent: 95 }, "REVIEW_DUPLICATE", "near"],
+    ["distance-less near match", { kind: "near_dup", percent: null }, "REVIEW_DUPLICATE", "near"],
+    ["indirect member", { kind: "passenger", percent: 92 }, "", "indirect"],
+    ["no comparable image", { kind: "none", percent: null }, "", "none"],
   ];
 
   it.each(cases)(
     "renders %s with its state's border + weight classes",
-    (_name, similarity, expectedState) => {
-      const rowEl = renderRow(makeRow({ similarity }));
+    (_name, similarity, action, expectedState) => {
+      const rowEl = renderRow(makeRow({ similarity, action }));
       const badge = badgeOf(rowEl);
       const spec = SIMILARITY_BADGE[expectedState];
 
       expect(badge.dataset.simState).toBe(expectedState);
-      expect(similarityBadgeState(similarity)).toBe(expectedState);
+      expect(similarityBadgeState(similarity, action)).toBe(expectedState);
       // The two colour-free cues have to reach the DOM, not just the spec.
       expect(badge.className).toContain(`border-${spec.border}`);
       expect(badge.className).toContain(spec.weight);
@@ -135,10 +136,10 @@ describe("FileRow similarity badge", () => {
 
   it.each(cases)(
     "keeps %s's cell text exactly similarityLabel()'s output",
-    (_name, similarity) => {
+    (_name, similarity, action) => {
       // The parity counter and the qa drivers read cell text; the glyph is a
       // decorative sibling, never part of the label run.
-      const rowEl = renderRow(makeRow({ similarity }));
+      const rowEl = renderRow(makeRow({ similarity, action }));
       const label = similarityLabel(similarity);
       expect(
         within(badgeOf(rowEl)).getByText(label)
@@ -277,6 +278,69 @@ describe("FileRow Action column = the decision (Q1)", () => {
     // enum. (`classificationLabel('')` is the em dash.)
     const row = renderRow(makeRow({ action: "" }));
     expect(badgeOf(row)).toHaveAttribute("title", "—");
+  });
+});
+
+describe("FileRow why and how sure (#1047)", () => {
+  it("review row at hamming 0", () => {
+    // The blue near pill, not the purple exact one (#1047).
+    // The flipped case: the default action is REVIEW_DUPLICATE, and a row at
+    // distance 0 is 100% without being byte-identical.
+    const rowEl = renderRow(
+      makeRow({
+        action: "REVIEW_DUPLICATE",
+        similarity: { kind: "percent", percent: 100 },
+        hamming_distance: 0,
+      })
+    );
+    const badge = badgeOf(rowEl);
+    expect(badge.dataset.simState).toBe("near");
+    expect(badge.textContent).toBe("100%");
+  });
+
+  it("renders the keep-all chip on a burst row", () => {
+    const rowEl = renderRow(
+      makeRow({
+        action: "KEEP",
+        keep_all: true,
+        reason: "burst stack (keep all): 3 frames over 2 s",
+      })
+    );
+    const chip = rowEl.querySelector<HTMLElement>("[data-verdict-chip]");
+    expect(chip?.dataset.verdictChip).toBe("keep_all");
+    expect(chip?.textContent).toBe("Keep all · burst");
+  });
+
+  it("renders the low-confidence chip", () => {
+    const rowEl = renderRow(makeRow({ match_confidence: "low" }));
+    const chip = rowEl.querySelector<HTMLElement>("[data-verdict-chip]");
+    expect(chip?.dataset.verdictChip).toBe("low_confidence");
+    expect(chip?.textContent).toBe("Low confidence");
+  });
+
+  it("renders no chip on a high-confidence row", () => {
+    const rowEl = renderRow(
+      makeRow({
+        match_confidence: "high",
+        reason: "near-duplicate (hamming=3)",
+        keep_all: false,
+      })
+    );
+    expect(rowEl.querySelector("[data-verdict-chip]")).toBeNull();
+  });
+
+  it("badge title carries the reason and confidence", () => {
+    const rowEl = renderRow(
+      makeRow({
+        action: "REVIEW_DUPLICATE",
+        reason: "near-duplicate (hamming=3)",
+        match_confidence: "high",
+      })
+    );
+    expect(badgeOf(rowEl)).toHaveAttribute(
+      "title",
+      "Near-duplicate\nnear-duplicate (hamming=3)\nConfidence: high"
+    );
   });
 });
 

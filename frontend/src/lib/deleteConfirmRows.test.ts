@@ -186,46 +186,87 @@ describe("deleteFolderBuckets", () => {
 });
 
 describe("deleteReasonText", () => {
-  const cases: Array<[string, Similarity, string | null, string]> = [
+  // [name, similarity, action, refBasename, expected]
+  const cases: Array<[string, Similarity, string, string | null, string]> = [
     [
       "exact",
       { kind: "percent", percent: 100 },
+      "EXACT",
       "beach-01.jpg",
       "Exact duplicate of beach-01.jpg",
     ],
-    ["near", { kind: "percent", percent: 92.4 }, "beach-01.jpg", "92% match — same group"],
-    ["passenger", { kind: "passenger", percent: 88 }, "beach-01.jpg", "Linked match, 88%*"],
+    [
+      "near",
+      { kind: "percent", percent: 92.4 },
+      "REVIEW_DUPLICATE",
+      "beach-01.jpg",
+      "92% match — same group",
+    ],
+    // #1047 — a REVIEW row at distance 0 reads 100% but is not byte-identical,
+    // so it must not be called "Exact duplicate" at the destructive moment.
+    [
+      "review at 100",
+      { kind: "percent", percent: 100 },
+      "REVIEW_DUPLICATE",
+      "beach-01.jpg",
+      "100% match — same group",
+    ],
+    [
+      "passenger",
+      { kind: "passenger", percent: 88 },
+      "",
+      "beach-01.jpg",
+      "Linked match, 88%*",
+    ],
     [
       "near_dup",
       { kind: "near_dup", percent: null },
+      "REVIEW_DUPLICATE",
       "beach-01.jpg",
       "Near-duplicate of beach-01.jpg",
     ],
-    ["none", { kind: "none", percent: null }, "beach-01.jpg", "No comparable image — same group"],
+    [
+      "none",
+      { kind: "none", percent: null },
+      "",
+      "beach-01.jpg",
+      "No comparable image — same group",
+    ],
     [
       "ref",
       { kind: "ref", percent: null },
+      "",
       null,
       "Group reference copy — the whole group is marked delete",
     ],
   ];
 
-  for (const [name, similarity, refBasename, expected] of cases) {
+  for (const [name, similarity, action, refBasename, expected] of cases) {
     it(`renders the ${name} phrase`, () => {
-      expect(deleteReasonText({ similarity, refBasename }, t)).toBe(expected);
+      expect(deleteReasonText({ similarity, refBasename, action }, t)).toBe(
+        expected
+      );
     });
   }
 
   it("never prints 'of null' when the group has no Ref row", () => {
     expect(
       deleteReasonText(
-        { similarity: { kind: "percent", percent: 100 }, refBasename: null },
+        {
+          similarity: { kind: "percent", percent: 100 },
+          refBasename: null,
+          action: "EXACT",
+        },
         t
       )
     ).toBe("Exact duplicate — same group");
     expect(
       deleteReasonText(
-        { similarity: { kind: "near_dup", percent: null }, refBasename: null },
+        {
+          similarity: { kind: "near_dup", percent: null },
+          refBasename: null,
+          action: "REVIEW_DUPLICATE",
+        },
         t
       )
     ).toBe("Near match — same group");
@@ -234,13 +275,21 @@ describe("deleteReasonText", () => {
   it("never prints 'null%' when the percentage is missing", () => {
     expect(
       deleteReasonText(
-        { similarity: { kind: "percent", percent: null }, refBasename: "a.jpg" },
+        {
+          similarity: { kind: "percent", percent: null },
+          refBasename: "a.jpg",
+          action: "REVIEW_DUPLICATE",
+        },
         t
       )
     ).toBe("Near match — same group");
     expect(
       deleteReasonText(
-        { similarity: { kind: "passenger", percent: null }, refBasename: "a.jpg" },
+        {
+          similarity: { kind: "passenger", percent: null },
+          refBasename: "a.jpg",
+          action: "",
+        },
         t
       )
     ).toBe("Linked match");

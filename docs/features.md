@@ -69,6 +69,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Preview pane — full-resolution viewer](features/preview-pane.md#preview-pane--full-resolution-viewer) | Preview pane |
 | [Preview pane — no-autoplay video default](features/preview-pane.md#preview-pane--no-autoplay-video-default) | Preview pane |
 | [Preview pane — per-device request coordinator + 1-ahead prefetch](features/preview-pane.md#preview-pane--per-device-request-coordinator--1-ahead-prefetch) | Preview pane |
+| [Review tree — why and how sure](features/review.md#review-tree--why-and-how-sure) | Review |
 | [Review — Undo of Keep best under named confirmation](features/review.md#review--undo-of-keep-best-under-named-confirmation) | Review |
 | [Save Manifest Decisions — base flow](features/file-operations.md#save-manifest-decisions--base-flow) | File operations |
 | [Scan dialog — auto-select after scan](features/scan.md#scan-dialog--auto-select-after-scan) | Scan |

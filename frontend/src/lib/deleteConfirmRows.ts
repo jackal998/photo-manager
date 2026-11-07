@@ -22,6 +22,9 @@ export interface DeleteConfirmRow {
   basename: string;
   bytes: number;
   similarity: Similarity;
+  /** The row's action (#1047). "EXACT" is the only byte-identical duplicate;
+   *  a REVIEW row at distance 0 reads 100% but must not be called exact. */
+  action: string;
   /**
    * Basename of this row's group keeper (`similarity.kind === "ref"`), which
    * the "Exact duplicate of X" / "Near-duplicate of X" phrasings name.
@@ -88,6 +91,7 @@ export function deleteFolderBuckets(
         basename: row.basename,
         bytes: safeBytes(row.file_size_bytes),
         similarity: row.similarity,
+        action: row.action,
         // A Ref row that is itself marked delete does not describe itself as a
         // duplicate "of" anything — it gets the `reason_ref` phrasing below.
         refBasename: row.similarity.kind === "ref" ? null : refBasename,
@@ -108,11 +112,12 @@ export function deleteFolderBuckets(
  * only inside an all-delete group.
  *
  * The mapping onto `SimilarityKind` is the badge's
- * (`lib/similarityBadge.ts::similarityBadgeState`): `percent`+100 is the exact
- * duplicate, `percent`<100 the direct near-match, `passenger` the indirect one.
+ * (`lib/similarityBadge.ts::similarityBadgeState`): action `EXACT` is the exact
+ * duplicate (#1047 — a REVIEW row at 100% is not), `percent` the direct
+ * near-match, `passenger` the indirect one.
  */
 export function deleteReasonText(
-  row: Pick<DeleteConfirmRow, "similarity" | "refBasename">,
+  row: Pick<DeleteConfirmRow, "similarity" | "refBasename" | "action">,
   t: (key: string, fallback: string, params?: Record<string, string | number>) => string
 ): string {
   const { kind, percent } = row.similarity;
@@ -124,7 +129,7 @@ export function deleteReasonText(
         "Group reference copy — the whole group is marked delete"
       );
     case "percent":
-      if (percent === 100) {
+      if (row.action === "EXACT") {
         return ref !== null
           ? t("web.delete_confirm.reason_exact", "Exact duplicate of {ref}", {
               ref,

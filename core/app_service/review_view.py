@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from scanner.dedup import BURST_PREFIX
 from scanner.media import is_video as _is_video
 from scanner.phash_distance import hamming_distance as _phash_hamming
 
@@ -128,6 +129,7 @@ def _build_file_row(
     action = getattr(record, "action", "") or ""
     raw_decision = getattr(record, "user_decision", "") or ""
     file_path = str(getattr(record, "file_path", ""))
+    reason: str = getattr(record, "reason", "") or ""
 
     return {
         "file_path": file_path,
@@ -162,6 +164,12 @@ def _build_file_row(
         "hamming_distance": getattr(record, "hamming_distance", None),
         "thumbnail_url": _thumbnail_url(file_path),
         "media_type": "video" if _is_video(file_path) else "image",
+        # #1047 — why the row is grouped and how sure the classifier is. The
+        # burst flag is derived here from the scanner's own prefix so the web
+        # client never copies an English string.
+        "reason": reason,
+        "match_confidence": getattr(record, "match_confidence", None),
+        "keep_all": reason.startswith(BURST_PREFIX),
     }
 
 

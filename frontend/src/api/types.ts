@@ -44,6 +44,20 @@ export interface FileRow {
   exif_tag_count?: number | null;
   gps_present?: boolean;
   xmp_derived?: boolean;
+  /**
+   * #1047 — why the row is grouped: the classifier's reason string ("" or
+   * "unique" for an ungrouped row, "near-duplicate (hamming=N)" for a
+   * near-duplicate, a burst phrase for a same-moment stack). Optional because
+   * a pre-#1047 backend omits it.
+   */
+  reason?: string;
+  /** #1047 — how sure the classifier is: "high", "low", or null (not a
+   *  duplicate / pre-#517 manifest). Optional for the same reason. */
+  match_confidence?: "high" | "low" | null;
+  /** #1047 — true for a burst stack member the user should keep whole. The
+   *  server derives it from the scanner's burst prefix; the client never
+   *  parses `reason` for it. */
+  keep_all?: boolean;
 }
 
 export interface Group {
