@@ -119,3 +119,32 @@ Action / confidence changes against v6, all explained:
 
 This manifest is the GROUPING 7 baseline for later changes: re-scan the test set (minutes), then run
 `compare_testset.py` against `selection.csv` or diff two test-set manifests on sha256.
+
+## Extension 1 — odd shapes (2026-11-07, master 9c92012, GROUPING "9")
+
+Owner's standing instruction: keep the test set current and deliberately pull strange combinations from the
+real library into it. `extend_testset_shapes.py` abstracts every full-library group into a "shape"
+(extension classes, one stem or many, one folder or many, action / confidence sets, flags: burst, hint,
+format duplicate, pixels-differ, screenshot, a REVIEW label pointing outside the group, a video with no
+same-stem still) and lists the shapes absent from the test set: full library 198 shapes, test set 84,
+**132 missing covering 1,682 groups** (largest: cross-folder same-stem HEIC/JPG format duplicates,
+580 + 108 + 106 groups; screenshot PNG pairs with a cross-group label; Live triples HEIC+MOV+MP4;
+video-only same-stem sets; RAW pairs). Two smallest groups per missing shape → `selection-shapes.csv`:
+213 groups / 662 files / 2.79 GB, copied with `copy_testset.py` (662/662 ok, size + sha256, 179 s).
+Five shapes had no group under the 400 MB cap and were skipped.
+
+Rescan (owner, 14:07) and `compare_manifests.py` against the GROUPING 9 keepsake of the 1,381-file set:
+
+| check | result |
+|---|---|
+| rows | 1,381 → 2,043; the 1,381 old rows keep their sha256 |
+| old groups | 296 / 296 identical member sets; 206 new groups |
+| old-row label changes | 1: a unique JPEG gained `unique; hint only (not grouped)` — a new file low-matched it and the hint was skipped (expected: adding files can add hints) |
+| the 213 added groups (`analyze_extension.py`) | 205 intact; 6 dissolved (all Live-pair shapes: HEIC+MOV with a cross-group REVIEW label ×3, MOV+PNG ×2, HEIC+MOV+PNG ×1 — the HEIC↔PNG edge is dropped by the #539 content gate, leaving only video pair edges); 2 merged with the group their REVIEW label pointed at (the GROUPING 9 effect) |
+
+New baseline (GROUPING "9", 2,043 files): 502 groups (253 of size 2, 79 of 3, 95 of 4, 16 of 5, 59 of 6+),
+1,701 grouped rows, 342 ungrouped; 154 burst rows in 20 groups; 94 groups contain a video, 18 are
+video-only same-stem sets; 0 pair-only image+video groups. Actions: 725 undecided, 537 EXACT/high,
+223 REVIEW/high, 178 REVIEW/low, 154 undecided/high (burst keep-all), 119 undecided/low (accepted hints),
+106 UNDATED. Keepsakes: `migration_manifest_testset_g7.sqlite`, `_g8`, `_g9` (1,381 files); the current
+`migration_manifest_testset.sqlite` is the 2,043-file GROUPING 9 baseline for the next change.

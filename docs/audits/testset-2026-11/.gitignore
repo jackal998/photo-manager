@@ -4,3 +4,8 @@ ROOT.local.txt
 settings.full-library.local.json
 settings.testset.local.json
 compare-output.local.txt
+exact-colour-output.local.txt
+selection-shapes.csv
+shape-census-output.local.txt
+copy-report-shapes.csv
+extension-detail.local.txt
