@@ -219,6 +219,12 @@ export interface SettingsMap {
    * Default false; setting only — no backend consumer reads it yet.
    */
   "scan.cloud_analysis_opt_in"?: boolean | null;
+  /**
+   * Auto-select confirm threshold (PRD v2 PR-3): GET /api/settings serves it
+   * and ScanDialog persists it. "high" | "medium"; the server resolves any
+   * other stored value to "high".
+   */
+  "scan.auto_select.confirm_below"?: ConfirmBelow | null;
 }
 
 // ---------------------------------------------------------------------------
