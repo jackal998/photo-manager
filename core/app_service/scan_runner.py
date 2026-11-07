@@ -48,6 +48,17 @@ _GROUP_FLOOR_MAX = 256
 _RATE_KEYS = ("thread_per_file", "process_per_file", "spawn")
 
 
+def _backfill_content_identifier(results, extracts) -> None:
+    """GROUPING 10 (G3): copy each extract's Apple ContentIdentifier onto its
+    result. An existing value is kept, and a result with no extract is skipped.
+    A missing identity stays None, so no ``""`` ever pairs two files."""
+    for r in results:
+        extract = extracts.get(r.record.path)
+        if extract is None or r.content_identifier is not None:
+            continue
+        r.content_identifier = extract.content_identifier
+
+
 def _inmemory_extract_ok(record, outcome) -> bool:
     """True when a hash outcome's in-memory extract may skip exiftool.
 
@@ -1341,16 +1352,11 @@ def run_pipeline(
     # mode while apply_scoring_to_rows scores it WITH that date — an internally
     # inconsistent row (#793). For formats that DO need exiftool (HEIC/RAW/video)
     # there is no extract in exiftool-missing mode, so those are untouched.
-    # GROUPING 10 (G3): the same loop carries the Apple ContentIdentifier,
-    # which pairs a Live still with its video in the grouping stage.
     for r in et_records:
         extract = extracts.get(r.record.path)
-        if extract is None:
-            continue
-        if r.exif_date is None:
+        if extract is not None and r.exif_date is None:
             r.exif_date = extract.exif_date
-        if r.content_identifier is None:
-            r.content_identifier = extract.content_identifier
+    _backfill_content_identifier(et_records, extracts)
 
     # --- 4. Classify ---
     if cancel_token():
