@@ -180,9 +180,9 @@ code decides it, and which test or scenario pins it.
 - **Pins:** `tests/test_dedup_rule_toggles.py::TestBurstRule::test_burst_off_keeps_classifier_verdicts`, `tests/test_dedup_rule_toggles.py::TestBurstRule::test_burst_off_leaves_group_ids_unchanged`
 - **Status:** pinned
 
-### R-SCAN-10 — With the screenshot rule off (default), a match between two PNGs is not capped at low confidence; a shot-time disagreement still is
+### R-SCAN-10 — With the screenshot rule off, a match between two PNGs is not capped at low confidence; a shot-time disagreement still is
 
-- **Rule:** The screenshot rule (B7) is off by default, so a match between two PNGs is judged like a photo. Shot-time disagreement still caps the match at low confidence. With the rule on, a pair of PNGs is capped at low too. Takes effect at the next scan.
+- **Rule:** With the screenshot rule (B7, default on in v1) turned off, a match between two PNGs is judged like a photo. Shot-time disagreement still caps the match at low confidence. With the rule on, a pair of PNGs is capped at low too. Takes effect at the next scan.
 - **Owning code:** `scanner/dedup.py::_demotion_note`
 - **Pins:** `tests/test_dedup_rule_toggles.py::TestScreenshotRule::test_screenshot_demotion_off_near_dup_png_is_high`, `tests/test_dedup_rule_toggles.py::TestScreenshotRule::test_shot_time_demotion_survives_screenshot_off`
 - **Status:** pinned
