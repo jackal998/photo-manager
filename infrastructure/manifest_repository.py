@@ -420,6 +420,7 @@ def _photo_record(
     db_gps_present: "int | None" = None,
     db_xmp_derived: "int | None" = None,
     db_match_confidence: "str | None" = None,
+    db_reason: "str | None" = None,
 ) -> PhotoRecord:
     """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 
@@ -492,6 +493,7 @@ def _photo_record(
         gps_present=bool(db_gps_present),
         xmp_derived=bool(db_xmp_derived),
         match_confidence=db_match_confidence,
+        reason=db_reason or "",
     )
 
 
@@ -1068,6 +1070,7 @@ class ManifestRepository:
                         db_gps_present=row["gps_present"],
                         db_xmp_derived=row["xmp_derived"],
                         db_match_confidence=row["match_confidence"],
+                        db_reason=row["reason"],
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)

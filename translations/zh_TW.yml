@@ -522,6 +522,13 @@ web:
     review_duplicate: "相似重複"
     keep: "群組首選"
     undated: "無日期"
+  # #1047 — 為何分到這個群組、分類器多有把握：連拍或低信心列的決策標籤，
+  # 以及徽章提示中的信心行（frontend/src/lib/reason.ts）。
+  reason:
+    keep_all_chip: "全部保留 · 連拍"
+    low_confidence_chip: "低信心"
+    confidence_high: "信心：高"
+    confidence_low: "信心：低"
   # Action dialog (Set Action by Field) — web port strings.
   action_dialog:
     title: "依欄位設定動作"

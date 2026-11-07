@@ -1398,6 +1398,42 @@ class TestScoringSchemaMigration:
         assert records[str(ref)].score is None
         assert records[str(cand)].score == pytest.approx(0.75)
 
+    def test_reason_and_match_confidence_load_from_db_into_photo_record(self, tmp_path):
+        """#1047 — ``reason`` and ``match_confidence`` must be SELECTed and
+        threaded onto PhotoRecord. A dropped kwarg in load() leaves the
+        dataclass defaults ("" / None), so the web tree would show every row
+        as ungrouped with no confidence, and nothing raises."""
+        dup = tmp_path / "dup.jpg"
+        ref = tmp_path / "ref.jpg"
+        dup.write_bytes(b""); ref.write_bytes(b"")
+        gid = "/group/reason"
+        from scanner.dedup import ManifestRow
+        from scanner.manifest import write_manifest
+
+        rows = [
+            ManifestRow(
+                source_path=str(dup), source_label="src",
+                action="REVIEW_DUPLICATE",
+                source_hash="aaa", phash=None, hamming_distance=0,
+                duplicate_of=None, reason="near-duplicate (hamming=0)",
+                group_id=gid, score=0.5, match_confidence="low",
+            ),
+            ManifestRow(
+                source_path=str(ref), source_label="src", action="KEEP",
+                source_hash="bbb", phash=None, hamming_distance=None,
+                duplicate_of=None, reason="", group_id=gid, score=0.9,
+                match_confidence="high",
+            ),
+        ]
+        db = tmp_path / "m.sqlite"
+        write_manifest(rows, db)
+
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+        assert records[str(dup)].reason == "near-duplicate (hamming=0)"
+        assert records[str(dup)].match_confidence == "low"
+        assert records[str(ref)].reason == ""
+        assert records[str(ref)].match_confidence == "high"
+
     def test_scoring_signals_load_from_db_into_photo_record(self, tmp_path):
         """#680 — the three per-dimension signals must be SELECTed and threaded
         onto PhotoRecord, not left at their dataclass defaults.

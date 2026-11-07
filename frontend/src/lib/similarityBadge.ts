@@ -47,8 +47,8 @@ export interface SimilarityBadgeSpec {
  * "simplify" two states onto the same triple, that is the whole point.
  *
  *   ref      ★ Ref   gold, solid, semibold   the group's chosen keeper
- *   exact    100%    purple, solid, bold     byte-identical duplicate
- *   near     95% / ~ blue, solid, medium     direct near-match
+ *   exact    100%    purple, solid, bold     EXACT action: byte-identical duplicate
+ *   near     95% / ~ blue, solid, medium     direct near-match (a REVIEW row, even at 100%)
  *   indirect ★ 92%   gray, DASHED, medium    transitive / indirect member
  *   none     —       muted, DOTTED, normal   no comparable image
  */
@@ -121,8 +121,10 @@ export function similarityBadgeBorderClass(
  * "what KIND of duplicate relationship is this":
  *
  *   ref                       → ref        this row is the group's Ref winner
- *   percent, percent === 100  → exact      action EXACT — byte-identical
- *   percent, percent < 100    → near       REVIEW_DUPLICATE with a distance
+ *   percent, action EXACT     → exact      byte-identical duplicate
+ *   percent, any other action → near       REVIEW_DUPLICATE with a distance —
+ *                                          a distance of 0 reads 100% here but is
+ *                                          NOT byte-identical, so it stays near (#1047)
  *   near_dup                  → near       REVIEW_DUPLICATE, distance unknown
  *   passenger                 → indirect   Ref-tier passenger (#536), starred
  *   none                      → none       no comparable pHash (Live Photo MOV)
@@ -132,13 +134,14 @@ export function similarityBadgeBorderClass(
  * stays the distinct "~" so the two remain tellable apart in the cell itself.
  */
 export function similarityBadgeState(
-  similarity: Similarity
+  similarity: Similarity,
+  action: string
 ): SimilarityBadgeState {
   switch (similarity.kind) {
     case "ref":
       return "ref";
     case "percent":
-      return similarity.percent === 100 ? "exact" : "near";
+      return action === "EXACT" ? "exact" : "near";
     case "near_dup":
       return "near";
     case "passenger":

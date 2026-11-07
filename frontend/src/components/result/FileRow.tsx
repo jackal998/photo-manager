@@ -7,12 +7,12 @@ import { useT } from "@/i18n/useT";
 import { useDateLocale } from "@/i18n/useDateLocale";
 import {
   similarityLabel,
-  classificationLabel,
   formatBytes,
   formatScore,
   formatDate,
   formatDims,
 } from "@/lib/format";
+import { rowTooltip, verdictChip, verdictChipLabel } from "@/lib/reason";
 import type { FileRow as FileRowData } from "@/api/types";
 import {
   COLUMNS,
@@ -101,14 +101,14 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
   const metrics = ROW_METRICS[density];
   const simLabel = similarityLabel(row.similarity, t);
   const shows = (id: ColumnId) => visibleCols === undefined || visibleCols.has(id);
-  // Q1 — the classification enum lost its column (it never varies independently
-  // of the badge beside it). It stays REACHABLE here: the badge's tooltip says
-  // it in the legend's own words, via the same web.classification.* keys the
-  // column used, so nothing the column carried became unreachable.
-  const classification = classificationLabel(row.action, t);
+  // The badge's tooltip carries the classification, the grouping reason and
+  // the classifier's confidence (#1047) — see lib/reason.ts::rowTooltip.
   // Daylight 5-state similarity badge (#878) — colour + border style + weight,
   // so the state survives a grayscale render. See lib/similarityBadge.ts.
-  const badge = SIMILARITY_BADGE[similarityBadgeState(row.similarity)];
+  const badge = SIMILARITY_BADGE[similarityBadgeState(row.similarity, row.action)];
+  // #1047 — the decision chip, shown only where it changes what the user does:
+  // a burst stack (keep whole) or a low-confidence duplicate.
+  const chip = verdictChip(row);
   // A row staged for deletion gets the soft red wash and a struck-through
   // filename, so the lowest-salience decision on screen becomes the loudest.
   const isDeleting = row.user_decision === "delete";
@@ -234,10 +234,10 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
           to the one string the user actually reads, not to a gutter on the
           right. Floor = its own stored width, then the table scrolls. */}
       <div data-col="name" className="overflow-hidden" style={columnCellStyle(COLUMN_BY_ID.name, columnWidths.name)}>
-        <div className="flex items-center gap-1 flex-wrap">
+        <div className="flex items-center gap-1 min-w-0">
           <span
             className={cn(
-              "text-sm truncate",
+              "text-sm truncate min-w-0",
               // Keeper cue, half 1 of 2: the keeper's name is the only one at
               // weight 600. Every row used to be semibold, which is what made
               // the dropped "Ref" pill the row's only left-hand keeper signal.
@@ -247,6 +247,23 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
           >
             {row.basename}
           </span>
+          {/* #1047 — the decision chip. No wrap on the name line: a third line
+              would break the fixed row height in lib/rowMetrics.ts, so the
+              name truncates instead and the chip stays on the same line. */}
+          {chip !== null && (
+            <span
+              data-verdict-chip={chip}
+              title={verdictChipLabel(chip, t)}
+              className={cn(
+                "flex-shrink-0 rounded-[5px] border px-1.5 py-px text-[10px] font-medium",
+                chip === "keep_all"
+                  ? "border-hairline text-ink-muted"
+                  : "border-caution-line bg-caution-bg text-caution-ink"
+              )}
+            >
+              {verdictChipLabel(chip, t)}
+            </span>
+          )}
         </div>
         {/* Folder sub-line — 11px mono, truncated from the LEFT (REPLY L2:
             «truncate from the left (`direction: rtl` + `text-align: left`), so
@@ -267,9 +284,10 @@ export function FileRow({ row, groupId, groupNumber, columnWidths, visibleCols, 
       {/* Similarity */}
       <div data-col="similarity" className="flex-shrink-0 text-sm overflow-hidden" style={{ width: columnWidths.similarity }}>
         <span
-          data-sim-state={similarityBadgeState(row.similarity)}
-          // Q1 — the classification's new home now that its column is gone.
-          title={classification}
+          data-sim-state={similarityBadgeState(row.similarity, row.action)}
+          // Q1 — the classification's home now that its column is gone; #1047
+          // adds the reason and the confidence to the same tooltip.
+          title={rowTooltip(row, t)}
           className={cn(
             // REPLY §"Similarity badge (R13)": padding 2px 8px, radius 5px,
             // 11px text, gap 5px, 1px border. The shipped 6/2 pad + r4 + 12px

@@ -649,6 +649,14 @@ web:
     review_duplicate: "Near-duplicate"
     keep: "Best in group"
     undated: "No date"
+  # #1047 — why a row is grouped and how sure the classifier is: the decision
+  # chip on a burst or low-confidence row, and the confidence line in the
+  # badge tooltip (frontend/src/lib/reason.ts).
+  reason:
+    keep_all_chip: "Keep all · burst"
+    low_confidence_chip: "Low confidence"
+    confidence_high: "Confidence: high"
+    confidence_low: "Confidence: low"
   # Action dialog (Set Action by Field) — web port strings.
   action_dialog:
     title: "Set Action by Field"

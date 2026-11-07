@@ -33,31 +33,38 @@ import { PREVIEW_LEGEND } from "@/testids";
  */
 const LEGEND_ROWS: {
   similarity: Similarity;
+  /** The row action the badge keys on (#1047): only "EXACT" is the exact pill. */
+  action: string;
   key: string;
   fallback: string;
 }[] = [
   {
     similarity: { kind: "ref", percent: null },
+    action: "",
     key: "web.preview.legend_ref",
     fallback: "chosen keeper",
   },
   {
     similarity: { kind: "percent", percent: 100 },
+    action: "EXACT",
     key: "web.preview.legend_exact",
     fallback: "exact duplicate",
   },
   {
     similarity: { kind: "percent", percent: 96 },
+    action: "REVIEW_DUPLICATE",
     key: "web.preview.legend_near",
     fallback: "near match",
   },
   {
     similarity: { kind: "passenger", percent: 95 },
+    action: "",
     key: "web.preview.legend_indirect",
     fallback: "linked indirectly",
   },
   {
     similarity: { kind: "none", percent: null },
+    action: "",
     key: "web.preview.legend_none",
     fallback: "video / no image",
   },
@@ -75,7 +82,7 @@ export function SimilarityLegend() {
       </div>
       <div className="flex flex-col gap-[7px] text-[11.5px] text-ink-muted">
         {LEGEND_ROWS.map((row) => {
-          const state = similarityBadgeState(row.similarity);
+          const state = similarityBadgeState(row.similarity, row.action);
           const badge = SIMILARITY_BADGE[state];
           return (
             <div key={state} className="flex items-center gap-[9px]">

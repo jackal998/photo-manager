@@ -51,6 +51,7 @@ import {
   similarityBadgeBorderClass,
   similarityBadgeState,
 } from "@/lib/similarityBadge";
+import { rowTooltip } from "@/lib/reason";
 import {
   DECISION_ACTIVE_CHIP,
   DECISION_VOCAB,
@@ -144,7 +145,9 @@ export function PreviewPane() {
   // The same 5-state badge spec the row cell reads — colour + border STYLE +
   // weight, so the state survives a grayscale render (lib/similarityBadge.ts).
   const badge =
-    row !== null ? SIMILARITY_BADGE[similarityBadgeState(row.similarity)] : null;
+    row !== null
+      ? SIMILARITY_BADGE[similarityBadgeState(row.similarity, row.action)]
+      : null;
 
   // Transcode fallback state — reset when the selected file changes.
   //
@@ -296,7 +299,8 @@ export function PreviewPane() {
                 badge the row wears, at full opacity, plus a white hairline so
                 it detaches from the photo rather than floating on it. */}
             <span
-              data-sim-state={similarityBadgeState(row.similarity)}
+              data-sim-state={similarityBadgeState(row.similarity, row.action)}
+              title={rowTooltip(row, t)}
               className={cn(
                 "absolute left-[11px] top-[11px] z-10 inline-flex items-center gap-[5px] rounded-[5px] border px-2 py-[2px] text-[11px] ring-1 ring-white/15",
                 similarityBadgeBorderClass(badge.border),

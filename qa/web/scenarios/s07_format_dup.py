@@ -177,7 +177,9 @@ def run(*, base_url: str) -> None:
                         f"probe_status: s07 item={bn!r} "
                         f"action={item.get('action')!r} "
                         f"is_ref_winner={item.get('is_ref_winner')} "
-                        f"similarity={item.get('similarity')}"
+                        f"similarity={item.get('similarity')} "
+                        f"reason={item.get('reason')!r} "
+                        f"match_confidence={item.get('match_confidence')!r}"
                     )
 
             # ── Assertion A: exactly 1 group with exactly 2 items ────────────
@@ -271,6 +273,29 @@ def run(*, base_url: str) -> None:
                 f"HEIC ({_HEIC_BASENAME}) similarity kind must be 'ref' "
                 f"(Ref-tier winner: action='' + is_ref_winner=True → kind='ref'); "
                 f"got similarity={heic_sim!r}"
+            )
+
+            # ── Assertion G (#1047): reason + confidence reach the view ──────
+            # The JPG is a dedup near-duplicate, so its reason names the
+            # classifier's hamming distance; the HEIC is the unique Ref. The
+            # JPG's confidence is not pinned to one level (the dHash claim
+            # behind "high" is unverified), so either level is accepted.
+            jpg_reason = str(jpg_row.get("reason") or "")
+            assert jpg_reason.startswith("near-duplicate (hamming="), (
+                f"JPG ({_JPG_BASENAME}) reason must name the near-duplicate "
+                f"hamming distance, got reason={jpg_reason!r}"
+            )
+            assert jpg_row.get("match_confidence") in ("high", "low"), (
+                f"JPG ({_JPG_BASENAME}) match_confidence must be 'high' or "
+                f"'low', got {jpg_row.get('match_confidence')!r}"
+            )
+            assert jpg_row.get("keep_all") is False, (
+                f"JPG ({_JPG_BASENAME}) is not a burst member; keep_all must "
+                f"be False, got {jpg_row.get('keep_all')!r}"
+            )
+            assert heic_row.get("reason") == "unique", (
+                f"HEIC ({_HEIC_BASENAME}) is the unique Ref; reason must be "
+                f"'unique', got {heic_row.get('reason')!r}"
             )
 
     finally:

@@ -62,17 +62,28 @@ describe("similarity badge spec", () => {
 });
 
 describe("similarityBadgeState", () => {
-  const cases: [Similarity, SimilarityBadgeState][] = [
-    [{ kind: "ref", percent: null }, "ref"],
-    [{ kind: "percent", percent: 100 }, "exact"],
-    [{ kind: "percent", percent: 95 }, "near"],
-    [{ kind: "near_dup", percent: null }, "near"],
-    [{ kind: "passenger", percent: 92 }, "indirect"],
-    [{ kind: "none", percent: null }, "none"],
+  const cases: [Similarity, string, SimilarityBadgeState][] = [
+    [{ kind: "ref", percent: null }, "", "ref"],
+    [{ kind: "percent", percent: 100 }, "EXACT", "exact"],
+    [{ kind: "percent", percent: 95 }, "REVIEW_DUPLICATE", "near"],
+    [{ kind: "near_dup", percent: null }, "REVIEW_DUPLICATE", "near"],
+    [{ kind: "passenger", percent: 92 }, "", "indirect"],
+    [{ kind: "none", percent: null }, "", "none"],
   ];
 
-  it.each(cases)("maps %o to its badge state", (similarity, expected) => {
-    expect(similarityBadgeState(similarity)).toBe(expected);
+  it.each(cases)(
+    "maps %o (action %s) to its badge state",
+    (similarity, action, expected) => {
+      expect(similarityBadgeState(similarity, action)).toBe(expected);
+    }
+  );
+
+  it("maps a REVIEW row at Hamming 0 to near, not exact (#1047)", () => {
+    // A near-duplicate at distance 0 reads 100% but is not byte-identical; the
+    // purple exact pill is reserved for the EXACT action, not the percentage.
+    expect(
+      similarityBadgeState({ kind: "percent", percent: 100 }, "REVIEW_DUPLICATE")
+    ).toBe("near");
   });
 
   it("covers every SimilarityKind the API can send", () => {
@@ -88,7 +99,7 @@ describe("similarityBadgeState", () => {
     ];
     for (const kind of kinds) {
       expect(() =>
-        similarityBadgeState({ kind, percent: 50 })
+        similarityBadgeState({ kind, percent: 50 }, "")
       ).not.toThrow();
     }
   });
