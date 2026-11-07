@@ -368,6 +368,27 @@ describe("setDecision – reverts on PATCH failure", () => {
 // loadManifest – happy path
 // ---------------------------------------------------------------------------
 
+describe("loadManifest – confirm threshold (PR-3)", () => {
+  it("loadManifest stores confirm_below and clears needsLookOnly", async () => {
+    vi.mocked(client.getManifest).mockResolvedValue({
+      manifest_path: "/data/out.db",
+      groups: [],
+      total_groups: 0,
+      total_files: 0,
+      confirm_below: "medium",
+    });
+    useAppStore.setState({
+      resultView: { ...useAppStore.getState().resultView, needsLookOnly: true },
+    });
+
+    await useAppStore.getState().loadManifest("/data/out.db");
+
+    const state = useAppStore.getState();
+    expect(state.manifest.confirmBelow).toBe("medium");
+    expect(state.resultView.needsLookOnly).toBe(false);
+  });
+});
+
 describe("loadManifest – happy path", () => {
   it("sets manifest state from server response", async () => {
     const group = makeGroup(3, ["/p/img1.jpg", "/p/img2.jpg"]);

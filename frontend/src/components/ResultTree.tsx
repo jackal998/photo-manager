@@ -126,9 +126,13 @@ export function ResultTree({ onContextMenu, onGroupContextMenu }: ResultTreeProp
   // `filterGroups` returns the store's array by identity when the box is empty,
   // so the unfiltered render keeps every memo below it.
   const filterText = useAppStore((s) => s.resultView.filterText);
+  // PR-3 — the "Needs your look" toggle narrows the same list (whole groups).
+  const needsLookOnly = useAppStore((s) => s.resultView.needsLookOnly ?? false);
+  const confirmBelow = useAppStore((s) => s.manifest.confirmBelow ?? "high");
+  const needsLookBelow = needsLookOnly ? confirmBelow : null;
   const groups = useMemo(
-    () => filterGroups(allGroups, filterText),
-    [allGroups, filterText]
+    () => filterGroups(allGroups, filterText, needsLookBelow),
+    [allGroups, filterText, needsLookBelow]
   );
   const setDecision = useAppStore((s) => s.setDecision);
   const setLock = useAppStore((s) => s.setLock);

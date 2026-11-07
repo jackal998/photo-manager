@@ -1,7 +1,7 @@
 // Zustand store STATE + ACTIONS interface — types only, no implementation.
 // The concrete store (useAppStore) imports this and satisfies it.
 
-import type { BulkDecideResult, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
+import type { BulkDecideResult, ConfirmBelow, DecisionValue, ExecuteResult, Group, SettingsMap, WebScanRequest } from "../api/types";
 import type { ColumnId, SortDirection } from "../lib/resultColumns";
 import type { DecisionSnapshot } from "../lib/decisionSort";
 import type { PanelId } from "../lib/panelWidths";
@@ -41,6 +41,8 @@ export interface ManifestState {
   groups: Group[];
   totalGroups: number;
   totalFiles: number;
+  /** PR-3 — the saved confirm threshold; the needs-look filter reads it. */
+  confirmBelow?: ConfirmBelow;
   loading: boolean;
   error: string | null;
 }
@@ -164,6 +166,12 @@ export interface ResultViewState {
    * CTA — those count the whole manifest, which is what Execute acts on.
    */
   filterText: string;
+  /**
+   * PR-3 — the "Needs your look" toggle. When true, only groups holding a row
+   * below `manifest.confirmBelow` are shown. View-only and not persisted, like
+   * filterText. Optional so the ResultTree test literals still typecheck.
+   */
+  needsLookOnly?: boolean;
   /**
    * #923 — the decisions the Action sort ordered by (lib/decisionSort.ts),
    * captured when that sort was applied or last re-sorted; null whenever
@@ -607,6 +615,9 @@ export interface AppActions {
    * not persisted, never written to the manifest. See ResultViewState.filterText.
    */
   setFilterText(text: string): void;
+
+  /** PR-3 — toggle the "Needs your look" group filter. View state only. */
+  setNeedsLookOnly(on: boolean): void;
 
   /** GET /api/settings and populate settings.values. */
   loadSettings(): Promise<void>;

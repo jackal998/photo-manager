@@ -522,6 +522,8 @@ web:
     # the filtered view, because that is what Execute acts on.
     marked_to_delete: "⊗ {count} marked to delete"
     reclaims: "↺ reclaims {size}"
+    needs_look: "⚑ Needs your look · {count}"
+    needs_look_tip: "Show only the groups whose confidence is below your confirm threshold (Advanced settings). Click again to show all."
   # The single-slot undo toast (#878 slice G). Open questions Q5 put this in
   # place of a confirm dialog on "Keep best · delete rest", so this copy is the
   # only account the user gets of what a bulk write just did — and the locked
@@ -656,6 +658,7 @@ web:
     keep_all_chip: "Keep all · burst"
     low_confidence_chip: "Low confidence"
     confidence_high: "Confidence: high"
+    confidence_medium: "Confidence: medium"
     confidence_low: "Confidence: low"
   # Action dialog (Set Action by Field) — web port strings.
   action_dialog:
@@ -796,6 +799,10 @@ web:
     cloud_analysis_opt_in_help: "When on, 1024-pixel thumbnails with EXIF removed are sent to a cloud model to help pick the keeper. Your media leaves this computer. Off by default; nothing is sent while this is off, and no cloud feature runs without it."
     auto_select_label: "Auto select after scan"
     auto_select_aggressive_label: "Also mark all other files for delete"
+    confirm_below_label: "Ask me to confirm when confidence is below"
+    confirm_below_high: "High — confirm every near-duplicate"
+    confirm_below_medium: "Medium — confirm only low-confidence matches"
+    confirm_below_help: "Auto-select makes no decision on a group below this level; those groups appear under Needs your look."
     grouping_sensitivity_label: "Grouping sensitivity"
     phash_label: "pHash Similarity Threshold (default: 10, range: 2–20)"
     phash_desc: "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter."

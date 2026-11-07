@@ -80,6 +80,19 @@ describe("rowTooltip", () => {
   });
 });
 
+describe("rowTooltip confidence_level (PR-3)", () => {
+  it("rowTooltip prefers confidence_level and labels medium", () => {
+    // A REVIEW_DUPLICATE row with match_confidence "high" is medium by level.
+    const row = makeRow({
+      action: "REVIEW_DUPLICATE",
+      match_confidence: "high",
+      confidence_level: "medium",
+    });
+    expect(rowTooltip(row)).toContain("Confidence: medium");
+    expect(rowTooltip(row)).not.toContain("Confidence: high");
+  });
+});
+
 describe("confidenceLabel", () => {
   it("confidenceLabel prints an unknown level verbatim", () => {
     // A new classifier level must surface, not vanish into a blank tooltip.

@@ -25,12 +25,13 @@ import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { formatEta, isEtaReady } from "@/lib/scanProgress";
 import { getSettings, patchSettings } from "@/api/client";
-import type { WebScanRequest } from "@/api/types";
+import type { ConfirmBelow, WebScanRequest } from "@/api/types";
 import {
   SCAN_ADD_SOURCE,
   SCAN_ADVANCED,
   SCAN_AGGRESSIVE_DELETE,
   SCAN_AUTO_SELECT,
+  SCAN_CONFIRM_BELOW,
   SCAN_AUTOTUNE,
   SCAN_CLOUD_ANALYSIS_OPT_IN,
   SCAN_COLOR_THRESHOLD,
@@ -241,6 +242,10 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   // Phase 4); auto-select + its aggressive sub-option default OFF.
   const [autoSelect, setAutoSelect] = useState(false);
   const [aggressiveDelete, setAggressiveDelete] = useState(false);
+  // PR-3 — the auto-select confirm threshold. Saved on change and loaded on
+  // open, like the cloud opt-in; a late settings GET must not overwrite a pick.
+  const [confirmBelow, setConfirmBelow] = useState<ConfirmBelow>("high");
+  const confirmBelowTouched = useRef(false);
   const [autotuneReadKnee, setAutotuneReadKnee] = useState(true);
   // Cloud-analysis opt-in (privacy policy) — default OFF. Persisted on change
   // and loaded on open; nothing reads it yet (no cloud call exists).
@@ -305,6 +310,8 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     setBrowseTarget(null);
     setAutoSelect(false);
     setAggressiveDelete(false);
+    setConfirmBelow("high");
+    confirmBelowTouched.current = false;
     setAutotuneReadKnee(true);
     setCloudAnalysisOptIn(false);
     cloudOptInTouched.current = false;
@@ -338,6 +345,14 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
         const cloud = settings["scan.cloud_analysis_opt_in"];
         if (typeof cloud === "boolean" && !cloudOptInTouched.current) {
           setCloudAnalysisOptIn(cloud);
+        }
+        // PR-3 — only "high" or "medium" is honoured; anything else stays "high".
+        const below = settings["scan.auto_select.confirm_below"];
+        if (
+          (below === "high" || below === "medium") &&
+          !confirmBelowTouched.current
+        ) {
+          setConfirmBelow(below);
         }
       })
       .catch(() => {
@@ -518,6 +533,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       auto_select_enabled: autoSelect,
       // Aggressive only takes effect under auto-select; never send it alone.
       auto_select_aggressive_delete: autoSelect && aggressiveDelete,
+      auto_select_confirm_below: confirmBelow,
       autotune_read_knee: autotuneReadKnee,
       // Grouping-sensitivity thresholds (#736) — per-scan only, see the
       // useState declarations above. NEVER added to the patchSettings call
@@ -553,6 +569,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     outputPath,
     autoSelect,
     aggressiveDelete,
+    confirmBelow,
     autotuneReadKnee,
     phashThresholdInput,
     dhashThresholdInput,
@@ -804,6 +821,55 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 )}
               </span>
             </label>
+
+            {/* PR-3 — the confirm threshold. Native select, saved on change.
+                Under "high" auto-select stamps no keeper in a near-dup group. */}
+            <div className="flex flex-col gap-1 text-sm">
+              <label className="flex items-center gap-2 select-none">
+                <span className="text-ink">
+                  {t(
+                    "web.scan.confirm_below_label",
+                    "Ask me to confirm when confidence is below"
+                  )}
+                </span>
+                <select
+                  value={confirmBelow}
+                  disabled={isRunning}
+                  onChange={(e) => {
+                    const v: ConfirmBelow =
+                      e.target.value === "medium" ? "medium" : "high";
+                    confirmBelowTouched.current = true;
+                    setConfirmBelow(v);
+                    void patchSettings({
+                      "scan.auto_select.confirm_below": v,
+                    }).catch((err) => {
+                      console.warn("Failed to persist confirm threshold:", err);
+                    });
+                  }}
+                  data-testid={SCAN_CONFIRM_BELOW}
+                  className="rounded border border-ink-hairline bg-transparent px-1"
+                >
+                  <option value="high">
+                    {t(
+                      "web.scan.confirm_below_high",
+                      "High — confirm every near-duplicate"
+                    )}
+                  </option>
+                  <option value="medium">
+                    {t(
+                      "web.scan.confirm_below_medium",
+                      "Medium — confirm only low-confidence matches"
+                    )}
+                  </option>
+                </select>
+              </label>
+              <p className="text-xs text-ink-muted">
+                {t(
+                  "web.scan.confirm_below_help",
+                  "Auto-select makes no decision on a group below this level; those groups appear under Needs your look."
+                )}
+              </p>
+            </div>
 
             {/* Cloud analysis opt-in — default OFF. Persists on change via
                 /api/settings. Setting only: no feature reads it yet. */}

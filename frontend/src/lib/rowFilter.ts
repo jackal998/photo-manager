@@ -21,8 +21,14 @@
 // NOT read the filtered list — they count the whole manifest, because that is
 // what Execute will act on. A filter that silently shrank the danger button's
 // number would be the one place this control could cost a user data.
+//
+// PR-3 — the "Needs your look" toggle is a second, group-level filter applied
+// BEFORE the text filter. It keeps whole groups that hold a row below the
+// confirm threshold (lib/needsLook.ts). It is view-only too, and the same
+// visible set feeds the bulk verbs (visibleSelectedPaths).
 
-import type { Group } from "@/api/types";
+import type { ConfirmBelow, Group } from "@/api/types";
+import { groupNeedsLook } from "@/lib/needsLook";
 
 /** True when `row`'s basename or folder contains `needle` (already lowercased). */
 function rowMatches(basename: string, folder: string, needle: string): boolean {
@@ -43,16 +49,24 @@ function rowMatches(basename: string, folder: string, needle: string): boolean {
  * `member_count` on a filtered group is recomputed from the surviving rows, so
  * the group header's "5 files" and its derived size total describe what is on
  * screen rather than what is behind the filter.
+ *
+ * PR-3 — `needsLookBelow` first keeps only whole groups holding a row below
+ * that threshold (the needs-look toggle). Groups kept by it are not re-counted.
  */
 export function filterGroups(
   groups: readonly Group[],
-  filterText: string
+  filterText: string,
+  needsLookBelow: ConfirmBelow | null = null
 ): Group[] {
+  const scoped: readonly Group[] =
+    needsLookBelow === null
+      ? groups
+      : groups.filter((group) => groupNeedsLook(group, needsLookBelow));
   const needle = filterText.trim().toLowerCase();
-  if (needle === "") return groups as Group[];
+  if (needle === "") return scoped as Group[];
 
   const out: Group[] = [];
-  for (const group of groups) {
+  for (const group of scoped) {
     const items = group.items.filter((row) =>
       rowMatches(row.basename, row.folder, needle)
     );
@@ -80,17 +94,18 @@ export function filterGroups(
  * the number in the label and the number the write touches cannot drift apart.
  * Order follows the SELECTION, not the tree, matching the unfiltered case.
  *
- * Returns `selectedPaths` by identity when the filter is empty: the common
+ * Returns `selectedPaths` by identity when both filters are off: the common
  * case pays nothing, and the array stays reference-stable for React.
  */
 export function visibleSelectedPaths(
   groups: readonly Group[],
   filterText: string,
-  selectedPaths: readonly string[]
+  selectedPaths: readonly string[],
+  needsLookBelow: ConfirmBelow | null = null
 ): readonly string[] {
-  if (filterText.trim() === "") return selectedPaths;
+  if (filterText.trim() === "" && needsLookBelow === null) return selectedPaths;
   const visible = new Set<string>();
-  for (const group of filterGroups(groups, filterText)) {
+  for (const group of filterGroups(groups, filterText, needsLookBelow)) {
     for (const row of group.items) visible.add(row.file_path);
   }
   return selectedPaths.filter((path) => visible.has(path));

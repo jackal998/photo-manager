@@ -148,6 +148,10 @@ export function Toolbar({
   const setFilterText = useAppStore((s) => s.setFilterText);
   const selectedPaths = useAppStore((s) => s.selection.selectedPaths);
   const applyBulkDecision = useAppStore((s) => s.applyBulkDecision);
+  // PR-3 — the needs-look toggle narrows the visible set the label counts.
+  const needsLookOnly = useAppStore((s) => s.resultView.needsLookOnly ?? false);
+  const confirmBelow = useAppStore((s) => s.manifest.confirmBelow ?? "high");
+  const needsLookBelow = needsLookOnly ? confirmBelow : null;
   // #906 — read off the whole manifest, never the filtered view: this is the
   // number Execute acts on (see lib/deleteTotals.ts).
   const groups = useAppStore((s) => s.manifest.groups);
@@ -162,8 +166,10 @@ export function Toolbar({
   // `applyBulkDecision`, because a selection survives the filter and can name
   // rows nobody can see (lib/rowFilter.ts).
   const selectedCount = useMemo(
-    () => visibleSelectedPaths(groups, filterText, selectedPaths).length,
-    [groups, filterText, selectedPaths]
+    () =>
+      visibleSelectedPaths(groups, filterText, selectedPaths, needsLookBelow)
+        .length,
+    [groups, filterText, selectedPaths, needsLookBelow]
   );
 
   // Shed the manifest-open pair on a narrow strip. Measured off the strip

@@ -423,6 +423,8 @@ web:
     # 答案。兩者都以整份清單計算，不受篩選影響，因為那才是「執行」會動到的範圍。
     marked_to_delete: "⊗ {count} 個待刪除"
     reclaims: "↺ 可回收 {size}"
+    needs_look: "⚑ 需要你看 · {count}"
+    needs_look_tip: "只顯示信心低於確認門檻（進階設定）的群組。再按一次顯示全部。"
   # 單一插槽的復原提示（#878 slice G / Q5）。「保留最佳 · 其餘刪除」不再有確認
   # 對話框，這段文字就是使用者唯一得到的說明；鎖定那一行是按鈕的承諾：永遠不會
   # 覆蓋鎖定，而且跳過時一定要說出來。中文沒有單複數變化，兩個鍵刻意相同。
@@ -528,6 +530,7 @@ web:
     keep_all_chip: "全部保留 · 連拍"
     low_confidence_chip: "低信心"
     confidence_high: "信心：高"
+    confidence_medium: "信心：中"
     confidence_low: "信心：低"
   # Action dialog (Set Action by Field) — web port strings.
   action_dialog:
@@ -654,6 +657,10 @@ web:
     cloud_analysis_opt_in_help: "開啟後，去除 EXIF 的 1024 px 縮圖會送到雲端模型協助挑選保留檔。你的媒體會離開這台電腦。預設關閉；關閉時不會傳送任何資料，也不會啟用任何雲端功能。"
     auto_select_label: "掃描後自動選取"
     auto_select_aggressive_label: "同時將其他檔案標記為刪除"
+    confirm_below_label: "信心低於此等級時請我確認"
+    confirm_below_high: "高 — 每組近似重複都要確認"
+    confirm_below_medium: "中 — 只確認低信心的配對"
+    confirm_below_help: "信心低於此等級的群組，自動選擇不會做任何決定，並列在「需要你看」。"
     grouping_sensitivity_label: "分組敏感度"
     phash_label: "pHash 相似度閾值（預設：10，範圍：2–20）"
     phash_desc: "兩張 64 位元 pHash 可相差幾個位元仍算同組。越低 = 越嚴格。"
