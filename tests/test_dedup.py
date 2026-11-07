@@ -452,8 +452,10 @@ class TestLivePhotoPair:
                   source_label="iphone", file_type="mp4", exif_date=_dt(),
                   pair_cluster=tuple(p for p in cluster if p != mp4_path))
 
-        # GROUPING "9": a lone Live triple has no group. A byte copy of the
-        # still gives the cluster a grouped member, so it must attach whole.
+        # The byte copy of the still is the test's real subject (the still is
+        # grouped, so the cluster attaches whole). It is NOT there to make the
+        # triple ungrouped: the MOV<->MP4 video<->video "high" edge groups the
+        # two videos even without a still (scan.md documents this open case).
         copy_path = Path("/copy/IMG_4278.HEIC")
         copy = _hr(str(copy_path), sha256="h1", source_label="iphone",
                    file_type="heic", exif_date=_dt())

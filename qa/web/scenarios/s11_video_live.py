@@ -31,7 +31,9 @@ Web slice:
         was the half silently dropped by the pre-#88 walker).
      C. Both share the same group_number (pair edge joins the MOV to its
         still's group, scanner/dedup._pair_pass).
-     D. user_decision == '' for BOTH rows (undecided at scan time).
+     D. user_decision == '' for the root HEIC and the MOV (undecided at scan
+        time). The root HEIC now has an EXACT twin, but the scan sets its
+        action, never its user_decision, so D still holds for it.
      E. The byte copy in ``dupe/`` is in the same group_number as the still.
   6. finally: shutil.rmtree(tmpdir, ignore_errors=True) — Windows .db lock.
 
@@ -128,11 +130,14 @@ def run(*, base_url: str) -> None:
             page.goto("/")
 
             # ── Scan live-photo source → fresh manifest.db ───────────────────
+            # recursive=True is REQUIRED: the byte copy lives in the dupe/
+            # subfolder, and a non-recursive scan would never walk it.
             run_scan(
                 page,
                 sources=[src_subdir],
                 output_path=db_path,
                 scan_timeout=120_000,
+                recursive=True,
             )
             assert os.path.exists(db_path), f"scan did not write manifest: {db_path}"
 

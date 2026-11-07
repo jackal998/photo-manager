@@ -21,6 +21,7 @@ DHASH = "cccccccccccccccc"
 PHASH = "aaaaaaaaaaaaaaaa"
 PHASH_NEAR = "5aaaaaaaaaaaaaaa"  # hamming 4 from PHASH
 PHASH_LEAF = "aaaaaaaaaaaaaaa5"  # hamming 4 from PHASH, 8 from PHASH_NEAR
+PHASH_FAR = "5555555555555555"  # hamming 64 from PHASH: the #539 gate drops its edge
 
 
 def _pair(
@@ -96,14 +97,19 @@ def test_two_lone_live_stills_with_low_hint_form_one_group_with_movs():
 
 
 def test_lone_live_still_attaches_to_high_member_with_its_mov():
-    still, mov = _pair("IMG_5", dhash=DHASH)
-    near = _hr("/other/IMG_6.jpg", sha256="x6", phash=PHASH_NEAR, dhash=DHASH,
-               exif_date=_dt())
-    rows = _rows(classify([still, mov, near], threshold=10))
-    gid = _gid(rows, "/cam/IMG_5.HEIC")
+    """A lone still low-hints a high member A (group G = {A, byte copy of A}).
+    The hint is taken because A is a high member, so the still joins G with its
+    MOV. The still's own edge stays low (no dHash on either side)."""
+    still, mov = _pair("IMG_5", phash=PHASH_NEAR)
+    a = _hr("/other/IMG_6.jpg", sha256="a6", phash=PHASH, exif_date=_dt())
+    a_copy = _hr("/copy/IMG_6.jpg", sha256="a6", phash=PHASH, exif_date=_dt())
+    rows = _rows(classify([still, mov, a, a_copy], threshold=10))
+    gid = _gid(rows, "/other/IMG_6.jpg")
     assert gid is not None
+    assert _gid(rows, "/copy/IMG_6.jpg") == gid
+    assert _gid(rows, "/cam/IMG_5.HEIC") == gid
     assert _gid(rows, "/cam/IMG_5.MOV") == gid
-    assert _gid(rows, "/other/IMG_6.jpg") == gid
+    assert rows["/cam/IMG_5.HEIC"].match_confidence == "low"
 
 
 def test_live_still_with_skipped_hint_is_reset_and_ungrouped():
@@ -146,25 +152,31 @@ def test_false_stem_pair_without_other_edges_gets_no_group():
 
 @pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
 def test_cluster_attaches_whole_when_any_member_grouped(order):
-    """HEIC + MOV + MP4 (one Live Photo, transcoded to two videos). The MP4 is a
-    byte copy of another video, so the cluster has a grouped member and must
-    attach whole, whatever the record order."""
-    heic_p, mov_p, mp4_p = "/cam/IMG_7.HEIC", "/cam/IMG_7.MOV", "/cam/IMG_7.MP4"
-    cluster = (Path(heic_p), Path(mov_p), Path(mp4_p))
+    """Pair cluster {HEIC, JPG, MOV}, with exactly ONE member pre-joined.
+
+    The JPG is a byte copy of a file elsewhere, so it is grouped by a high
+    edge in pass 1. The HEIC<->JPG pair edge is dropped by the #539 content
+    gate (both have a pHash and they differ), so the HEIC has no edge of its
+    own. The HEIC joins only through the whole-cluster rule (HEIC<->MOV and
+    JPG<->MOV pair edges). An edge-by-edge pass depends on the record order.
+    """
+    heic_p, jpg_p, mov_p = Path("/cam/IMG_7.HEIC"), Path("/cam/IMG_7.JPG"), Path("/cam/IMG_7.MOV")
+    cluster = {heic_p: (jpg_p, mov_p), jpg_p: (heic_p, mov_p), mov_p: (heic_p, jpg_p)}
     members = [
-        _hr(heic_p, sha256="h", file_type="heic", exif_date=_dt(),
-            pair_cluster=tuple(p for p in cluster if str(p) != heic_p)),
-        _hr(mov_p, sha256="m", phash=None, file_type="mov", exif_date=_dt(),
-            pair_cluster=tuple(p for p in cluster if str(p) != mov_p)),
-        _hr(mp4_p, sha256="p", phash=None, file_type="mp4", exif_date=_dt(),
-            pair_cluster=tuple(p for p in cluster if str(p) != mp4_p)),
+        _hr(str(heic_p), sha256="h", phash=PHASH, file_type="heic", exif_date=_dt(),
+            pair_cluster=cluster[heic_p]),
+        _hr(str(jpg_p), sha256="j", phash=PHASH_FAR, file_type="jpeg", exif_date=_dt(),
+            pair_cluster=cluster[jpg_p]),
+        _hr(str(mov_p), sha256="m", phash=None, file_type="mov", exif_date=_dt(),
+            pair_cluster=cluster[mov_p]),
     ]
-    other = _hr("/other/clip.mp4", sha256="p", phash=None, file_type="mp4",
-                exif_date=_dt())
-    records = [members[i] for i in order] + [other]
+    copy = _hr("/elsewhere/IMG_7.jpg", sha256="j", phash=PHASH_FAR,
+               file_type="jpeg", exif_date=_dt())
+    records = [members[i] for i in order] + [copy]
     rows = _rows(classify(records))
-    gids = {_gid(rows, p) for p in (heic_p, mov_p, mp4_p, "/other/clip.mp4")}
-    assert gids == {str(Path(heic_p))}, (
+    gids = {_gid(rows, str(p)) for p in (heic_p, jpg_p, mov_p)}
+    gids.add(_gid(rows, "/elsewhere/IMG_7.jpg"))
+    assert gids == {str(heic_p)}, (
         f"whole cluster must share the lex-min group_id, got {gids}"
     )
 
