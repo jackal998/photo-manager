@@ -307,6 +307,7 @@ def _demotion_note(
 ) -> Optional[str]:
     """Short reason a pHash match is capped at ``low`` confidence, or None.
 
+    A non-None note makes the match a hint, which never groups (GROUPING "10").
     Shot-time disagreement is named first (it carries the hour gap); a
     both-PNG pair is the fallback cause, and only while ``screenshot_demotion``
     (the PR-4a B7 rule) is on.

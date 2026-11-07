@@ -208,3 +208,31 @@ class TestPixelIdentityIsASecondSignal:
         assert dup.match_confidence == "low"
         assert "pixels differ" in dup.reason, dup.reason
         assert "dHash unavailable" in dup.reason, dup.reason
+
+
+class TestScreenshotRuleB7Contract:
+    """G8: two PNGs with pHash 0, distinct bytes and equal pixels. B7 on makes
+    the pair a hint that names the screenshot rule. B7 off judges them like
+    photos, so they are an EXACT group."""
+
+    def _pngs(self) -> list[HashResult]:
+        return [
+            _hr("/s/one.png", "p1", PA, PA, T0, "src_a", ftype="png"),
+            _hr("/s/two.png", "p2", PA, PA, T0, "src_b", ftype="png"),
+        ]
+
+    def test_b7_on_is_a_hint_naming_both_screenshots(self):
+        rows = _rows(classify(self._pngs(), source_priority=PRIORITY))
+        assert _group_sizes(rows) == []
+        for path in ("/s/one.png", "/s/two.png"):
+            assert rows[path].group_id is None
+            assert "both screenshots" in rows[path].reason, rows[path].reason
+
+    def test_b7_off_judges_them_like_photos_and_groups_exact(self):
+        rows = _rows(classify(
+            self._pngs(), source_priority=PRIORITY, screenshot_demotion=False,
+        ))
+        assert _group_sizes(rows) == [2]
+        dup = [r for r in rows.values() if r.action == "EXACT"]
+        assert len(dup) == 1
+        assert dup[0].match_confidence == "high"
