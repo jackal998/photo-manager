@@ -911,7 +911,13 @@ def _gates_pass(
 # "9": an image<->video same-stem pair is a "pair" edge (``_pair_pass``). It
 # shares a group_id only when its still is grouped for another reason; a lone
 # Live Photo pair gets group_id None. Image<->image pairs are unchanged.
-GROUPING_STRATEGY_VERSION = "9"
+# "10": content-gated identity, step 1 (dedup-core research 2026-11-05, tiered
+# identity). Low-confidence evidence never unions: a low match is a hint
+# (``_mark_hints``) that names its partner in the reason and never groups or
+# sets an action. Two signals make a pHash match high: dHash agreement, or
+# identical 32x32 pixels (G6). Two PNGs group only as byte copies while B7 is
+# on. Stem and pair edges are unchanged in this version (iteration 2).
+GROUPING_STRATEGY_VERSION = "10"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.

@@ -91,7 +91,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Scan grouping — a lone Live Photo is not a group](features/scan.md#scan-grouping--a-lone-live-photo-is-not-a-group) | Scan |
 | [Scan grouping — complementary RAW + lossy pair](features/scan.md#scan-grouping--complementary-raw--lossy-pair) | Scan |
 | [Scan grouping — EXACT requires pixel identity](features/scan.md#scan-grouping--exact-requires-pixel-identity) | Scan |
-| [Scan grouping — low-confidence hints never chain](features/scan.md#scan-grouping--low-confidence-hints-never-chain) | Scan |
+| [Scan grouping — low-confidence matches never group](features/scan.md#scan-grouping--low-confidence-matches-never-group) | Scan |
 | [Scan grouping — pHash contrast (quality) gate](features/scan.md#scan-grouping--phash-contrast-quality-gate) | Scan |
 | [Scan grouping — same-moment bursts become a stack](features/scan.md#scan-grouping--same-moment-bursts-become-a-stack) | Scan |
 | [Scan walk — recycle-bin / system folders are never walked](features/scan.md#scan-walk--recycle-bin--system-folders-are-never-walked) | Scan |
