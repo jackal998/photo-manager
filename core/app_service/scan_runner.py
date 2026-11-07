@@ -1335,6 +1335,9 @@ def run_pipeline(
         logger.warning("Scan cancelled by user before classify pass")
         bus.failed("Scan cancelled.")
         return
+    from core.services.auto_select_rules import describe_rules
+
+    bus.log(describe_rules(config.auto_select_rules))
     bus.log("Classifying…")
     classify_tracker = _StageTracker(STAGE_CLASSIFY)
     _emit_stage(bus, classify_tracker, 0, 0, force=True)
@@ -1346,6 +1349,9 @@ def run_pipeline(
         source_priority=config.source_priority,
         # #526 — per-machine BK-tree crossover (None → classify uses module default).
         bktree_min_candidates=calibrated_bktree_floor,
+        # PR-4a — B5 (burst) and B7 (screenshot) act at classify, in every mode.
+        burst_stacks=config.auto_select_rules.b5,
+        screenshot_demotion=config.auto_select_rules.b7,
     )
     _emit_stage(bus, classify_tracker, 1, 1, force=True)
 
@@ -1367,9 +1373,12 @@ def run_pipeline(
     keepers: set[str] = set()
     non_keepers: "set[str] | None" = None
     if config.auto_select_enabled:
+        from collections import Counter
+
         from core.services.auto_select import (
             groups_needing_look,
             plan_auto_select,
+            rule_trace,
         )
         confirm_below = config.auto_select_confirm_below
         look_groups = groups_needing_look(rows, confirm_below)
@@ -1377,7 +1386,16 @@ def run_pipeline(
             rows,
             aggressive=config.auto_select_aggressive_delete,
             confirm_below=confirm_below,
+            rules=config.auto_select_rules,
         )
+        # Traced before the KEEP stamp below rewrites row actions.
+        trace = Counter(rule_trace(
+            rows,
+            stamped,
+            aggressive=config.auto_select_aggressive_delete,
+            confirm_below=confirm_below,
+            rules=config.auto_select_rules,
+        ).values())
         for row in rows:
             if row.source_path in stamped:
                 row.action = "KEEP"
@@ -1389,6 +1407,11 @@ def run_pipeline(
         if config.auto_select_aggressive_delete:
             bus.log(
                 f"Auto-select aggressive: marked {len(deletes):,} row(s) for delete."
+            )
+            bus.log(
+                f"Auto-select rules: B3 marked {trace['B3:delete']:,} delete;"
+                f" spared B3 {trace['B3:spared']:,}, B4 {trace['B4:spared']:,},"
+                f" B8 {trace['B8:spared']:,}."
             )
         keepers = stamped
         non_keepers = deletes or None

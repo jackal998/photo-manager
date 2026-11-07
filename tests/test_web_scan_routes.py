@@ -618,6 +618,67 @@ class TestConfirmBelowResolution:
         assert resp.status_code == 422
 
 
+class TestRuleTogglesResolution:
+    """PR-4a — the auto-select rule toggles on POST /api/scan. An unset request
+    reads scan.auto_select.rules from settings; a partial explicit object merges
+    over the defaults; unknown ids and non-bool values are refused with 422."""
+
+    @staticmethod
+    def _settings(rules):
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.get.side_effect = lambda key, default=None: {
+            "scan.auto_select.rules": rules,
+        }.get(key, default)
+        return settings
+
+    def test_unset_request_reads_settings(self):
+        from app.web.models import WebScanRequest
+
+        req = WebScanRequest(sources={"D": "/x"}, output_path="/o.sqlite")
+        resolved = req.resolved_with(self._settings({"B8": False}))
+        assert resolved.auto_select_rules["B8"] is False
+        assert resolved.auto_select_rules["B3"] is True
+
+    def test_explicit_partial_merges_over_defaults(self):
+        from app.web.models import WebScanRequest
+
+        req = WebScanRequest(
+            sources={"D": "/x"},
+            output_path="/o.sqlite",
+            auto_select_rules={"B3": False},
+        )
+        resolved = req.resolved_with(self._settings({"B8": False}))
+        assert resolved.auto_select_rules == {
+            "B3": False, "B4": True, "B5": True, "B7": True, "B8": True,
+        }
+
+    def test_unknown_rule_id_is_422(self, client):
+        body = _valid_scan_body(auto_select_rules={"B9": True})
+        resp = client.post("/api/scan", json=body)
+        assert resp.status_code == 422
+
+    def test_non_bool_rule_value_is_422(self, client):
+        for value in ("yes", 1):
+            body = _valid_scan_body(auto_select_rules={"B3": value})
+            resp = client.post("/api/scan", json=body)
+            assert resp.status_code == 422, value
+
+    def test_to_config_carries_rule_toggles(self):
+        from app.web.models import WebScanRequest
+        from core.services.auto_select_rules import RuleToggles
+
+        req = WebScanRequest(
+            sources={"D": "/x"},
+            output_path="/o.sqlite",
+            auto_select_rules={"B5": False},
+        )
+        config = req.resolved_with(self._settings(None)).to_config()
+        assert isinstance(config.auto_select_rules, RuleToggles)
+        assert config.auto_select_rules.b5 is False
+
+
 class TestExifWorkersResolution:
     """WebScanRequest.resolved_with() exif_workers read-back — unit-level,
     isolated from the route/registry machinery (mirrors scan_dialog.py's

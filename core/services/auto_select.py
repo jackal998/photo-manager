@@ -32,6 +32,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Iterable
 
+from core.services.auto_select_rules import LEGACY_RULES, RuleToggles
 from scanner.media import RAW_EXTENSIONS
 
 # #824 — extensions the scanner types as ``raw``. This is
@@ -318,11 +319,46 @@ def _raw_displaced_keepers(rows: Iterable, keepers: set[str]) -> set[str]:
     return protected
 
 
+def _delete_blocker(
+    row: object,
+    keepers: set[str],
+    raw_protected: set[str],
+    *,
+    confirm_below: str,
+    rules: RuleToggles,
+) -> str | None:
+    """PR-4a — the first reason a row may not be auto-deleted, or ``None``.
+
+    The checks run in a fixed order, and the first hit wins. Under
+    :data:`LEGACY_RULES` the chain is exactly the pre-PR-4a filter. The rule
+    blockers ("B4", "B3", "B8") can only remove a row from the delete set.
+    """
+    if row.group_id is None or row.score is None:
+        return "unranked"
+    if row.source_path in keepers:
+        return "keeper"
+    action = getattr(row, "action", "")
+    if action not in _DUPLICATE_ACTIONS:
+        return "action"
+    if getattr(row, "match_confidence", None) == "low":
+        return "low"
+    if below_threshold(row, confirm_below):
+        return "threshold"
+    if rules.b4 and row.source_path in raw_protected:
+        return "B4"
+    if not rules.b3 and action == "EXACT":
+        return "B3"
+    if rules.b8 and action != "EXACT":
+        return "B8"
+    return None
+
+
 def non_keepers_for_aggressive_delete(
     rows: Iterable,
     keepers: set[str],
     *,
     confirm_below: str = "medium",
+    rules: RuleToggles = LEGACY_RULES,
 ) -> set[str]:
     """Return source_paths to auto-mark ``user_decision='delete'`` in the
     aggressive auto-select path (#393).
@@ -357,24 +393,29 @@ def non_keepers_for_aggressive_delete(
     ``apply_best_copy`` path wrote ``decision='delete'`` onto a JPEG export
     that nothing had asked to delete before.
 
+    PR-4a — ``rules`` (see :mod:`core.services.auto_select_rules`) can only
+    narrow this set. B4 off drops the #824 protection above. B3 off spares
+    every EXACT row. B8 on keeps only EXACT rows, at either threshold. The
+    default :data:`LEGACY_RULES` gives the pre-PR-4a set, so existing callers
+    are unchanged. The chain lives in :func:`_delete_blocker`.
+
     Args:
         rows: Iterable of ``ManifestRow``-shaped objects (``group_id``,
             ``source_path``, ``score``, ``action``, ``match_confidence``).
         keepers: The per-group keepers from :func:`top_score_path_per_group`.
+        confirm_below: ``"high"`` or ``"medium"``; the threshold.
+        rules: The rule toggles; defaults to the legacy behaviour.
 
     Returns:
         Set of ``source_path`` strings eligible for aggressive auto-delete.
     """
     rows = list(rows)
-    protected = set(keepers) | _raw_displaced_keepers(rows, keepers)
+    raw_protected = _raw_displaced_keepers(rows, keepers)
     return {
         row.source_path for row in rows
-        if row.group_id is not None
-        and row.score is not None
-        and row.source_path not in protected
-        and getattr(row, "action", "") in _DUPLICATE_ACTIONS
-        and getattr(row, "match_confidence", None) != "low"
-        and not below_threshold(row, confirm_below)
+        if _delete_blocker(
+            row, keepers, raw_protected, confirm_below=confirm_below, rules=rules
+        ) is None
     }
 
 
@@ -383,6 +424,7 @@ def plan_auto_select(
     *,
     aggressive: bool,
     confirm_below: str,
+    rules: RuleToggles = LEGACY_RULES,
 ) -> tuple[set[str], set[str]]:
     """Return ``(stamped, deletes)`` for the post-scan auto-select pass.
 
@@ -418,6 +460,42 @@ def plan_auto_select(
     deletes: set[str] = set()
     if aggressive:
         deletes = non_keepers_for_aggressive_delete(
-            rows, keepers, confirm_below=confirm_below
+            rows, keepers, confirm_below=confirm_below, rules=rules
         )
     return stamped, deletes
+
+
+def rule_trace(
+    rows: Iterable,
+    stamped: set[str],
+    *,
+    aggressive: bool,
+    confirm_below: str,
+    rules: RuleToggles,
+) -> dict[str, str]:
+    """PR-4a — map each decided path to the rule that decided it.
+
+    Values: ``"B1:keep"`` for a stamped keeper; and, only when ``aggressive``,
+    ``"B3:delete"`` / ``"B1:delete"`` for a delete (EXACT vs. the rest) or
+    ``"B3:spared"`` / ``"B4:spared"`` / ``"B8:spared"`` when a rule blocked a
+    row that would otherwise be deleted. Rows held back by the threshold or
+    the keeper pick have no entry, because no toggle is responsible for them.
+    Pure: the trace is for the scan log and the decision log (PR-5).
+    """
+    rows = list(rows)
+    keepers = top_score_path_per_group(rows)
+    trace = {path: "B1:keep" for path in stamped}
+    if not aggressive:
+        return trace
+    raw_protected = _raw_displaced_keepers(rows, keepers)
+    for row in rows:
+        blocker = _delete_blocker(
+            row, keepers, raw_protected, confirm_below=confirm_below, rules=rules
+        )
+        if blocker is None:
+            trace[row.source_path] = (
+                "B3:delete" if row.action == "EXACT" else "B1:delete"
+            )
+        elif blocker in ("B3", "B4", "B8"):
+            trace[row.source_path] = f"{blocker}:spared"
+    return trace

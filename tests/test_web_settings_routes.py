@@ -193,6 +193,33 @@ class TestPatchSettings:
         on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
         assert on_disk["scan"]["auto_select"]["confirm_below"] == "medium"
 
+    def test_auto_select_rules_round_trip(self, client, tmp_settings: Path):
+        """PR-4a — scan.auto_select.rules reads the default object when unset,
+        round-trips a PATCH, and lands under scan.auto_select.rules on disk."""
+        defaults = {"B3": True, "B4": True, "B5": True, "B7": True, "B8": True}
+        assert client.get("/api/settings").json()["scan.auto_select.rules"] == defaults
+
+        patched = {"B3": True, "B4": True, "B5": True, "B7": False, "B8": False}
+        resp = client.patch("/api/settings", json={
+            "updates": {"scan.auto_select.rules": patched}
+        })
+        assert resp.status_code == 200
+        assert client.get("/api/settings").json()["scan.auto_select.rules"] == patched
+        on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
+        assert on_disk["scan"]["auto_select"]["rules"] == patched
+
+    def test_auto_select_rules_patch_rejects_junk_and_writes_nothing(
+        self, client, tmp_settings: Path
+    ):
+        """An unknown id or a non-bool value is a 422, and settings.json is untouched."""
+        before = tmp_settings.read_text(encoding="utf-8")
+        for junk in ({"B9": True}, {"B3": 1}):
+            resp = client.patch("/api/settings", json={
+                "updates": {"scan.auto_select.rules": junk}
+            })
+            assert resp.status_code == 422, junk
+        assert tmp_settings.read_text(encoding="utf-8") == before
+
     def test_cloud_analysis_opt_in_round_trip(self, client, tmp_settings: Path):
         """scan.cloud_analysis_opt_in (privacy policy) is a boolean switch that
         defaults to false when unset, round-trips true and false through PATCH

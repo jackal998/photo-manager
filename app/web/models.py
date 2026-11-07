@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from core.app_service.cancel_token import _CancelToken
 from core.app_service.dtos import (
@@ -20,6 +20,7 @@ from core.app_service.dtos import (
 )
 from core.app_service.scan_runner import hash_pool_fingerprint
 from core.services.auto_select import DEFAULT_CONFIRM_BELOW, resolve_confirm_below
+from core.services.auto_select_rules import DEFAULT_RULES, RuleToggles, resolve_rule_toggles
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +285,10 @@ class WebScanRequest(BaseModel):
     auto_select_aggressive_delete: bool = False
     # None = resolve from settings.json (scan.auto_select.confirm_below).
     auto_select_confirm_below: Literal["high", "medium"] | None = None
+    # PR-4a. None = resolve from settings.json (scan.auto_select.rules); a
+    # partial object is merged over the defaults. Unknown ids and non-bool
+    # values are refused with 422 by the Literal keys and StrictBool values.
+    auto_select_rules: dict[Literal["B3", "B4", "B5", "B7", "B8"], StrictBool] | None = None
     autotune_read_knee: bool = False
     autotune_knees: dict = {}
 
@@ -331,6 +336,11 @@ class WebScanRequest(BaseModel):
                 settings.get("scan.auto_select.confirm_below")
             )
 
+        if self.auto_select_rules is None:
+            rules = resolve_rule_toggles(settings.get("scan.auto_select.rules")).to_dict()
+        else:
+            rules = RuleToggles.from_mapping(self.auto_select_rules, DEFAULT_RULES).to_dict()
+
         return self.model_copy(
             update={
                 "hash_pool": hash_pool,
@@ -338,6 +348,7 @@ class WebScanRequest(BaseModel):
                 "autotune_knees": autotune_knees,
                 "exif_workers": exif_workers,
                 "auto_select_confirm_below": confirm_below,
+                "auto_select_rules": rules,
             }
         )
 
@@ -367,6 +378,9 @@ class WebScanRequest(BaseModel):
             auto_select_aggressive_delete=self.auto_select_aggressive_delete,
             auto_select_confirm_below=(
                 self.auto_select_confirm_below or DEFAULT_CONFIRM_BELOW
+            ),
+            auto_select_rules=RuleToggles.from_mapping(
+                self.auto_select_rules or {}, DEFAULT_RULES
             ),
             autotune_read_knee=self.autotune_read_knee,
             autotune_knees=dict(self.autotune_knees),

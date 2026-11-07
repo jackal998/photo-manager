@@ -482,3 +482,170 @@ class TestConfidenceThreshold:
         assert locks == {}
         _, locks_default = build_auto_select_writes({"/a"})
         assert locks_default == {"/a": True}
+
+
+class TestRuleToggles:
+    """PR-4a — the B3 / B4 / B8 rules narrow the aggressive delete set, and
+    ``rule_trace`` names the rule behind each decision. Built on the same
+    rows as the classes above; the default call keeps the legacy set."""
+
+    @staticmethod
+    def _scene():
+        """A B4 group (RAW keeper, lossy EXACT displaced), a REVIEW group at
+        high and medium, and an EXACT copy in its own group."""
+        return [
+            _Row("/p/keep.dng", "g1", 0.95, match_confidence="high", action="EXACT"),
+            _Row("/p/lossy.jpg", "g1", 0.80, match_confidence="high", action="EXACT"),
+            _Row("/p/rev_pair.jpg", "g2", 0.90, match_confidence="high",
+                 action="REVIEW_DUPLICATE"),
+            _Row("/p/rev_other.jpg", "g2", 0.50, match_confidence="high",
+                 action="REVIEW_DUPLICATE"),
+            _Row("/p/copy_keep.jpg", "g3", 0.90, match_confidence="high", action="EXACT"),
+            _Row("/p/copy.jpg", "g3", 0.40, match_confidence="high", action="EXACT"),
+        ]
+
+    def test_function_defaults_are_legacy_rules(self):
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+        from core.services.auto_select_rules import LEGACY_RULES
+
+        rows = self._scene()
+        keepers = top_score_path_per_group(rows)
+        default = non_keepers_for_aggressive_delete(rows, keepers, confirm_below="medium")
+        explicit = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="medium", rules=LEGACY_RULES
+        )
+        assert default == explicit
+
+    def test_b3_off_spares_exact_rows(self):
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+        from core.services.auto_select_rules import RuleToggles
+
+        rows = self._scene()
+        keepers = top_score_path_per_group(rows)
+        rules = RuleToggles(b3=False, b4=True, b5=True, b7=True, b8=False)
+        deleted = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="medium", rules=rules
+        )
+        assert "/p/copy.jpg" not in deleted
+        assert "/p/rev_other.jpg" in deleted
+
+    def test_b3_off_keeps_the_keeper_stamp(self):
+        from core.services.auto_select import plan_auto_select
+        from core.services.auto_select_rules import RuleToggles
+
+        rows = self._scene()
+        rules = RuleToggles(b3=False, b4=True, b5=True, b7=True, b8=True)
+        stamped, _ = plan_auto_select(
+            rows, aggressive=True, confirm_below="medium", rules=rules
+        )
+        assert "/p/copy_keep.jpg" in stamped
+
+    def test_b4_off_drops_raw_displaced_protection(self):
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+        from core.services.auto_select_rules import RuleToggles
+
+        rows = self._scene()
+        keepers = top_score_path_per_group(rows)
+        on = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="medium",
+            rules=RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=False),
+        )
+        off = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="medium",
+            rules=RuleToggles(b3=True, b4=False, b5=True, b7=True, b8=False),
+        )
+        assert "/p/lossy.jpg" not in on
+        assert "/p/lossy.jpg" in off
+
+    def test_b8_on_excludes_review_at_medium(self):
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+        from core.services.auto_select_rules import RuleToggles
+
+        rows = self._scene()
+        keepers = top_score_path_per_group(rows)
+        deleted = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="medium",
+            rules=RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True),
+        )
+        assert "/p/rev_other.jpg" not in deleted
+        assert "/p/copy.jpg" in deleted
+
+    def test_b8_on_changes_nothing_at_high(self):
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+        from core.services.auto_select_rules import RuleToggles
+
+        rows = self._scene()
+        keepers = top_score_path_per_group(rows)
+        with_b8 = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="high",
+            rules=RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True),
+        )
+        without_b8 = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="high",
+            rules=RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=False),
+        )
+        assert with_b8 == without_b8
+
+    def test_b8_off_at_medium_equals_517_set(self):
+        from core.services.auto_select import (
+            non_keepers_for_aggressive_delete,
+            top_score_path_per_group,
+        )
+        from core.services.auto_select_rules import LEGACY_RULES
+
+        rows = self._scene()
+        keepers = top_score_path_per_group(rows)
+        legacy = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="medium", rules=LEGACY_RULES
+        )
+        assert "/p/rev_other.jpg" in legacy
+        assert legacy == non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below="medium"
+        )
+
+    def test_rule_trace_attributes_rules(self):
+        from core.services.auto_select import plan_auto_select, rule_trace
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = self._scene()
+        stamped, _ = plan_auto_select(rows, aggressive=True, confirm_below="medium")
+        trace = rule_trace(
+            rows, stamped, aggressive=True, confirm_below="medium", rules=DEFAULT_RULES
+        )
+        assert trace["/p/copy.jpg"] == "B3:delete"
+        assert trace["/p/rev_other.jpg"] == "B8:spared"
+        assert trace["/p/lossy.jpg"] == "B4:spared"
+        assert trace["/p/keep.dng"] == "B1:keep"
+
+        high = rule_trace(
+            rows, stamped, aggressive=True, confirm_below="high", rules=DEFAULT_RULES
+        )
+        # At high the REVIEW row is held back by the threshold, not by B8.
+        assert "/p/rev_other.jpg" not in high
+
+    def test_rule_trace_is_keep_only_when_not_aggressive(self):
+        from core.services.auto_select import plan_auto_select, rule_trace
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = self._scene()
+        stamped, deletes = plan_auto_select(rows, aggressive=False, confirm_below="medium")
+        assert deletes == set()
+        trace = rule_trace(
+            rows, stamped, aggressive=False, confirm_below="medium", rules=DEFAULT_RULES
+        )
+        assert set(trace.values()) == {"B1:keep"}

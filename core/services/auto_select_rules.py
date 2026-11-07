@@ -77,6 +77,14 @@ def resolve_rule_toggles(value: object) -> RuleToggles:
     return RuleToggles.from_mapping(value, DEFAULT_RULES)
 
 
+def describe_rules(rules: RuleToggles) -> str:
+    """One scan-log line naming the rule version and each rule's state."""
+    states = ", ".join(
+        f"{rule_id} {'on' if flag else 'off'}" for rule_id, flag in rules.to_dict().items()
+    )
+    return f"Rules {RULES_VERSION}: {states}."
+
+
 def validate_rule_toggles(value: object) -> None:
     """Raise ``ValueError`` unless ``value`` is a valid partial rule object.
 

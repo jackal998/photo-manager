@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.services.auto_select import DEFAULT_CONFIRM_BELOW
+from core.services.auto_select_rules import DEFAULT_RULES, RuleToggles
 
 # Near-duplicate Hamming-distance range accepted for the pHash and dHash
 # thresholds (#823, #876). The floor is 2, not 1: ``classify`` groups on
@@ -80,6 +81,8 @@ class ScanConfig:
     # PR-3: confidence threshold ("high" | "medium"). Groups with a row below it
     # get no keeper stamp and surface under "Needs your look".
     auto_select_confirm_below: str = DEFAULT_CONFIRM_BELOW
+    # PR-4a: B5/B7 act at classify in every mode; B3/B4/B8 narrow aggressive deletes.
+    auto_select_rules: RuleToggles = DEFAULT_RULES
 
     # Read-knee autotune (#551): ramp per-device read concurrency to a measured knee.
     autotune_read_knee: bool = False
