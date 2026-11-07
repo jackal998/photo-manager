@@ -241,10 +241,13 @@ class TestNearDuplicate:
         base = imagehash.hex_to_hash("a" * 16)
         # Flip 5 bits → hamming distance 5 (within default threshold 10)
         near = imagehash.hex_to_hash("5" + "a" * 15)
+        # GROUPING "10": production always computes dHash, and a pHash-only
+        # match is a hint. The fixture gains an agreeing dHash; the subject
+        # (distance gate) and the expectation are unchanged.
         a = _hr("/a.jpg", sha256="s1", phash=str(base), source_label="takeout",
-                exif_date=_dt())
+                exif_date=_dt(), dhash="0" * 16)
         b = _hr("/b.jpg", sha256="s2", phash=str(near), source_label="jdrive",
-                exif_date=_dt())
+                exif_date=_dt(), dhash="0" * 16)
         rows = _rows(classify([a, b], threshold=10))
         assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
 
@@ -278,10 +281,11 @@ class TestNearDuplicate:
         base = imagehash.hex_to_hash("a" * 16)
         near = imagehash.hex_to_hash("5" + "a" * 15)   # hamming=4, within threshold
         # Mean colors with L2 ≈ 6 (<< threshold 30) — same color palette
+        # GROUPING "10": agreeing dHash added; subject (mean colour) unchanged.
         a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color="100,120,140",
-                source_label="takeout", exif_date=_dt())
+                source_label="takeout", exif_date=_dt(), dhash="0" * 16)
         b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color="105,118,142",
-                source_label="takeout", exif_date=_dt())
+                source_label="takeout", exif_date=_dt(), dhash="0" * 16)
         rows = _rows(classify([a, b], threshold=10))
         assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
 
@@ -290,10 +294,11 @@ class TestNearDuplicate:
         import imagehash
         base = imagehash.hex_to_hash("a" * 16)
         near = imagehash.hex_to_hash("5" + "a" * 15)
+        # GROUPING "10": agreeing dHash added; subject (missing mean colour) unchanged.
         a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color=None,
-                source_label="takeout", exif_date=_dt())
+                source_label="takeout", exif_date=_dt(), dhash="0" * 16)
         b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color=None,
-                source_label="takeout", exif_date=_dt())
+                source_label="takeout", exif_date=_dt(), dhash="0" * 16)
         rows = _rows(classify([a, b], threshold=10))
         # No mean_color → gate not applied → flagged on pHash alone
         assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
@@ -582,8 +587,11 @@ class TestGroupId:
         import imagehash
         base = imagehash.hex_to_hash("a" * 16)
         near = imagehash.hex_to_hash("5" + "a" * 15)
-        a = _hr("/a.jpg", sha256="s1", phash=str(base), source_label="takeout", exif_date=_dt())
-        b = _hr("/b.jpg", sha256="s2", phash=str(near), source_label="jdrive", exif_date=_dt())
+        # GROUPING "10": agreeing dHash added; subject (shared group) unchanged.
+        a = _hr("/a.jpg", sha256="s1", phash=str(base), source_label="takeout",
+                exif_date=_dt(), dhash="0" * 16)
+        b = _hr("/b.jpg", sha256="s2", phash=str(near), source_label="jdrive",
+                exif_date=_dt(), dhash="0" * 16)
         rows = _rows(classify([a, b], threshold=10))
         assert rows["/a.jpg"].group_id is not None
         assert rows["/b.jpg"].group_id is not None
@@ -592,30 +600,25 @@ class TestGroupId:
     def test_transitive_grouping_three_files(self):
         """A near-dup of B, and B near-dup of C → all three in the same group.
 
-        GROUPING 6 changed this expectation: the links are low-only (dHash
-        unavailable), and low-only links pair or hint, they do not chain. So
-        A and B pair up, and C is an isolated hint, not a third member.
+        GROUPING "10": the fixtures gain an agreeing dHash, so both links are
+        high edges and they chain through B (restoring the #538 intent). A and C
+        are 8 bits apart and never linked directly; the closure still joins them.
         """
         import imagehash
-        from scanner.dedup import HINT_ONLY_PREFIX
-        # Three hashes: a~b (distance≈4), b~c (distance≈4), but a and c may not match
+        # Three hashes: a~b (distance=4), b~c (distance=4), a~c (distance=8)
         h_a = imagehash.hex_to_hash("aaaaaaaaaaaaaaaa")
         h_b = imagehash.hex_to_hash("aaaaaaaaaaaaaaa5")  # 4 bits from a
         h_c = imagehash.hex_to_hash("aaaaaaaaaaaaaa55")  # 4 bits from b (8 from a)
-        a = _hr("/a.jpg", sha256="s1", phash=str(h_a), source_label="src", exif_date=_dt())
-        b = _hr("/b.jpg", sha256="s2", phash=str(h_b), source_label="src", exif_date=_dt())
-        c = _hr("/c.jpg", sha256="s3", phash=str(h_c), source_label="src", exif_date=_dt())
+        a = _hr("/a.jpg", sha256="s1", phash=str(h_a), source_label="src",
+                exif_date=_dt(), dhash="0" * 16)
+        b = _hr("/b.jpg", sha256="s2", phash=str(h_b), source_label="src",
+                exif_date=_dt(), dhash="0" * 16)
+        c = _hr("/c.jpg", sha256="s3", phash=str(h_c), source_label="src",
+                exif_date=_dt(), dhash="0" * 16)
         # threshold=5: a~b (dist=4) ✓, b~c (dist=4) ✓, a~c (dist=8) beyond threshold
         rows = _rows(classify([a, b, c], threshold=5))
-        grouped = {p for p in ("/a.jpg", "/b.jpg", "/c.jpg") if rows[p].group_id}
-        assert grouped == {"/a.jpg", "/b.jpg"}, "sorted low pair A-B pairs up"
-        assert rows["/a.jpg"].group_id == rows["/b.jpg"].group_id
-        hint = rows["/c.jpg"]
-        assert hint.group_id is None
-        assert hint.action in ("", "UNDATED"), hint.action
-        assert hint.match_confidence == "low"
-        assert hint.reason.startswith(HINT_ONLY_PREFIX)
-        assert "b.jpg" in hint.reason, "hint names its partner"
+        gids = {rows[p].group_id for p in ("/a.jpg", "/b.jpg", "/c.jpg")}
+        assert None not in gids and len(gids) == 1, gids
 
     def test_live_photo_pair_shares_group_id(self):
         heic_path = Path("/iphone/IMG.HEIC")
@@ -658,29 +661,21 @@ class TestUnderGroupingFix:
     K2 = "f0f0f0f0f0f00f0f"   # 8 bits from BX (2nd byte), 16 from K1
 
     def test_bridge_orphan_now_grouped(self):
-        k1 = _hr("/iphone/k1.jpg", sha256="s1", phash=self.K1, source_label="iphone", exif_date=_dt())
-        k2 = _hr("/iphone/k2.jpg", sha256="s2", phash=self.K2, source_label="iphone", exif_date=_dt())
-        bx = _hr("/jdrive/bx.jpg", sha256="s3", phash=self.BX, source_label="jdrive", exif_date=_dt())
+        # GROUPING "10": agreeing dHash on every fixture, so k1-bx and k2-bx are
+        # high edges and the #538 closure holds: all three share one group.
+        k1 = _hr("/iphone/k1.jpg", sha256="s1", phash=self.K1, source_label="iphone",
+                 exif_date=_dt(), dhash="0" * 16)
+        k2 = _hr("/iphone/k2.jpg", sha256="s2", phash=self.K2, source_label="iphone",
+                 exif_date=_dt(), dhash="0" * 16)
+        bx = _hr("/jdrive/bx.jpg", sha256="s3", phash=self.BX, source_label="jdrive",
+                 exif_date=_dt(), dhash="0" * 16)
         rows = _rows(classify(
             [k1, k2, bx], source_priority={"iphone": 0, "jdrive": 1}, threshold=10,
         ))
         g_k1 = rows["/iphone/k1.jpg"].group_id
         g_k2 = rows["/iphone/k2.jpg"].group_id
         g_bx = rows["/jdrive/bx.jpg"].group_id
-        # #538 intent, restated for GROUPING 6: k2 (a near-dup of bx, d=8) is
-        # never SILENTLY orphaned. Low-only links pair or hint and do not chain.
-        # Pinned sorted outcome: the sorted low pair k1-bx pairs up (bx is the
-        # flagged row, k1 its partner); k2's only link is to bx, a pair member
-        # with no high edge, so k2 is the isolated hint naming bx.
-        from scanner.dedup import HINT_ONLY_PREFIX
-        assert g_k1 is not None and g_k1 == g_bx
-        assert Path(rows["/jdrive/bx.jpg"].duplicate_of).name == "k1.jpg"
-        assert g_k2 is None
-        k2 = rows["/iphone/k2.jpg"]
-        assert k2.action == "" and k2.match_confidence == "low"
-        assert HINT_ONLY_PREFIX in k2.reason, k2.reason
-        assert Path(k2.duplicate_of).name == "bx.jpg"
-        assert "bx.jpg" in k2.reason, k2.reason
+        assert g_k1 is not None and g_k1 == g_bx == g_k2
 
     def test_grouping_deterministic_under_input_shuffle(self):
         """group_id (= lex-min path) must be identical regardless of input
@@ -1049,29 +1044,31 @@ class TestPhashEntropyGuard:
     # Three GENUINELY-DISTINCT flat images (different SHA), same degenerate
     # pHash, same mean colour — so the mean-colour gate cannot reject them.
     def _three_flat(self):
+        # GROUPING "10": each icon gains an agreeing dHash (production always
+        # has one). The icons are JPEG, not PNG: two PNGs are a both-screenshots
+        # hint under B7, which would hide the guard this test isolates.
         return [
-            _hr("/a/icon1.png", sha256="f1", phash="0000000000000000",
-                mean_color="250,250,250", file_type="png", exif_date=_dt()),
-            _hr("/a/icon2.png", sha256="f2", phash="0000000000000000",
-                mean_color="250,250,250", file_type="png", exif_date=_dt()),
-            _hr("/a/icon3.png", sha256="f3", phash="0000000000000000",
-                mean_color="250,250,250", file_type="png", exif_date=_dt()),
+            _hr("/a/icon1.jpg", sha256="f1", phash="0000000000000000",
+                mean_color="250,250,250", file_type="jpeg", exif_date=_dt(),
+                dhash="0" * 16),
+            _hr("/a/icon2.jpg", sha256="f2", phash="0000000000000000",
+                mean_color="250,250,250", file_type="jpeg", exif_date=_dt(),
+                dhash="0" * 16),
+            _hr("/a/icon3.jpg", sha256="f3", phash="0000000000000000",
+                mean_color="250,250,250", file_type="jpeg", exif_date=_dt(),
+                dhash="0" * 16),
         ]
 
     def test_flat_images_falsely_grouped_without_guard(self):
         """Reproduces #516: with the guard disabled the three distinct icons
         collapse into one false duplicate group."""
-        from scanner.dedup import HINT_ONLY_PREFIX
         rows = _rows(classify(self._three_flat(), min_phash_entropy_bits=0))
-        # GROUPING 6: the guard-off false pair still groups (two of the three),
-        # and the third is an explicit hint, not a third member: low-only
-        # links pair or hint, they do not chain.
-        grouped = [r for r in rows.values() if r.group_id is not None]
-        hints = [r for r in rows.values() if r.group_id is None]
-        assert len(grouped) == 2, {p: r.action for p, r in rows.items()}
-        assert len(hints) == 1
-        assert hints[0].action in ("", "UNDATED")
-        assert hints[0].reason.startswith(HINT_ONLY_PREFIX)
+        # GROUPING 10 (deviation authorised by the lead): with dHash agreeing
+        # on all three, every pair is a high edge, so the three icons form one
+        # false group. The old GROUPING 6 count (two grouped plus one hint)
+        # came from dHash-missing low links, which no longer chain.
+        gids = {r.group_id for r in rows.values()}
+        assert None not in gids and len(gids) == 1, {p: r.action for p, r in rows.items()}
 
     def test_flat_images_not_grouped_with_guard(self):
         """The fix: at the default guard the degenerate-pHash icons are
@@ -1098,11 +1095,13 @@ class TestPhashEntropyGuard:
     def test_textured_near_duplicates_still_group_with_guard(self):
         """No regression: a real near-duplicate pair (non-degenerate pHash,
         small hamming) still groups with the guard on."""
+        # GROUPING "10": agreeing dHash added; the subject (the guard lets
+        # textured pHashes through) and the expectation are unchanged.
         recs = [
             _hr("/a/photo.jpg", sha256="p1", phash="ffffffff00000000",
-                file_type="jpeg", exif_date=_dt()),
+                file_type="jpeg", exif_date=_dt(), dhash="0" * 16),
             _hr("/a/photo_edit.jpg", sha256="p2", phash="ffffffff00000001",
-                file_type="jpeg", exif_date=_dt()),
+                file_type="jpeg", exif_date=_dt(), dhash="0" * 16),
         ]
         rows = _rows(classify(recs))  # guard on by default
         actions = {r.action for r in rows.values()}
@@ -1150,6 +1149,9 @@ class TestMatchConfidence:
         assert rows["/a.jpg"].group_id is None and rows["/b.jpg"].group_id is None
 
     def test_low_confidence_when_dhash_missing(self):
+        """GROUPING "10": a pHash match with no dHash is a hint, not a group.
+        Neither file is grouped, no REVIEW row is written, and the reason says
+        the dHash was unavailable."""
         recs = [
             _hr("/a.jpg", sha256="s1", phash=self._PA, dhash=None,
                 source_label="takeout", exif_date=_dt()),
@@ -1157,8 +1159,10 @@ class TestMatchConfidence:
                 source_label="jdrive", exif_date=_dt()),
         ]
         rows = _rows(classify(recs, threshold=10))
-        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/b.jpg"].action == ""
+        assert rows["/a.jpg"].group_id is None and rows["/b.jpg"].group_id is None
         assert rows["/b.jpg"].match_confidence == "low"
+        assert "dHash unavailable" in rows["/b.jpg"].reason, rows["/b.jpg"].reason
 
     def test_exact_sha_dup_is_high_confidence(self):
         recs = [
@@ -1186,30 +1190,32 @@ class TestDimensionGate:
     _PA, _PB = "ffff0000ffff0000", "ffff0000ffff0001"
 
     def _pair(self, w, h):
+        # GROUPING "10": agreeing dHash on both (the gate under test is size).
+        # JPEG, not PNG: a PNG pair is a both-screenshots hint under B7.
         return [
-            _hr("/a.png", sha256="s1", phash=self._PA, file_type="png",
-                exif_date=_dt(), pixel_width=w, pixel_height=h),
-            _hr("/b.png", sha256="s2", phash=self._PB, file_type="png",
-                exif_date=_dt(), pixel_width=w, pixel_height=h),
+            _hr("/a.jpg", sha256="s1", phash=self._PA, file_type="jpeg",
+                exif_date=_dt(), pixel_width=w, pixel_height=h, dhash="0" * 16),
+            _hr("/b.jpg", sha256="s2", phash=self._PB, file_type="jpeg",
+                exif_date=_dt(), pixel_width=w, pixel_height=h, dhash="0" * 16),
         ]
 
     def test_tiny_images_not_grouped(self):
         """24×24 icons below the 128px default gate are excluded from pHash
         grouping → undecided, no group."""
         rows = _rows(classify(self._pair(24, 24)))  # default min_phash_dimension=128
-        assert rows["/b.png"].action == ""
-        assert rows["/a.png"].group_id is None and rows["/b.png"].group_id is None
+        assert rows["/b.jpg"].action == ""
+        assert rows["/a.jpg"].group_id is None and rows["/b.jpg"].group_id is None
 
     def test_tiny_images_grouped_when_gate_disabled(self):
         """Reproduces the bug: with the gate off the same icons collapse."""
         rows = _rows(classify(self._pair(24, 24), min_phash_dimension=0))
-        assert rows["/b.png"].action == "REVIEW_DUPLICATE"
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
 
     def test_photo_sized_images_still_grouped(self):
         """A real near-dup pair (well above the gate) still groups."""
         rows = _rows(classify(self._pair(512, 512)))
-        assert rows["/b.png"].action == "REVIEW_DUPLICATE"
-        assert rows["/a.png"].group_id == rows["/b.png"].group_id
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/a.jpg"].group_id == rows["/b.jpg"].group_id
 
     def test_exact_sha_tiny_still_flagged(self):
         """The gate only affects the pHash path — a byte-identical tiny icon
@@ -1226,7 +1232,7 @@ class TestDimensionGate:
     def test_unknown_dimensions_pass_through(self):
         """Unknown dims (None — video / decode failure) are not excluded."""
         rows = _rows(classify(self._pair(None, None)))
-        assert rows["/b.png"].action == "REVIEW_DUPLICATE"
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
 
 
 # ---------------------------------------------------------------------------
@@ -1342,8 +1348,9 @@ def _parity_fixture(seed: int, count: int) -> list[HashResult]:
 
     Cluster centres + bit jitter create genuine near-duplicate chains
     (transitive grouping, gate interactions); varied source labels exercise
-    priority ordering; varied mean_color exercises the #462 gate. dHash is
-    left None here so the enumeration is what's under test — gate-agreement
+    priority ordering; varied mean_color exercises the #462 gate. Every record
+    carries an agreeing dHash (GROUPING "10": a pHash-only match is a hint, so
+    the near-dup clusters would otherwise never group). The dHash gate's own
     parity is covered separately by ``test_parity_dhash_gates``.
     """
     rng = _random.Random(seed)
@@ -1373,6 +1380,7 @@ def _parity_fixture(seed: int, count: int) -> list[HashResult]:
                 mean_color=f"{r},{g},{b}",
                 source_label=rng.choice(labels),
                 exif_date=_dt(),
+                dhash="0" * 16,
             ))
             n += 1
     rng.shuffle(hrs)

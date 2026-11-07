@@ -62,12 +62,13 @@ class TestFormatDuplicateTimeGate:
         keeper = _hr("/a/torii_0638.jpg", "s1", exif_date=T1, source_label="src_a")
         dup = _hr("/b/torii_1024.jpg", "s2", exif_date=T_NEXT_MORNING, source_label="src_b")
         rows = _rows(classify([keeper, dup], source_priority=PRIORITY))
+        # GROUPING 10: a shot-time disagreement is a hint, not a REVIEW row, so
+        # neither file is grouped and the note travels as text.
         row = rows["/b/torii_1024.jpg"]
-        assert row.action == "REVIEW_DUPLICATE"
+        assert row.action == ""
+        assert row.group_id is None and rows["/a/torii_0638.jpg"].group_id is None
         assert row.match_confidence == "low"
-        assert row.duplicate_of is not None
         assert "13.8 h apart" in row.reason
-        assert rows["/a/torii_0638.jpg"].group_id == row.group_id
         assert all(r.action != "EXACT" for r in rows.values())
 
     def test_exactly_eight_hours_apart_stays_exact_high(self):
@@ -96,8 +97,9 @@ class TestFormatDuplicateTimeGate:
         keeper = _hr("/a/shot_1.png", "p1", exif_date=T1, source_label="src_a", file_type="png")
         dup = _hr("/b/shot_2.png", "p2", exif_date=T1, source_label="src_b", file_type="png")
         rows = _rows(classify([keeper, dup], source_priority=PRIORITY))
+        # GROUPING 10: a both-PNG pHash match is a hint, so no row is written.
         row = rows["/b/shot_2.png"]
-        assert row.action == "REVIEW_DUPLICATE"
+        assert row.action == "" and row.group_id is None
         assert row.match_confidence == "low"
         assert "both screenshots" in row.reason
         assert all(r.action != "EXACT" for r in rows.values())
@@ -111,11 +113,12 @@ class TestNearDuplicateTimeGate:
         b = _hr("/b/y.jpg", "n2", phash=NEAR, dhash=BASE,
                 exif_date=T1 + timedelta(days=2), source_label="src_b")
         rows = _rows(classify([a, b], source_priority=PRIORITY))
+        # GROUPING 10: a near-dup two days apart is a hint, so neither is grouped.
         row = rows["/b/y.jpg"]
-        assert row.action == "REVIEW_DUPLICATE"
+        assert row.action == "" and row.group_id is None
         assert row.match_confidence == "low"
-        assert row.group_id == rows["/a/x.jpg"].group_id
-        assert "; shot" in row.reason
+        assert rows["/a/x.jpg"].group_id is None
+        assert "shot 48.0 h apart" in row.reason, row.reason
 
     def test_same_near_dup_within_tolerance_stays_high(self):
         a = _hr("/a/x.jpg", "n1", phash=BASE, dhash=BASE, exif_date=T1, source_label="src_a")
@@ -143,7 +146,7 @@ class TestNearDuplicateTimeGate:
         rows = _rows(classify([a, b], source_priority=PRIORITY))
         row = rows["/b/y.png"]
         assert row.match_confidence == "low"
-        assert row.reason.endswith("; both screenshots")
+        assert "both screenshots" in row.reason, row.reason
 
 
 class TestShotTimeVote:

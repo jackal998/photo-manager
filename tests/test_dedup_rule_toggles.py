@@ -76,17 +76,17 @@ class TestScreenshotRule:
             _png("/s/b.png", "sha_b", P1, later),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY, screenshot_demotion=False))
-        flagged = [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
-        assert flagged
-        for row in flagged:
+        # GROUPING 10: the shot-time disagreement is a hint, so no REVIEW row.
+        assert not [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
+        for row in rows.values():
             assert row.match_confidence == "low"
-            assert "; shot" in row.reason
+            assert "shot 48.0 h apart" in row.reason, row.reason
 
 
-class TestDefaultsAreGrouping9:
-    """The default call is the grouping-9 behaviour, row for row."""
+class TestDefaultsAreGrouping10:
+    """The default call is the grouping-10 behaviour, row for row."""
 
-    def test_classify_defaults_are_grouping_9(self):
+    def test_classify_defaults_are_grouping_10(self):
         frames = _five_frames() + [_shot(name) for name in SHOT]
         default = classify(frames, source_priority=PRIORITY)
         explicit = classify(

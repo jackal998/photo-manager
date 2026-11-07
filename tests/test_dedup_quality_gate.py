@@ -133,9 +133,11 @@ class TestPhashQualityGateClassify:
         assert rows["/n/a.jpg"].group_id is None
         assert rows["/n/b.jpg"].group_id is None
 
+        # GROUPING "10": the control pair gains an agreeing dHash (a pHash-only
+        # match is a hint). The subject, the quality gate, is unchanged.
         control = [
-            _hq("/n/a.jpg", "na", base, 40.0, dhash=None),
-            _hq("/n/b.jpg", "nb", near, 40.0, dhash=None),
+            _hq("/n/a.jpg", "na", base, 40.0),
+            _hq("/n/b.jpg", "nb", near, 40.0),
         ]
         ctrl = _rows(classify(control))
         assert ctrl["/n/b.jpg"].action == "REVIEW_DUPLICATE"

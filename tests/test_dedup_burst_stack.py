@@ -153,8 +153,10 @@ def test_hint_leaf_hours_away_untouched():
     records = _five_frames() + [_hr("/a/zz_leaf.jpg", "leaf", "00000000fffffffe",
                                     _at(5 * 3600 + 17 * 60), "src_a")]
     rows = _rows(classify(records, source_priority=PRIORITY))
+    # GROUPING 10: the leaf's link is a hint, so it is ungrouped and undecided.
     leaf = rows["/a/zz_leaf.jpg"]
-    assert leaf.action == "REVIEW_DUPLICATE"
+    assert leaf.action == ""
+    assert leaf.group_id is None
     assert leaf.match_confidence == "low"
     assert not leaf.reason.startswith(BURST_PREFIX)
     _assert_all_burst_frames(rows, ["f0.jpg", "f1.jpg", "f2.jpg", "f3.jpg", "f4.jpg"],

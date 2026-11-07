@@ -85,15 +85,13 @@ def test_two_lone_live_stills_with_low_hint_form_one_group_with_movs():
     still_a, mov_a = _pair("IMG_4359")
     still_b, mov_b = _pair("IMG_4361", phash=PHASH_NEAR)
     rows = _rows(classify([still_a, mov_a, still_b, mov_b]))
+    # GROUPING 10: a pHash match with no dHash is a hint. Two lone stills
+    # never group, and their MOVs have no pHash, so nothing groups at all.
     gids = {_gid(rows, p) for p in (
         "/cam/IMG_4359.HEIC", "/cam/IMG_4359.MOV",
         "/cam/IMG_4361.HEIC", "/cam/IMG_4361.MOV",
     )}
-    assert None not in gids
-    assert len(gids) == 1, "two low-hinted stills and their MOVs form one group of four"
-    review = rows["/cam/IMG_4361.HEIC"]
-    assert review.duplicate_of, "the lower-numbered still is the REVIEW target"
-    assert _gid(rows, review.duplicate_of) == review.group_id
+    assert gids == {None}
 
 
 def test_lone_live_still_attaches_to_high_member_with_its_mov():
@@ -104,11 +102,13 @@ def test_lone_live_still_attaches_to_high_member_with_its_mov():
     a = _hr("/other/IMG_6.jpg", sha256="a6", phash=PHASH, exif_date=_dt())
     a_copy = _hr("/copy/IMG_6.jpg", sha256="a6", phash=PHASH, exif_date=_dt())
     rows = _rows(classify([still, mov, a, a_copy], threshold=10))
+    # GROUPING 10: the still's link is a hint, so it never joins the high core
+    # {A, byte copy of A}. The still and its MOV stay ungrouped.
     gid = _gid(rows, "/other/IMG_6.jpg")
     assert gid is not None
     assert _gid(rows, "/copy/IMG_6.jpg") == gid
-    assert _gid(rows, "/cam/IMG_5.HEIC") == gid
-    assert _gid(rows, "/cam/IMG_5.MOV") == gid
+    assert _gid(rows, "/cam/IMG_5.HEIC") is None
+    assert _gid(rows, "/cam/IMG_5.MOV") is None
     assert rows["/cam/IMG_5.HEIC"].match_confidence == "low"
 
 
@@ -134,10 +134,12 @@ def test_live_still_is_not_a_hint_anchor():
     x = _hr("/cam/X.jpg", sha256="x", phash=PHASH_NEAR, exif_date=_dt())
     y = _hr("/cam/Y.jpg", sha256="y", phash=PHASH_LEAF, exif_date=_dt())
     rows = _rows(classify([x, y, still, mov], threshold=5))
+    # GROUPING 10: X, Y and the still are all pHash-only, so every link is a
+    # hint. None of them is grouped.
     grouped = [p for p in ("/cam/X.jpg", "/cam/Y.jpg") if _gid(rows, p) is not None]
-    assert len(grouped) == 1, "exactly one of X and Y pairs with the still"
-    assert _gid(rows, "/cam/IMG_7.HEIC") == _gid(rows, grouped[0])
-    assert _gid(rows, "/cam/IMG_7.MOV") == _gid(rows, grouped[0])
+    assert grouped == []
+    assert _gid(rows, "/cam/IMG_7.HEIC") is None
+    assert _gid(rows, "/cam/IMG_7.MOV") is None
 
 
 def test_false_stem_pair_without_other_edges_gets_no_group():

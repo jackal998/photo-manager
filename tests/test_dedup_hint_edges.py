@@ -79,14 +79,18 @@ class TestTorii:
         assert _group_sizes(rows) == [2, 2, 2]
 
     def test_cross_moment_rows_are_low_review_and_name_their_partner(self):
+        """GROUPING "10": cross-moment matches are hints. No REVIEW row is
+        written, and each grouped moment row names its other moment as text."""
         rows = _rows(classify(self._records(), source_priority=PRIORITY))
-        review = [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
-        assert review, "cross-moment near-dups must still be flagged for review"
-        for row in review:
-            assert row.match_confidence == "low"
-            assert row.duplicate_of is not None
-            assert Path(row.duplicate_of).name in row.reason
-            assert " h apart" in row.reason
+        assert not [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
+        # Byte copies are EXACT and take no hint; each moment keeper names the
+        # other moments as text.
+        keepers = [r for r in rows.values() if r.action != "EXACT"]
+        assert len(keepers) == 3
+        for row in keepers:
+            assert row.group_id is not None
+            assert "hint: low-confidence match with" in row.reason, row.reason
+            assert " h apart" in row.reason, row.reason
 
 
 class TestLeafAttach:
@@ -102,9 +106,9 @@ class TestLeafAttach:
         rows = _rows(classify(records, source_priority=PRIORITY))
         lone = rows["/c/lone.jpg"]
         assert lone.match_confidence == "low"
-        assert lone.group_id is not None
-        assert lone.group_id == rows["/a/grp_a.jpg"].group_id
-        assert _group_sizes(rows) == [3]
+        assert lone.group_id is None
+        assert HINT_ONLY_PREFIX in lone.reason, lone.reason
+        assert _group_sizes(rows) == [2]
 
 
 class TestNoChainingThroughALeaf:
@@ -124,13 +128,12 @@ class TestNoChainingThroughALeaf:
 
     def test_leaf_joins_exactly_one_group_by_sorted_edge_order(self):
         rows = _rows(classify(self._records(), source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2, 3]
-        middle = rows["/c/middle.jpg"]
-        # The sorted low pairs put (/a/grp_a.jpg, /c/middle.jpg) before
-        # (/b/grp_b.jpg, /c/middle.jpg), so the A pair takes the leaf.
-        assert middle.group_id == rows["/a/grp_a.jpg"].group_id
+        # GROUPING 10: the low leaf never joins either pair; both pairs stay
+        # high cores, and the middle file is an isolated hint.
+        assert _group_sizes(rows) == [2, 2]
+        assert rows["/c/middle.jpg"].group_id is None
+        assert rows["/a/grp_a.jpg"].group_id == rows["/a/grp_a_copy.jpg"].group_id
         assert rows["/b/grp_b.jpg"].group_id == rows["/b/grp_b_copy.jpg"].group_id
-        assert rows["/b/grp_b.jpg"].group_id != middle.group_id
 
     def test_result_is_identical_when_record_order_is_shuffled(self):
         base = _rows(classify(self._records(), source_priority=PRIORITY))
@@ -169,9 +172,10 @@ class TestTwoSingletonsByLowHint:
             _hr("/c/solo_y.jpg", "sy", S, T_PLUS_36H, "src_a"),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2]
-        assert rows["/c/solo_y.jpg"].match_confidence == "low"
-        assert rows["/c/solo_y.jpg"].group_id == rows["/a/solo_x.jpg"].group_id
+        assert _group_sizes(rows) == []
+        for path in ("/a/solo_x.jpg", "/c/solo_y.jpg"):
+            assert rows[path].group_id is None
+            assert rows[path].match_confidence == "low"
 
 
 # Screenshot pHashes for the chain tests: consecutive links are within the
@@ -195,10 +199,9 @@ class TestHintChainStopsAtLonePairs:
     def test_four_screenshot_chain_gives_two_pairs_not_one_group(self):
         records = [_shot(n) for n in ("s1", "s2", "s3", "s4")]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2, 2]
-        assert rows["/s/s1.png"].group_id == rows["/s/s2.png"].group_id
-        assert rows["/s/s3.png"].group_id == rows["/s/s4.png"].group_id
-        assert rows["/s/s1.png"].group_id != rows["/s/s3.png"].group_id
+        # GROUPING 10: both-PNG links are hints, so the chain forms no group.
+        assert _group_sizes(rows) == []
+        assert all(r.group_id is None for r in rows.values())
 
     def test_chain_result_is_identical_when_record_order_is_shuffled(self):
         base = _rows(classify([_shot(n) for n in ("s1", "s2", "s3", "s4")],
@@ -216,11 +219,10 @@ class TestHintChainStopsAtLonePairs:
         rows = _rows(classify(records, source_priority=PRIORITY))
         x = rows["/s/x.png"]
         assert x.group_id is None
-        assert x.duplicate_of is not None
-        assert Path(x.duplicate_of).name == "s2.png"
+        assert x.duplicate_of is None
         assert "s2.png" in x.reason
         assert x.match_confidence == "low"
-        assert rows["/s/s1.png"].group_id == rows["/s/s2.png"].group_id
+        assert all(rows[p].group_id is None for p in ("/s/s1.png", "/s/s2.png"))
 
 
 def _lone_hint(exif_date: datetime | None) -> list[HashResult]:
@@ -236,22 +238,20 @@ class TestIsolatedHintIsUndecided:
     """(h) GROUPING 6: an isolated hint row carries no dedup action."""
 
     def test_isolated_hint_row_has_undecided_action_and_marker(self):
-        from scanner.dedup import HINT_ONLY_PREFIX
         rows = _rows(classify(_lone_hint(T1), source_priority=PRIORITY))
         x = rows["/s/x.png"]
         assert x.group_id is None
         assert x.action == ""
         assert x.match_confidence == "low"
-        assert x.reason.startswith(HINT_ONLY_PREFIX)
+        assert HINT_ONLY_PREFIX in x.reason, x.reason
         assert "s2.png" in x.reason
 
     def test_undated_isolated_hint_becomes_undated(self):
-        from scanner.dedup import HINT_ONLY_PREFIX
         rows = _rows(classify(_lone_hint(None), source_priority=PRIORITY))
         x = rows["/s/x.png"]
         assert x.group_id is None
         assert x.action == "UNDATED"
-        assert x.reason.startswith(HINT_ONLY_PREFIX)
+        assert HINT_ONLY_PREFIX in x.reason, x.reason
 
 
 class TestHintWithAnotherEdgeKeepsAction:
@@ -259,6 +259,8 @@ class TestHintWithAnotherEdgeKeepsAction:
     through another edge keeps its REVIEW action."""
 
     def test_row_grouped_via_one_edge_keeps_review_action(self):
+        """GROUPING 10: x's only links are hints (shot time disagrees with both
+        moments), so it is ungrouped with an undecided action."""
         records = [
             _hr("/a/a1.jpg", "ga", A, T1, "src_a"),
             _hr("/a/a2.jpg", "ga", A, T1, "src_a"),
@@ -268,11 +270,9 @@ class TestHintWithAnotherEdgeKeepsAction:
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
         x = rows["/c/x.jpg"]
-        assert x.group_id is not None
-        assert x.group_id == rows["/a/a1.jpg"].group_id
-        assert x.group_id != rows["/b/b1.jpg"].group_id
-        assert x.action == "REVIEW_DUPLICATE"
-        assert not x.reason.startswith("hint only")
+        assert x.group_id is None
+        assert x.action == ""
+        assert HINT_ONLY_PREFIX in x.reason, x.reason
 
 
 def _chain_hash(k: int) -> str:
@@ -294,14 +294,16 @@ class TestHintsDoNotChainThroughALeaf:
         records.append(_png("/s/s1_copy.png", "sha_s1", 1))  # byte copy of s1
         rows = _rows(classify(records, source_priority=PRIORITY))
         assert max(_group_sizes(rows)) < 7, "no group of 7 through leaves"
-        assert _group_sizes(rows) == [2, 2, 3]
-        assert rows["/s/s2.png"].group_id == rows["/s/s1.png"].group_id
+        # GROUPING 10: only the byte-copy pair is a high core; the chain links
+        # are hints and form no group.
+        assert _group_sizes(rows) == [2]
         assert rows["/s/s1_copy.png"].group_id == rows["/s/s1.png"].group_id
+        assert rows["/s/s2.png"].group_id is None
 
     def test_six_screenshot_chain_without_copy_is_two_two_two(self):
         records = [_png(f"/s/s{k}.png", f"sha_s{k}", k) for k in range(1, 7)]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2, 2, 2]
+        assert _group_sizes(rows) == []
 
     def test_core_leaf_far_shape_leaves_far_as_isolated_hint(self):
         records = [
@@ -311,12 +313,12 @@ class TestHintsDoNotChainThroughALeaf:
             _png("/s/c.png", "gc", 3),           # far: low to b only
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert _group_sizes(rows) == [3]
+        assert _group_sizes(rows) == [2]
         far = rows["/s/c.png"]
         assert far.group_id is None
         assert far.action == ""
-        assert far.reason.startswith(HINT_ONLY_PREFIX)
-        assert rows["/s/b.png"].group_id == rows["/s/a.png"].group_id
+        assert HINT_ONLY_PREFIX in far.reason, far.reason
+        assert rows["/s/b.png"].group_id is None
 
 
 def _raw(path: str, sha: str, exif_date: datetime) -> HashResult:
@@ -337,9 +339,12 @@ class TestComplementaryRawPairsRespectShotTime:
             _raw("/r/x2.dng", "r2", T1 + timedelta(hours=5, minutes=10)),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2]
-        assert rows["/r/x1.dng"].group_id == rows["/r/x2.dng"].group_id
-        assert rows["/r/x1.dng"].action == "" and rows["/r/x2.dng"].action == ""
+        # GROUPING 10: the disagreeing-time link is a hint, so no group forms.
+        assert _group_sizes(rows) == []
+        for path in ("/r/x1.dng", "/r/x2.dng"):
+            assert rows[path].group_id is None
+            assert rows[path].action == ""
+            assert HINT_ONLY_PREFIX in rows[path].reason, rows[path].reason
 
     def test_cr2_and_its_conversion_stay_together_across_a_moment(self):
         """#824's own example: x.cr2 and its DNG conversion agree on time with
@@ -356,10 +361,10 @@ class TestComplementaryRawPairsRespectShotTime:
         rows = _rows(classify(records, source_priority=PRIORITY))
         assert rows["/b/x.cr2"].group_id == rows["/c/x_conv.dng"].group_id
         assert rows["/b/x.cr2"].group_id is not None
-        assert _group_sizes(rows) == [3]
-        assert rows["/a/m0.dng"].group_id == rows["/b/x.cr2"].group_id
-        # The hint leaf is visible as a hint, not as a bare "unique" row.
+        assert _group_sizes(rows) == [2]
+        # GROUPING 10: m0 is a hint only, so it stays out of the group.
         m0 = rows["/a/m0.dng"]
+        assert m0.group_id is None
         assert m0.match_confidence == "low"
         assert "x.cr2" in m0.reason
 
