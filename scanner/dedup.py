@@ -299,16 +299,19 @@ def _screenshot_pair(a: HashResult, b: HashResult) -> bool:
     return a.record.file_type == "png" and b.record.file_type == "png"
 
 
-def _demotion_note(a: HashResult, b: HashResult) -> Optional[str]:
+def _demotion_note(
+    a: HashResult, b: HashResult, screenshot_demotion: bool = True
+) -> Optional[str]:
     """Short reason a pHash match is capped at ``low`` confidence, or None.
 
     Shot-time disagreement is named first (it carries the hour gap); a
-    both-PNG pair is the fallback cause.
+    both-PNG pair is the fallback cause, and only while ``screenshot_demotion``
+    (the PR-4a B7 rule) is on.
     """
     if _shot_time_vote(a, b) == "disagree":
         hours = abs((a.exif_date - b.exif_date).total_seconds()) / 3600
         return f"shot {hours:.1f} h apart"
-    if _screenshot_pair(a, b):
+    if screenshot_demotion and _screenshot_pair(a, b):
         return "both screenshots"
     return None
 
@@ -323,8 +326,13 @@ def classify(
     min_phash_dimension: int = 128,
     bktree_min_candidates: int | None = None,
     min_phash_quality: float = 16.0,
+    burst_stacks: bool = True,
+    screenshot_demotion: bool = True,
 ) -> list[ManifestRow]:
     """Assign an action to every record and return ManifestRows.
+
+    ``burst_stacks`` (PR-4a B5) and ``screenshot_demotion`` (PR-4a B7) default
+    to the grouping-9 behaviour; the scan passes the user's rule toggles.
 
     Args:
         records: All hashed file records to classify.
@@ -397,6 +405,7 @@ def classify(
         records, rows, threshold, source_priority, mean_color_threshold,
         min_phash_entropy_bits, dhash_threshold, min_phash_dimension,
         bktree_min_candidates, min_phash_quality,
+        screenshot_demotion=screenshot_demotion,
     )
 
     # Pass 3: remaining unclassified files — all sources treated equally
@@ -425,7 +434,8 @@ def classify(
     )
     _mark_isolated_hints(rows, skipped)
     _mark_taken_hints(rows, taken)
-    _mark_burst_stacks(rows, {lone for lone, _ in taken})
+    if burst_stacks:
+        _mark_burst_stacks(rows, {lone for lone, _ in taken})
 
     return list(rows.values())
 
@@ -554,6 +564,7 @@ def _classify_phash(
     min_phash_dimension: int = 128,
     bktree_min_candidates: int | None = None,
     min_phash_quality: float = 16.0,
+    screenshot_demotion: bool = True,
 ) -> list[Edge]:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE, and
     return the pHash union-find edges — near-duplicate (#538) plus
@@ -592,7 +603,8 @@ def _classify_phash(
         if len(group) < 2:
             continue
         exact_edges.extend(_classify_format_group(
-            group, rows, source_priority, mean_color_threshold, dhash_threshold
+            group, rows, source_priority, mean_color_threshold, dhash_threshold,
+            screenshot_demotion=screenshot_demotion,
         ))
 
     # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold.
@@ -601,6 +613,7 @@ def _classify_phash(
     return exact_edges + _classify_near_duplicates(
         candidates, rows, threshold, source_priority, mean_color_threshold,
         dhash_threshold, bktree_min_candidates,
+        screenshot_demotion=screenshot_demotion,
     )
 
 
@@ -670,6 +683,7 @@ def _classify_format_group(
     source_priority: dict[str, int],
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
+    screenshot_demotion: bool = True,
 ) -> list[Edge]:
     """Within a pHash==0 group, apply RAW+lossy exception and format priority.
 
@@ -691,7 +705,9 @@ def _classify_format_group(
         # invisible singletons — ManifestRepository.load only yields rows with
         # a group_id. Same decoupling #88 made for Live Photo pairs and #538
         # for bridged near-dups: group together, decide independently.
-        return _complementary_edges(group, mean_color_threshold, dhash_threshold)
+        return _complementary_edges(
+            group, mean_color_threshold, dhash_threshold, screenshot_demotion
+        )
 
     if len(lossy) < 2:
         # Reachable only for an ALL-RAW bucket: a video carries no pHash so it
@@ -699,7 +715,9 @@ def _classify_format_group(
         # LOSSY_TYPES — so ``has_raw`` False would imply ``len(lossy) >= 2``.
         # A CR2 and its DNG conversion hash identically with different SHAs;
         # same shot, same group, still no dedup decision (#824).
-        return _complementary_edges(group, mean_color_threshold, dhash_threshold)
+        return _complementary_edges(
+            group, mean_color_threshold, dhash_threshold, screenshot_demotion
+        )
 
     # All lossy FORMAT_DUPLICATE: keep highest-format × highest-source-priority
     lossy.sort(key=lambda h: (
@@ -733,7 +751,7 @@ def _classify_format_group(
         # gate hashed identically) or when both files are PNG screenshots. The
         # duplicate_of edge still groups them; only the label and confidence
         # move to the review tier, so the aggressive auto-select skips the row.
-        note = _demotion_note(keeper, duplicate)
+        note = _demotion_note(keeper, duplicate, screenshot_demotion)
         if note is not None:
             rows[key] = _make_row(
                 duplicate,
@@ -778,6 +796,7 @@ def _complementary_edges(
     group: list[HashResult],
     mean_color_threshold: int,
     dhash_threshold: int,
+    screenshot_demotion: bool = True,
 ) -> list[Edge]:
     """#824 — union-find edges for an exact-pHash bucket that takes no dedup
     decision (RAW+lossy complementary, or all-RAW). The bucket is split by shot
@@ -803,7 +822,11 @@ def _complementary_edges(
     edges: list[Edge] = []
     for member in ordered:
         anchor = next(
-            (a for a in anchors if _demotion_note(a, member) is None), None
+            (
+                a for a in anchors
+                if _demotion_note(a, member, screenshot_demotion) is None
+            ),
+            None,
         )
         if anchor is None:
             anchors.append(member)
@@ -995,6 +1018,7 @@ def _classify_near_duplicates(
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
     bktree_min_candidates: int | None = None,
+    screenshot_demotion: bool = True,
 ) -> list[Edge]:
     """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE,
     and return their ``(path_a, path_b, confidence)`` union-find edges.
@@ -1058,7 +1082,7 @@ def _classify_near_duplicates(
             # dedup-core research 2026-11-05 class B — shot-time or PNG-pair
             # demotion caps confidence at "low" whatever the dHash said. The
             # edge and the row share this one verdict.
-            note = _demotion_note(hr_a, hr_b)
+            note = _demotion_note(hr_a, hr_b, screenshot_demotion)
             confidence = _edge_confidence(vote, note)
             edges.append((str(hr_a.record.path), str(hr_b.record.path), confidence))
             # Classification (unchanged from pre-#538): flag the lower-priority

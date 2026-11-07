@@ -29,6 +29,7 @@ from core.services.auto_select import (
     non_keepers_for_aggressive_delete,
     top_score_path_per_group,
 )
+from core.services.auto_select_rules import LEGACY_RULES
 from infrastructure.manifest_repository import DecisionWrite, ManifestRepository
 from infrastructure.settings import load_settings
 
@@ -323,8 +324,11 @@ def apply_best_copy(
 
     # PR-3: a user-invoked best-copy keeps #517 semantics (threshold "medium")
     # and its keeper lock; the user is already looking at this group.
+    # PR-4a: the rule toggles are engine rules and do not apply here (decision 3
+    # in docs/audits/auto-select-prd-2026-11/pr4-design.md); the button promises
+    # "Keep best · delete rest" on a group the user is looking at.
     non_keepers = non_keepers_for_aggressive_delete(
-        scored, keepers, confirm_below="medium"
+        scored, keepers, confirm_below="medium", rules=LEGACY_RULES
     )
     decisions, lock_states = build_auto_select_writes(keepers, non_keepers)
 

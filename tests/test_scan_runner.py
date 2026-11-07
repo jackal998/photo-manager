@@ -491,6 +491,96 @@ class TestAutoSelectPipeline:
             "prior rows/locks must survive a failed re-scan intact"
         )
 
+    def _aggressive_config(self, src: Path, out: Path, rules):
+        from core.app_service.dtos import ScanConfig
+
+        return ScanConfig(
+            sources={"src": src},
+            output_path=out,
+            recursive_map={"src": False},
+            workers=1,
+            exif_workers=1,
+            hash_pool="thread",
+            auto_select_enabled=True,
+            auto_select_aggressive_delete=True,
+            auto_select_rules=rules,
+        )
+
+    def test_rules_b3_off_writes_no_delete_for_byte_copies(self, tmp_path):
+        """PR-4a B3 off: the byte copy is spared, the keeper stamp still lands.
+
+        One KEEP and zero delete. The keeper is the score pick, not a B3 decision.
+        """
+        from core.app_service.cancel_token import _CancelToken
+        from core.app_service.scan_runner import run_pipeline
+        from core.services.auto_select_rules import RuleToggles
+
+        src = tmp_path / "src"
+        src.mkdir()
+        self._make_dup_dir(src)
+        out = tmp_path / "manifest.sqlite"
+        rules = RuleToggles(b3=False, b4=True, b5=True, b7=True, b8=True)
+
+        run_pipeline(self._aggressive_config(src, out, rules), _CancelToken(), _SpyBus())
+
+        rows = self._read_manifest_rows(out)
+        assert sum(1 for r in rows if r["action"] == "KEEP") == 1, rows
+        assert sum(1 for r in rows if r["user_decision"] == "delete") == 0, rows
+
+    def test_default_config_rules_are_prd_defaults(self, tmp_path):
+        from core.app_service.dtos import ScanConfig
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        config = ScanConfig(sources={"src": tmp_path}, output_path=tmp_path / "m.sqlite")
+        assert config.auto_select_rules == DEFAULT_RULES
+
+    def test_classify_receives_rule_flags(self, tmp_path, monkeypatch):
+        """The scan passes B5 and B7 into classify (real classify, spied)."""
+        import scanner.dedup as dedup
+        from core.app_service.cancel_token import _CancelToken
+        from core.app_service.scan_runner import run_pipeline
+        from core.services.auto_select_rules import RuleToggles
+
+        seen: dict = {}
+        real_classify = dedup.classify
+
+        def spy(*args, **kwargs):
+            seen.update(kwargs)
+            return real_classify(*args, **kwargs)
+
+        monkeypatch.setattr(dedup, "classify", spy)
+        src = tmp_path / "src"
+        src.mkdir()
+        self._make_dup_dir(src)
+        rules = RuleToggles(b3=True, b4=True, b5=True, b7=False, b8=True)
+
+        run_pipeline(
+            self._aggressive_config(src, tmp_path / "m.sqlite", rules),
+            _CancelToken(),
+            _SpyBus(),
+        )
+
+        assert seen["burst_stacks"] is True
+        assert seen["screenshot_demotion"] is False
+
+    def test_rules_line_is_logged(self, tmp_path):
+        from core.app_service.cancel_token import _CancelToken
+        from core.app_service.scan_runner import run_pipeline
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        src = tmp_path / "src"
+        src.mkdir()
+        self._make_dup_dir(src)
+        bus = _SpyBus()
+
+        run_pipeline(
+            self._aggressive_config(src, tmp_path / "m.sqlite", DEFAULT_RULES),
+            _CancelToken(),
+            bus,
+        )
+
+        assert any(msg.startswith("Rules v1: ") for msg in bus.logs), bus.logs
+
 
 # ── #793 acceptance — exiftool-missing mode + malformed EXIF ───────────────
 #

@@ -518,6 +518,15 @@ def reset_scan_persistence(base_url: str) -> None:
             "sources.list": [],
             "sources.output": "",
             "ui.prune_singletons": "never",
+            # PR-4a — one settings.json is shared by the whole batch, so a
+            # toggle left off by one scenario would leak into the next.
+            "scan.auto_select.rules": {
+                "B3": True,
+                "B4": True,
+                "B5": True,
+                "B7": True,
+                "B8": True,
+            },
         },
     )
 

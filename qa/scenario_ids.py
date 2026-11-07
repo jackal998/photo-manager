@@ -351,6 +351,10 @@ ALL_SCENARIOS = [
     # aggressive scan deletes the admitted copy pair and leaves the REVIEW
     # near-dup group undecided; the status-bar toggle narrows the list to it.
     "s80_needs_your_look",
+    # WEB-ONLY (PR-4a) — the auto-select rule toggles: the Rules block persists,
+    # a second scan with B3 and B8 off changes the manifest, and reopening the
+    # dialog reads the saved toggles back.
+    "s81_rule_toggles",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -372,4 +376,5 @@ WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s78_empty_state",
     "s79_decision_sort",
     "s80_needs_your_look",
+    "s81_rule_toggles",
 })

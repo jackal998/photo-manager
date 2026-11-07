@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, HTTPException
 
 from app.web.models import SettingsUpdate
 from core.services.auto_select import DEFAULT_CONFIRM_BELOW
+from core.services.auto_select_rules import DEFAULT_RULES, validate_rule_toggles
 from infrastructure.settings import load_settings
 
 router = APIRouter()
@@ -38,12 +41,16 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     # scan request resolver and by GET /api/manifest; the ScanDialog select
     # writes it. Unknown values resolve to "high" server-side.
     "scan.auto_select.confirm_below",
+    # PR-4a — the auto-select rule toggles, one object {"B3": bool, ...}. Read by
+    # the scan request resolver and written by the ScanDialog Rules block. A
+    # partial object is stored and resolved per id; see _WEB_SETTINGS_VALIDATORS.
+    "scan.auto_select.rules",
     # Cloud-analysis opt-in (privacy policy, 2026-11-06). Boolean, default
     # false. Setting only: NOTHING reads this flag yet — no cloud call exists.
-    # Any future cloud tier must check it and send media only when true. The
-    # allowlist does no per-key type checks (like every other key here), so a
-    # non-boolean PATCH value is stored as sent; the ScanDialog only honours a
-    # strict boolean on load and treats anything else as off.
+    # Any future cloud tier must check it and send media only when true. Only
+    # keys in _WEB_SETTINGS_VALIDATORS are type-checked; this key is stored as
+    # sent, so a non-boolean PATCH value is kept as sent. The ScanDialog only
+    # honours a strict boolean on load and treats anything else as off.
     "scan.cloud_analysis_opt_in",
     # #741 sub-item B — ActionDialog "Recent" patterns. Value is a list of
     # [field-or-null, pattern] 2-element arrays (JSON serialisation of the
@@ -61,6 +68,13 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
 _WEB_SETTINGS_DEFAULTS: dict[str, object] = {
     "scan.cloud_analysis_opt_in": False,
     "scan.auto_select.confirm_below": DEFAULT_CONFIRM_BELOW,
+    "scan.auto_select.rules": DEFAULT_RULES.to_dict(),
+}
+
+# Keys whose value is checked before anything is written. A ValueError from
+# the validator is a 422, and the whole PATCH is refused (validate-all-then-apply).
+_WEB_SETTINGS_VALIDATORS: dict[str, Callable[[object], None]] = {
+    "scan.auto_select.rules": validate_rule_toggles,
 }
 
 
@@ -123,6 +137,17 @@ def patch_settings(body: SettingsUpdate) -> dict:
                 status_code=400,
                 detail=f"settings key not writable: {key!r}",
             )
+    for key, value in body.updates.items():
+        validator = _WEB_SETTINGS_VALIDATORS.get(key)
+        if validator is None:
+            continue
+        try:
+            validator(value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid value for {key}: {exc}",
+            ) from exc
     settings = load_settings()
     try:
         for key, value in body.updates.items():

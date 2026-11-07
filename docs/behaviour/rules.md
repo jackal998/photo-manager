@@ -147,9 +147,51 @@ code decides it, and which test or scenario pins it.
 
 ### R-SCAN-5 — Aggressive auto-select never marks a row below the confirm threshold for delete
 
-- **Rule:** The aggressive auto-select delete set excludes every row below the confirm threshold, so a REVIEW near-duplicate (same pHash, pixels differ) is never deleted as a copy at `high`. At `medium` the set is the #517 set unchanged.
+- **Rule:** The aggressive auto-select delete set excludes every row below the confirm threshold, so a REVIEW near-duplicate (same pHash, pixels differ) is never deleted as a copy at `high`. At `medium` with the people-and-pets rule off, the set is the #517 set unchanged; with it on (`R-SCAN-7`), only EXACT rows are eligible.
 - **Owning code:** `core/services/auto_select.py::non_keepers_for_aggressive_delete`
 - **Pins:** `tests/test_auto_select.py::TestConfidenceThreshold::test_review_high_not_delete_eligible_when_threshold_high`, `tests/test_auto_select.py::TestConfidenceThreshold::test_review_high_delete_eligible_when_threshold_medium`, `qa/web/scenarios/s80_needs_your_look.py`
+- **Status:** pinned
+
+### R-SCAN-6 — With the exact-copies rule off, aggressive auto-select marks no EXACT row for delete
+
+- **Rule:** The exact-copies rule (B3, default on) covers byte copies and pixel-identical format duplicates. Off leaves them undecided; the keeper stamp is unchanged.
+- **Owning code:** `core/services/auto_select.py::non_keepers_for_aggressive_delete`, `core/services/auto_select_rules.py::RuleToggles`
+- **Pins:** `tests/test_auto_select.py::TestRuleToggles::test_b3_off_spares_exact_rows`, `tests/test_scan_runner.py::TestAutoSelectPipeline::test_rules_b3_off_writes_no_delete_for_byte_copies`, `qa/web/scenarios/s81_rule_toggles.py`
+- **Status:** pinned
+
+### R-SCAN-7 — With the people-and-pets rule on, aggressive auto-select marks only EXACT rows for delete, at either threshold
+
+- **Rule:** Default on. A rule can veto a delete the threshold admits; it never admits a row below the threshold.
+- **Owning code:** `core/services/auto_select.py::non_keepers_for_aggressive_delete`
+- **Pins:** `tests/test_auto_select.py::TestRuleToggles::test_b8_on_excludes_review_at_medium`, `tests/test_auto_select.py::TestRuleToggles::test_b8_on_changes_nothing_at_high`, `qa/web/scenarios/s81_rule_toggles.py`
+- **Status:** pinned
+
+### R-SCAN-8 — With the RAW + JPEG rule on, the best non-RAW row of a RAW-kept group is never marked for delete
+
+- **Rule:** Default on. The rule protects the row that would have been keeper among the non-RAW members of a group whose keeper is a RAW. Off drops that protection, so a displaced lossy row can become delete-eligible.
+- **Owning code:** `core/services/auto_select.py::_raw_displaced_keepers`
+- **Pins:** `tests/test_auto_select.py::TestRuleToggles::test_b4_off_drops_raw_displaced_protection`, `tests/test_auto_select.py::TestNonKeepersForAggressiveDelete::test_raw_keeper_does_not_demote_the_best_lossy_copy`
+- **Status:** pinned
+
+### R-SCAN-9 — With the burst rule off, a same-moment burst keeps its classifier verdicts; groups are unchanged
+
+- **Rule:** Default on, which stacks same-moment bursts. Off leaves burst frames with their classifier verdicts and leaves the group ids unchanged. Takes effect at the next scan.
+- **Owning code:** `scanner/dedup.py::classify`
+- **Pins:** `tests/test_dedup_rule_toggles.py::TestBurstRule::test_burst_off_keeps_classifier_verdicts`, `tests/test_dedup_rule_toggles.py::TestBurstRule::test_burst_off_leaves_group_ids_unchanged`
+- **Status:** pinned
+
+### R-SCAN-10 — With the screenshot rule off, a match between two PNGs is not capped at low confidence; a shot-time disagreement still is
+
+- **Rule:** With the screenshot rule (B7, default on in v1) turned off, a match between two PNGs is judged like a photo. Shot-time disagreement still caps the match at low confidence. With the rule on, a pair of PNGs is capped at low too. Takes effect at the next scan.
+- **Owning code:** `scanner/dedup.py::_demotion_note`
+- **Pins:** `tests/test_dedup_rule_toggles.py::TestScreenshotRule::test_screenshot_demotion_off_near_dup_png_is_high`, `tests/test_dedup_rule_toggles.py::TestScreenshotRule::test_shot_time_demotion_survives_screenshot_off`
+- **Status:** pinned
+
+### R-SCAN-11 — A stored rule value resolves per rule to its default when unreadable; the API refuses unknown ids and non-boolean values with 422
+
+- **Rule:** `scan.auto_select.rules` resolves per rule id: an unreadable or non-boolean value takes that rule's default, and unknown ids are ignored. The settings PATCH and the scan POST refuse unknown ids and non-boolean values with 422, and nothing is written.
+- **Owning code:** `core/services/auto_select_rules.py::resolve_rule_toggles`, `app/web/routes/settings.py::patch_settings`, `app/web/models.py::WebScanRequest`
+- **Pins:** `tests/test_auto_select_rules.py::test_resolve_ignores_unknown_and_non_bool`, `tests/test_web_settings_routes.py::TestPatchSettings::test_auto_select_rules_patch_rejects_junk_and_writes_nothing`, `tests/test_web_scan_routes.py::TestRuleTogglesResolution::test_unknown_rule_id_is_422`
 - **Status:** pinned
 
 ## SORT

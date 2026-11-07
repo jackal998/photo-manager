@@ -16,5 +16,6 @@ Keys the web settings route allowlists for both `GET /api/settings` and `PATCH /
 | `sources.output` |
 | `scan.exif_workers` |
 | `scan.auto_select.confirm_below` |
+| `scan.auto_select.rules` |
 | `scan.cloud_analysis_opt_in` |
 | `ui.action_dialog.recent_patterns` |

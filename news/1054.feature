@@ -1,0 +1,1 @@
+Make the auto-select rules named and switchable: exact copies, RAW + JPEG, burst stack, screenshot demotion and people-and-pets protect, each with our default, persisted under a Rules block in the scan dialog's Advanced settings; a rule can veto a delete but never admit one (#1054)
