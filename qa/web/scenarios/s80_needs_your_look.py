@@ -8,8 +8,10 @@ settles is the whole path: the dialog's threshold select reaches the scan, the
 stamps the backend writes, and the status-bar toggle narrows the real list.
 
 Scan (aggressive auto-select, confirm threshold "high", two sources):
-  - qa/sandbox/near-duplicates/  — REVIEW_DUPLICATE rows (pixels differ), which
-    sit at the medium level. Under "high" that group needs a look.
+  - qa/sandbox/near-duplicates/  — mostly REVIEW_DUPLICATE rows (pixels differ,
+    medium level); one re-encode may decode pixel-identical and classify EXACT.
+    Under "high" that group needs a look: no stamp, REVIEW rows untouched, an
+    EXACT row (admitted) still deleted.
   - a temp folder holding two BYTE copies of one qa/sandbox/unique JPEG — EXACT
     rows (high). That pair is admitted.
 
@@ -99,10 +101,18 @@ def _make_copy_folder(tmpdir: str) -> str:
 def _check_manifest(rows: dict[str, dict]) -> None:
     near = [rows[n] for n in _NEAR_DUP_NAMES if n in rows]
     assert len(near) == 5, f"Expected 5 near-dup rows, got {sorted(rows)}"
+    # The group holds REVIEW_DUPLICATE rows (medium), so under "high" it needs a
+    # look: no keeper is stamped and no below-threshold row is deleted. A row the
+    # classifier found pixel-identical (EXACT, high) is admitted and IS deleted
+    # even in a needs-look group — that is the design, not a leak (the CI
+    # fixture's q88 re-encode decodes to the q95 pixels, so one such row exists).
+    reviews = [r for r in near if r["action"] == "REVIEW_DUPLICATE"]
+    assert reviews, f"Expected at least one REVIEW_DUPLICATE near-dup row: {near!r}"
     for r in near:
         assert r["action"] != "KEEP", f"near-dup row stamped KEEP under 'high': {r!r}"
+    for r in reviews:
         assert r["user_decision"] != "delete", (
-            f"near-dup row marked delete under 'high' (#1047): {r!r}"
+            f"REVIEW_DUPLICATE row marked delete under 'high' (#1047): {r!r}"
         )
     copies = [rows[n] for n in _COPY_NAMES if n in rows]
     assert len(copies) == 2, f"Expected 2 copy rows, got {sorted(rows)}"
