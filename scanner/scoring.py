@@ -420,9 +420,9 @@ def compute_score(
     """Composite keep-worthiness score in ``[0.0, 1.0]``, or ``None``.
 
     Returns ``None`` when ``row`` is a Live Photo MOV/MP4 passenger
-    (its stem matches a HEIC sibling in the same group). The MOV
-    inherits its HEIC's KEEP/DELETE decision in the action layer and
-    is not a standalone ranking candidate.
+    (its stem matches a HEIC sibling in the same group). The MOV keeps
+    its own action (it is not decided by its HEIC) and is not a standalone
+    ranking candidate.
 
     Pure function: no I/O, no globals. Same (row, group_rows, weights)
     always produces the same result.

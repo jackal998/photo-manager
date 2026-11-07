@@ -10,10 +10,15 @@ Qt intent:
     unions them via union-find, even when the HEIC has no SHA/pHash match).
   - Assert user_decision is '' (undecided) for both rows pre-execute.
 
+GROUPING "9" (scanner/dedup.py ``_pair_pass``): a lone Live Photo pair has NO
+group, so the scenario adds a byte copy of IMG_0001.HEIC in a second subfolder.
+The copy makes the still a grouped member, and the MOV joins that group.
+
 Web slice:
   1. Copy IMG_0001.HEIC and IMG_0001.MOV from qa/sandbox/live-photo into
      ``<tmpdir>/s11_source/`` (so the scan does NOT target the repo fixture
-     dir directly — harness convention from s24/s13).
+     dir directly — harness convention from s24/s13). Copy IMG_0001.HEIC once
+     more into ``<tmpdir>/s11_source/dupe/``.
   2. run_scan([src_subdir]) → fresh manifest at ``<tmpdir>/s11_manifest.db``
      (db lives BESIDE the source subdir in tmpdir, same as s24).
   3. wait_manifest_loaded(page) to ensure GET /api/manifest is stable before
@@ -24,9 +29,10 @@ Web slice:
      A. IMG_0001.HEIC present among manifest basenames (#88 bug guard: HEIC).
      B. IMG_0001.MOV present among manifest basenames (#88 bug guard: MOV
         was the half silently dropped by the pre-#88 walker).
-     C. Both share the same group_number (pair edge created by
-        scanner/dedup._collect_pair_edges, unioned via union-find).
+     C. Both share the same group_number (pair edge joins the MOV to its
+        still's group, scanner/dedup._pair_pass).
      D. user_decision == '' for BOTH rows (undecided at scan time).
+     E. The byte copy in ``dupe/`` is in the same group_number as the still.
   6. finally: shutil.rmtree(tmpdir, ignore_errors=True) — Windows .db lock.
 
 Qt divergences:
@@ -72,6 +78,7 @@ _LIVE_PHOTO_DIR = _REPO / "qa" / "sandbox" / "live-photo"
 
 _HEIC_NAME = "IMG_0001.HEIC"
 _MOV_NAME = "IMG_0001.MOV"
+_DUPE_DIR = "dupe"  # second folder holding the byte copy of the still
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +117,11 @@ def run(*, base_url: str) -> None:
         os.makedirs(src_subdir, exist_ok=True)
         shutil.copy(str(_LIVE_PHOTO_DIR / _HEIC_NAME), os.path.join(src_subdir, _HEIC_NAME))
         shutil.copy(str(_LIVE_PHOTO_DIR / _MOV_NAME), os.path.join(src_subdir, _MOV_NAME))
+        # Byte copy of the still in another folder (GROUPING "9"): gives the
+        # still a group, so the pair's MOV joins it.
+        dupe_dir = os.path.join(src_subdir, _DUPE_DIR)
+        os.makedirs(dupe_dir, exist_ok=True)
+        shutil.copy(str(_LIVE_PHOTO_DIR / _HEIC_NAME), os.path.join(dupe_dir, _HEIC_NAME))
 
         with PWContext(base_url=base_url) as ctx:
             page = ctx.new_page()
@@ -135,12 +147,18 @@ def run(*, base_url: str) -> None:
 
             # Build a lookup: basename -> (group_number, user_decision)
             # so we can assert HEIC and MOV both appear and share a group.
+            # The byte copy in the dupe folder shares the still's basename, so
+            # it is kept apart and only checked by assertion E.
             found: dict[str, dict] = {}
+            dupe_group: int | None = None
             for group in manifest.get("groups", []):
                 group_number = group["group_number"]
                 for item in group.get("items", []):
-                    basename = Path(item["file_path"]).name
-                    found[basename] = {
+                    path = Path(item["file_path"])
+                    if path.parent.name == _DUPE_DIR:
+                        dupe_group = group_number
+                        continue
+                    found[path.name] = {
                         "group_number": group_number,
                         "user_decision": item["user_decision"],
                     }
@@ -183,6 +201,16 @@ def run(*, base_url: str) -> None:
             assert mov_decision == "", (
                 f"IMG_0001.MOV has unexpected user_decision={mov_decision!r} "
                 f"immediately after scan (expected '' = undecided)."
+            )
+
+            # ── Assertion E: the byte copy is in the still's group ───────────
+            assert dupe_group is not None, (
+                f"the byte copy {_DUPE_DIR}/{_HEIC_NAME} is missing from the "
+                f"manifest groups (GROUPING 9: a byte copy is a grouped member)."
+            )
+            assert dupe_group == heic_group, (
+                f"byte copy group_number={dupe_group!r} != still group_number="
+                f"{heic_group!r}; a byte copy must share the still's group."
             )
 
     finally:

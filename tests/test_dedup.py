@@ -359,12 +359,14 @@ class TestLivePhotoPair:
         assert mov_gid is not None
         assert heic_gid == mov_gid
 
-    def test_unique_pair_forms_group(self):
-        """Headline regression for photo-manager#88 — a Live Photo pair
-        where NEITHER side is a duplicate of anything else still forms a
-        group of two. Pre-#88 both rows would end up with group_id=None
-        and the manifest loader's ``len(db_rows) < 2`` filter would drop
-        both, surfacing as ``total_rows=0`` in the tree.
+    def test_unique_pair_forms_no_group(self):
+        """GROUPING "9" — a Live Photo pair where NEITHER side is a duplicate
+        of anything else forms NO group: both rows keep group_id None and stay
+        undecided. This deliberately reverses #88's headline test. #88 was about
+        the MOV being DROPPED by the walker, which still does not happen: the
+        MOV is still hashed and stored, it just has no group while nothing is
+        duplicated. A lone pair is not shown and auto-select never locks its
+        still as KEEP. See test_dedup_live_pair.py.
         """
         heic_path = Path("/iphone/IMG_unique.HEIC")
         mov_path = Path("/iphone/IMG_unique.MOV")
@@ -376,20 +378,13 @@ class TestLivePhotoPair:
                   pair_partner=heic_path)
         rows = _rows(classify([heic, mov]))
 
-        # Both rows survive into manifest
+        # Both rows are still stored (the MOV is not dropped)
         assert len(rows) == 2
         # Both classified as '' undecided (unique, exif_date present; #433)
         assert rows[heic_path.as_posix()].action == ""
         assert rows[mov_path.as_posix()].action == ""
-        # Both share the same group_id thanks to the pair edge
-        heic_gid = rows[heic_path.as_posix()].group_id
-        mov_gid = rows[mov_path.as_posix()].group_id
-        assert heic_gid is not None, (
-            "unique pair must receive a group_id — without one, the "
-            "manifest loader filters both rows as singletons (#88)"
-        )
-        assert mov_gid is not None
-        assert heic_gid == mov_gid
+        assert rows[heic_path.as_posix()].group_id is None
+        assert rows[mov_path.as_posix()].group_id is None
 
     def test_pair_with_separate_sha_groups_unions_correctly(self):
         """The asymmetric case the in-place-mutation approach would have
@@ -457,11 +452,17 @@ class TestLivePhotoPair:
                   source_label="iphone", file_type="mp4", exif_date=_dt(),
                   pair_cluster=tuple(p for p in cluster if p != mp4_path))
 
-        rows = _rows(classify([heic, mov, mp4]))
-        gids = {rows[p.as_posix()].group_id for p in cluster}
+        # GROUPING "9": a lone Live triple has no group. A byte copy of the
+        # still gives the cluster a grouped member, so it must attach whole.
+        copy_path = Path("/copy/IMG_4278.HEIC")
+        copy = _hr(str(copy_path), sha256="h1", source_label="iphone",
+                   file_type="heic", exif_date=_dt())
+
+        rows = _rows(classify([heic, mov, mp4, copy]))
+        gids = {rows[p.as_posix()].group_id for p in (*cluster, copy_path)}
         assert None not in gids, "every cluster member must have a group_id"
         assert len(gids) == 1, (
-            f"all three same-exact-stem files must share one group_id; got {gids}"
+            f"all same-exact-stem files must share one group_id; got {gids}"
         )
 
     def test_pair_actions_independent_when_heic_is_dup(self):
@@ -538,16 +539,20 @@ class TestSameStemCaptureGate:
         assert ga is not None and ga == gb
 
     def test_live_photo_pair_preserved_when_video_has_no_phash(self):
-        """A Live Photo HEIC+MOV must stay grouped: the MOV has no pHash, so
-        the gate has no disconfirming evidence and keeps the edge (no
-        regression to the #88 pair invariant)."""
+        """A Live Photo HEIC+MOV whose still is grouped (a byte copy in another
+        folder) must stay grouped with its MOV. The MOV has no pHash, so the
+        gate has no disconfirming evidence and keeps the pair edge (no
+        regression to the #88 pair invariant). GROUPING "9": a lone pair has no
+        group, so the byte copy is what makes the group legitimate."""
         heic = _hr("/cam/IMG_1.heic", sha256="hh", phash="f0f0f0f0f0f0f0f0",
                    source_label="src", file_type="heic", exif_date=_dt(),
                    pair_cluster=(Path("/cam/IMG_1.mov"),))
         mov = _hr("/cam/IMG_1.mov", sha256="mm", phash=None,
                   source_label="src", file_type="mov", exif_date=_dt(),
                   pair_cluster=(Path("/cam/IMG_1.heic"),))
-        rows = _rows(classify([heic, mov]))
+        copy = _hr("/copy/IMG_1.heic", sha256="hh", phash="f0f0f0f0f0f0f0f0",
+                   source_label="src", file_type="heic", exif_date=_dt())
+        rows = _rows(classify([heic, mov, copy]))
         gh = rows["/cam/IMG_1.heic"].group_id
         gm = rows["/cam/IMG_1.mov"].group_id
         assert gh is not None and gh == gm
