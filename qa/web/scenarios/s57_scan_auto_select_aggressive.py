@@ -58,6 +58,7 @@ from qa.web.testid_constants import (
     SCAN_ADVANCED,
     SCAN_AGGRESSIVE_DELETE,
     SCAN_AUTO_SELECT,
+    SCAN_CONFIRM_BELOW,
 )
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -121,6 +122,10 @@ def run(*, base_url: str) -> None:
             assert aggressive.is_checked(), (
                 "Aggressive sub-checkbox did not turn ON after the parent enabled it."
             )
+            # PR-3 — the near-dup fixture is REVIEW_DUPLICATE (medium) rows, so
+            # the delete leg needs the medium threshold (#517 parity). At "high"
+            # nothing here is delete-eligible; s80 covers the high path.
+            page.get_by_test_id(SCAN_CONFIRM_BELOW).select_option("medium")
 
             add_scan_source(page, _NEAR_DUPS_DIR, idx=0)
             set_output_path(page, db_path)
@@ -132,7 +137,7 @@ def run(*, base_url: str) -> None:
 
             assert len(state) == 5, f"Expected 5 near-dup rows, got {sorted(state)}"
 
-            # Keeper: locked, canonical-empty keep decision.
+            # Keeper: stamped KEEP, canonical-empty decision, NOT locked (PR-3).
             assert _EXPECTED_KEEPER in state, (
                 f"Expected keeper {_EXPECTED_KEEPER!r} missing from the manifest."
             )
@@ -141,9 +146,9 @@ def run(*, base_url: str) -> None:
                 f"{_EXPECTED_KEEPER}.user_decision={keeper['user_decision']!r}, "
                 f"expected '' (canonical keep — #425)."
             )
-            assert keeper["is_locked"] is True, (
-                f"{_EXPECTED_KEEPER}.is_locked={keeper['is_locked']!r}, expected True "
-                f"(#393 keep+lock write missing)."
+            assert keeper["is_locked"] is False, (
+                f"{_EXPECTED_KEEPER}.is_locked={keeper['is_locked']!r}, expected False "
+                f"(PR-3: auto-select stamps without a lock)."
             )
 
             # Every non-keeper DUPLICATE gets user_decision='delete'; the
