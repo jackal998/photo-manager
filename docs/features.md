@@ -83,6 +83,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Scan dialog — hash workers (NAS-aware auto, no UI control)](features/scan.md#scan-dialog--hash-workers-nas-aware-auto-no-ui-control) | Scan |
 | [Scan dialog — multi-source scan](features/scan.md#scan-dialog--multi-source-scan) | Scan |
 | [Scan dialog — read-knee autotune opt-out](features/scan.md#scan-dialog--read-knee-autotune-opt-out) | Scan |
+| [Scan dialog — rules (setting)](features/scan.md#scan-dialog--rules-setting) | Scan |
 | [Scan dialog — stage / throughput / ETA progress (#424)](features/scan.md#scan-dialog--stage--throughput--eta-progress-424) | Scan |
 | [Scan flow — manifest summary in progress log](features/scan.md#scan-flow--manifest-summary-in-progress-log) | Scan |
 | [Scan flow — rescan confirm](features/scan.md#scan-flow--rescan-confirm) | Scan |

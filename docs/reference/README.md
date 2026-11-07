@@ -10,9 +10,9 @@ Each table is regenerated from the code by `python scripts/gen_reference.py`. CI
 |---|---|---|
 | [Result columns](columns.md) | `frontend/src/lib/resultColumns.ts` (`COLUMNS`) | 7 |
 | [Toolbar shed widths](toolbar-shed.md) | `frontend/src/lib/toolbarShed.ts` | 2 |
-| [Web settings keys](settings-keys.md) | `app/web/routes/settings.py` (`_WEB_SETTINGS_KEYS`) | 10 |
+| [Web settings keys](settings-keys.md) | `app/web/routes/settings.py` (`_WEB_SETTINGS_KEYS`) | 11 |
 | [HTTP routes](http-routes.md) | `create_app().openapi()` (`app/web/main.py`) | 22 |
 | [Scan SSE events](sse-events.md) | `app/web/routes/scan.py` (literal event names) | 8 |
 | [Review decision values](review-decisions.md) | `core/app_service/review_service.py` (`VALID_DECISIONS`) | 3 |
 | [i18n catalogue key counts](i18n-keys.md) | `translations/*.yml` | 2 |
-| [QA web scenarios](qa-scenarios.md) | `qa/web/scenario_map.yml` | 79 |
+| [QA web scenarios](qa-scenarios.md) | `qa/web/scenario_map.yml` | 80 |

@@ -59,6 +59,7 @@ from qa.web.testid_constants import (
     SCAN_AGGRESSIVE_DELETE,
     SCAN_AUTO_SELECT,
     SCAN_CONFIRM_BELOW,
+    SCAN_RULE_B8,
 )
 
 _REPO = Path(__file__).resolve().parents[3]
@@ -126,6 +127,10 @@ def run(*, base_url: str) -> None:
             # the delete leg needs the medium threshold (#517 parity). At "high"
             # nothing here is delete-eligible; s80 covers the high path.
             page.get_by_test_id(SCAN_CONFIRM_BELOW).select_option("medium")
+            # PR-4a — B8 (people and pets, on by default) would spare the REVIEW
+            # rows at medium that this scenario expects deleted. Untick it so the
+            # run keeps the #517 set; s81 covers the B8 toggle itself.
+            page.get_by_test_id(SCAN_RULE_B8).click()
 
             add_scan_source(page, _NEAR_DUPS_DIR, idx=0)
             set_output_path(page, db_path)
