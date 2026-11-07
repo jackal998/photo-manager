@@ -33,7 +33,8 @@ Web slice:
         still's group, scanner/dedup._pair_pass).
      D. user_decision == '' for the root HEIC and the MOV (undecided at scan
         time). The root HEIC now has an EXACT twin, but the scan sets its
-        action, never its user_decision, so D still holds for it.
+        action, not its user_decision (post-scan auto-select is off by default
+        and s11 never enables it), so D still holds for it.
      E. The byte copy in ``dupe/`` is in the same group_number as the still.
   6. finally: shutil.rmtree(tmpdir, ignore_errors=True) — Windows .db lock.
 
