@@ -27,8 +27,9 @@ Grouping runs in `scanner/dedup.py::classify` as the last pass,
   dimension ([#523](https://github.com/jackal998/photo-manager/issues/523)).
 - **pair edges** (`_collect_pair_edges`) for a Live Photo still and its video.
   GROUPING "10": a filename never creates an edge. An edge exists only when a
-  video and a still share the same Apple ContentIdentifier. Still<->still pairs
-  get no edge and group through the pHash tiers. `_pair_pass` joins a pair
+  video and another file of the same capture carry the same Apple
+  ContentIdentifier, so a video links to its still and to its sibling videos.
+  Still<->still pairs get no edge and group through the pHash tiers. `_pair_pass` joins a pair
   cluster to the one group it touches, and refuses to join two components that
   each hold a still.
 
