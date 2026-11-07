@@ -282,7 +282,8 @@ describe("FileRow Action column = the decision (Q1)", () => {
 });
 
 describe("FileRow why and how sure (#1047)", () => {
-  it("review row at hamming 0 reads 100% in the blue near pill, not the exact one", () => {
+  it("review row at hamming 0", () => {
+    // The blue near pill, not the purple exact one (#1047).
     // The flipped case: the default action is REVIEW_DUPLICATE, and a row at
     // distance 0 is 100% without being byte-identical.
     const rowEl = renderRow(
@@ -328,7 +329,7 @@ describe("FileRow why and how sure (#1047)", () => {
     expect(rowEl.querySelector("[data-verdict-chip]")).toBeNull();
   });
 
-  it("badge title carries the classification, the reason and the confidence", () => {
+  it("badge title carries the reason and confidence", () => {
     const rowEl = renderRow(
       makeRow({
         action: "REVIEW_DUPLICATE",
