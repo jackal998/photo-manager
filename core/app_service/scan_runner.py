@@ -48,6 +48,21 @@ _GROUP_FLOOR_MAX = 256
 _RATE_KEYS = ("thread_per_file", "process_per_file", "spawn")
 
 
+def _inmemory_extract_ok(record, outcome) -> bool:
+    """True when a hash outcome's in-memory extract may skip exiftool.
+
+    GROUPING 10 (G2): PIL does not parse Apple MakerNotes, so a JPEG Live
+    still never yields a ContentIdentifier in memory. A still with a video
+    in its same-stem cluster therefore takes the exiftool queue, where the
+    identity is read. Every other in-memory format keeps the free route.
+    """
+    from scanner.media import is_video  # local import — keeps module load light
+
+    if getattr(outcome, "inmemory_signals", None) is None:
+        return False
+    return not any(is_video(str(peer)) for peer in record.pair_cluster)
+
+
 # ---------------------------------------------------------------------------
 # Hash-pool calibration helpers — single source of truth (scan_worker.py
 # re-exports these for backward-compat with scan_dialog and test imports).
@@ -712,7 +727,9 @@ def run_pipeline(
         #786 — formats with in-memory scoring signals (``HashResult.
         inmemory_signals`` set, currently JPEG only) skip the exiftool
         queue entirely: their MediaExtract is written straight into
-        ``extracts`` here instead. This runs in the single thread that
+        ``extracts`` here instead, except a still with a video in its
+        same-stem cluster (GROUPING 10 G2, ``_inmemory_extract_ok``), which
+        goes to exiftool to read its ContentIdentifier. This runs in the single thread that
         drains ``out_q`` (same as the ``skipped.append`` above), so the
         plain dict write needs no lock — mirrors ``_flush_exif_batch``'s
         writes to the same dict from the exif consumer thread(s); the two
@@ -724,7 +741,7 @@ def run_pipeline(
         if outcome is None:
             return None
         if record.file_type != "skip":
-            if getattr(outcome, "inmemory_signals", None) is not None:
+            if _inmemory_extract_ok(record, outcome):
                 extracts[record.path] = outcome.to_media_extract()
                 return outcome
             # #564 — cooperative bounded put.
@@ -1324,11 +1341,16 @@ def run_pipeline(
     # mode while apply_scoring_to_rows scores it WITH that date — an internally
     # inconsistent row (#793). For formats that DO need exiftool (HEIC/RAW/video)
     # there is no extract in exiftool-missing mode, so those are untouched.
+    # GROUPING 10 (G3): the same loop carries the Apple ContentIdentifier,
+    # which pairs a Live still with its video in the grouping stage.
     for r in et_records:
+        extract = extracts.get(r.record.path)
+        if extract is None:
+            continue
         if r.exif_date is None:
-            extract = extracts.get(r.record.path)
-            if extract is not None:
-                r.exif_date = extract.exif_date
+            r.exif_date = extract.exif_date
+        if r.content_identifier is None:
+            r.content_identifier = extract.content_identifier
 
     # --- 4. Classify ---
     if cancel_token():

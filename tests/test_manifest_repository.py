@@ -1772,6 +1772,93 @@ class TestPhashQualityMigration:
         assert row[0] == pytest.approx(16.4)
 
 
+class TestContentIdentifierMigration:
+    """GROUPING 10 (G3) — ``content_identifier TEXT`` lands on a manifest that
+    predates it. Pre-G10 rows read NULL (no identity recorded), and the value
+    must survive the #433 copy-table rebuild (see _POST_DROP_COLUMNS).
+    """
+
+    def _pre_g10_db(self, tmp_path: Path, ddl: str = _DDL_PRE_820) -> Path:
+        return _make_manifest(
+            tmp_path,
+            [
+                {
+                    "source_path": "/legacy/live.heic",
+                    "source_label": "jdrive",
+                    "action": "",
+                    "group_id": None,
+                    "reason": "",
+                    "executed": 0,
+                    "user_decision": "",
+                    "score": 0.5,
+                }
+            ],
+            ddl=ddl,
+        )
+
+    def test_content_identifier_column_added_to_old_manifest(self, tmp_path):
+        db = self._pre_g10_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+            row = conn.execute(
+                "SELECT content_identifier, score FROM migration_manifest "
+                "WHERE source_path = '/legacy/live.heic'"
+            ).fetchone()
+        assert "content_identifier" in cols
+        assert row[0] is None  # no DEFAULT: legacy rows say "no identity recorded"
+        assert row[1] == pytest.approx(0.5)
+
+    def test_content_identifier_value_round_trips_after_migration(self, tmp_path):
+        db = self._pre_g10_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                "INSERT INTO migration_manifest "
+                "(source_path, source_label, action, content_identifier) "
+                "VALUES (?, ?, ?, ?)",
+                ("/new/live.mov", "jdrive", "", "A1B2C3D4-0000-4000-8000-000000000001"),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT content_identifier FROM migration_manifest "
+                "WHERE source_path = '/new/live.mov'"
+            ).fetchone()
+        assert row[0] == "A1B2C3D4-0000-4000-8000-000000000001"
+
+    def test_content_identifier_survives_the_drop_move_rebuild(self, tmp_path):
+        """Same trap as phash_quality: a name missing from _POST_DROP_COLUMNS
+        keeps the column but silently empties every value. The fixture carries
+        a REAL value, not NULL, so an emptied value would fail the assert."""
+        ddl_with_dest_path = _DDL_PRE_820.replace(
+            "outcome          TEXT    NOT NULL DEFAULT ''",
+            "outcome          TEXT    NOT NULL DEFAULT '',\n    dest_path        TEXT",
+        )
+        db = self._pre_g10_db(tmp_path, ddl=ddl_with_dest_path)
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute("ALTER TABLE migration_manifest ADD COLUMN content_identifier TEXT")
+            conn.execute(
+                "UPDATE migration_manifest SET content_identifier = ? WHERE source_path = ?",
+                ("A1B2C3D4-0000-4000-8000-000000000001", "/legacy/live.heic"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        ManifestRepository().ensure_schema(str(db))
+
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+            row = conn.execute(
+                "SELECT content_identifier FROM migration_manifest "
+                "WHERE source_path = '/legacy/live.heic'"
+            ).fetchone()
+        assert "dest_path" not in cols  # the dance really ran
+        assert "content_identifier" in cols
+        assert row[0] == "A1B2C3D4-0000-4000-8000-000000000001"
+
+
 _DDL_WITH_OUTCOME = """
 CREATE TABLE migration_manifest (
     id               INTEGER PRIMARY KEY,

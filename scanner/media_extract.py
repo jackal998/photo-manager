@@ -78,6 +78,9 @@ class MediaExtract:
     # Stored as TEXT verbatim; leading zeros are significant ("05" = 50 ms).
     subsec_time_original: Optional[str] = None   # EXIF:SubSecTimeOriginal / 0x9291
     offset_time_original: Optional[str] = None   # EXIF:OffsetTimeOriginal / 0x9011
+    # GROUPING 10 (G1) — Apple ContentIdentifier, upper-cased. Equal on a Live
+    # Photo still and its video; None when absent or stripped.
+    content_identifier: Optional[str] = None
     mtime: Optional[datetime] = None
     ctime: Optional[datetime] = None
 

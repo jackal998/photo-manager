@@ -108,6 +108,10 @@ class HashResult:
     # (``_pixels_identical``). None for video, hash failure, and any
     # HashResult rebuilt without it; a None on either side demotes EXACT.
     rgb32: Optional[bytes] = None
+    # GROUPING 10 (G3): Apple ContentIdentifier, upper-cased, backfilled from
+    # the exiftool extract in scan_runner. Persisted (``content_identifier``
+    # column). None for stills without an Apple MakerNote and for non-Apple files.
+    content_identifier: Optional[str] = None
 
     def to_media_extract(self) -> "MediaExtract":  # noqa: F821 — runtime import
         """Convert this HashResult into a MediaExtract (#187 — PR 2).
@@ -225,6 +229,9 @@ class ManifestRow:
     # the #517 gate: low-confidence rows are never auto-marked for deletion.
     # A UI badge is still a tracked follow-up (not exposed on the web API).
     match_confidence: Optional[str] = None
+    # GROUPING 10 (G3): Apple ContentIdentifier (upper-cased), persisted so the
+    # pairing evidence survives a rescan-free review. Nothing reads it at load.
+    content_identifier: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1552,4 +1559,5 @@ def _make_row(
         pixel_height=hr.pixel_height,
         phash_quality=hr.phash_quality,
         match_confidence=match_confidence,
+        content_identifier=hr.content_identifier,
     )
