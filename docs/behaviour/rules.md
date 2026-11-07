@@ -138,6 +138,20 @@ code decides it, and which test or scenario pins it.
 - **Pins:** `qa/web/scenarios/s23b_verify_settings.py`
 - **Status:** pinned
 
+### R-SCAN-4 — Auto-select stamps a keeper only in a group at or above the confirm threshold and never locks it
+
+- **Rule:** Auto-select stamps the top-scored row of a duplicate group as KEEP only when every row of that group is at or above the confirm threshold (`high` by default). A group with a row below the threshold gets no stamp and is shown under the Needs your look filter. The stamp never sets a lock.
+- **Owning code:** `core/services/auto_select.py::plan_auto_select`, `scanner/manifest.py::write_manifest`
+- **Pins:** `tests/test_auto_select.py::TestConfidenceThreshold::test_plan_auto_select_auto_stamps_no_keeper_in_a_below_threshold_group`, `tests/test_scan_runner.py::TestAutoSelectPipeline::test_auto_select_enabled_stamps_keeper_without_lock`, `qa/web/scenarios/s80_needs_your_look.py`
+- **Status:** pinned
+
+### R-SCAN-5 — Aggressive auto-select never marks a row below the confirm threshold for delete
+
+- **Rule:** The aggressive auto-select delete set excludes every row below the confirm threshold, so a REVIEW near-duplicate (same pHash, pixels differ) is never deleted as a copy at `high`. At `medium` the set is the #517 set unchanged.
+- **Owning code:** `core/services/auto_select.py::non_keepers_for_aggressive_delete`
+- **Pins:** `tests/test_auto_select.py::TestConfidenceThreshold::test_review_high_not_delete_eligible_when_threshold_high`, `tests/test_auto_select.py::TestConfidenceThreshold::test_review_high_delete_eligible_when_threshold_medium`, `qa/web/scenarios/s80_needs_your_look.py`
+- **Status:** pinned
+
 ## SORT
 
 ### R-SORT-1 — Header clicks sort the result tree by File Name, Size and Action
