@@ -58,9 +58,11 @@ Qt divergences:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import urllib.parse
 import urllib.request
@@ -147,6 +149,28 @@ def run(*, base_url: str) -> None:
 
             # ── Fetch manifest JSON via GET /api/manifest ────────────────────
             manifest = _get_manifest(base_url, db_path)
+
+            # ── Read-only SQLite check on the MOV row ────────────────────────
+            # "Ungrouped" must be told apart from "never scanned": the API lists
+            # grouped rows only, so the MOV's absence alone proves nothing. The
+            # row must exist with group_id NULL, and this fixture carries no
+            # ContentIdentifier, so content_identifier is NULL too.
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
+                mov_rows = conn.execute(
+                    "SELECT group_id, content_identifier FROM migration_manifest "
+                    "WHERE source_path LIKE ?",
+                    (f"%{_MOV_NAME}",),
+                ).fetchall()
+            assert len(mov_rows) == 1, (
+                f"expected exactly one manifest row for {_MOV_NAME}, got {mov_rows!r}"
+            )
+            mov_group_id, mov_cid = mov_rows[0]
+            assert mov_group_id is None, (
+                f"{_MOV_NAME} has group_id={mov_group_id!r}; expected NULL (ungrouped)"
+            )
+            assert mov_cid is None, (
+                f"{_MOV_NAME} has content_identifier={mov_cid!r}; the fixture carries none"
+            )
 
             # Build a lookup: basename -> (group_number, user_decision)
             # so we can assert HEIC and MOV both appear and share a group.

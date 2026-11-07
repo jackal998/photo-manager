@@ -59,6 +59,23 @@ def _backfill_content_identifier(results, extracts) -> None:
         r.content_identifier = extract.content_identifier
 
 
+def _fill_inmemory_extracts(results, extracts) -> None:
+    """Give every in-memory-signal result an extract when exiftool left none.
+
+    A JPEG with a video in its cluster is routed to exiftool (GROUPING 10 G2).
+    If exiftool is missing, or the batch failed, the routed JPEG has no extract,
+    or only a partial one whose ``extraction_errors`` says so. The in-memory
+    signals are then the only scoring evidence the file has, so they fill the
+    gap. A successful exiftool extract is kept as it is.
+    """
+    for r in results:
+        if getattr(r, "inmemory_signals", None) is None:
+            continue
+        existing = extracts.get(r.record.path)
+        if existing is None or existing.extraction_errors:
+            extracts[r.record.path] = r.to_media_extract()
+
+
 def _inmemory_extract_ok(record, outcome) -> bool:
     """True when a hash outcome's in-memory extract may skip exiftool.
 
@@ -1332,8 +1349,10 @@ def run_pipeline(
             "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video"
             " and scoring signals (GPS, EXIF census, XMP provenance) and Live Photo"
             " pairing (ContentIdentifier) unavailable"
-            " for those formats. (JPEG scoring signals are extracted in-memory"
-            " and are unaffected — #786.)\n"
+            " for those formats. JPEG scoring signals read in memory are kept"
+            " (#786), including for a JPEG with a video in its pair cluster;"
+            " only the exiftool-only tags and the ContentIdentifier are missing"
+            " for that JPEG.\n"
             "Install from https://exiftool.org/ and add to PATH."
         )
     elif et_records:
@@ -1353,6 +1372,7 @@ def run_pipeline(
     # mode while apply_scoring_to_rows scores it WITH that date — an internally
     # inconsistent row (#793). For formats that DO need exiftool (HEIC/RAW/video)
     # there is no extract in exiftool-missing mode, so those are untouched.
+    _fill_inmemory_extracts(hash_results, extracts)
     for r in et_records:
         extract = extracts.get(r.record.path)
         if extract is not None and r.exif_date is None:

@@ -1400,7 +1400,11 @@ def _pair_pass(
       are returned for the caller's reason text.
 
     After a union the merged component's ``has_still`` is updated, so later
-    clusters see the same facts whatever the order. Clusters are disjoint.
+    clusters read current facts. Clusters run in sorted root order, so the
+    result is deterministic for a given set of records. Two clusters can share
+    one video-only component (byte-identical videos under stills in different
+    groups). The first cluster in sorted order takes it, and the second is
+    refused with the skip text. No unrelated file ever joins a group.
     """
     parent: dict[str, str] = {}
 
