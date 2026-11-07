@@ -78,7 +78,7 @@ class TestTorii:
         rows = _rows(classify(self._records(), source_priority=PRIORITY))
         assert _group_sizes(rows) == [2, 2, 2]
 
-    def test_cross_moment_rows_are_low_review_and_name_their_partner(self):
+    def test_cross_moment_matches_are_hints_that_name_their_partner(self):
         """GROUPING "10": cross-moment matches are hints. No REVIEW row is
         written, and each grouped moment row names its other moment as text."""
         rows = _rows(classify(self._records(), source_priority=PRIORITY))
@@ -254,13 +254,13 @@ class TestIsolatedHintIsUndecided:
         assert HINT_ONLY_PREFIX in x.reason, x.reason
 
 
-class TestHintWithAnotherEdgeKeepsAction:
-    """(i) GROUPING 6: a row with one skipped hint edge that is still grouped
-    through another edge keeps its REVIEW action."""
+class TestUngroupedRowWithOnlyHintsIsUndecided:
+    """(i) GROUPING 10: a file whose only links are low-confidence hints is
+    ungrouped and carries no dedup action, even beside a grouped pair."""
 
-    def test_row_grouped_via_one_edge_keeps_review_action(self):
-        """GROUPING 10: x's only links are hints (shot time disagrees with both
-        moments), so it is ungrouped with an undecided action."""
+    def test_ungrouped_row_with_only_hints_stays_undecided(self):
+        """x's only links are hints (shot time disagrees with both moments), so
+        it is ungrouped with an undecided action."""
         records = [
             _hr("/a/a1.jpg", "ga", A, T1, "src_a"),
             _hr("/a/a2.jpg", "ga", A, T1, "src_a"),

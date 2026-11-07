@@ -81,7 +81,7 @@ def test_mov_joins_group_when_still_is_high_near_dup():
     assert _gid(rows, "/cam/IMG_3.MOV") == gid
 
 
-def test_two_lone_live_stills_with_low_hint_form_one_group_with_movs():
+def test_two_lone_live_stills_with_only_a_hint_form_no_group():
     still_a, mov_a = _pair("IMG_4359")
     still_b, mov_b = _pair("IMG_4361", phash=PHASH_NEAR)
     rows = _rows(classify([still_a, mov_a, still_b, mov_b]))
@@ -94,10 +94,10 @@ def test_two_lone_live_stills_with_low_hint_form_one_group_with_movs():
     assert gids == {None}
 
 
-def test_lone_live_still_attaches_to_high_member_with_its_mov():
-    """A lone still low-hints a high member A (group G = {A, byte copy of A}).
-    The hint is taken because A is a high member, so the still joins G with its
-    MOV. The still's own edge stays low (no dHash on either side)."""
+def test_lone_live_still_with_a_hint_to_high_member_stays_ungrouped():
+    """A lone still hints at a high member A (group G = {A, byte copy of A}).
+    A hint never attaches, so the still and its MOV stay out of G. The still's
+    own edge is low (no dHash on either side)."""
     still, mov = _pair("IMG_5", phash=PHASH_NEAR)
     a = _hr("/other/IMG_6.jpg", sha256="a6", phash=PHASH, exif_date=_dt())
     a_copy = _hr("/copy/IMG_6.jpg", sha256="a6", phash=PHASH, exif_date=_dt())

@@ -16,7 +16,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from scanner.dedup import HINT_ONLY_PREFIX, HashResult, classify
+from scanner.dedup import BURST_PREFIX, HINT_ONLY_PREFIX, HashResult, classify
 from scanner.walker import FileRecord
 
 T0 = datetime(2024, 6, 12, 20, 38, 0)
@@ -172,6 +172,16 @@ class TestInvariantsOverTheMixedFixture:
         for row in grouped:
             assert row.match_confidence != "low", row.source_path
 
+    def test_burst_frames_form_one_stack_of_five(self):
+        """The mixed fixture really contains a burst: five pHash-identical frames
+        two seconds apart are one moment, one group, and one keep-all stack."""
+        rows = _rows(classify(_mixed(), source_priority=PRIORITY))
+        frames = [rows[f"/bu/f{k}.jpg"] for k in range(5)]
+        assert frames[0].group_id is not None
+        assert len({f.group_id for f in frames}) == 1
+        for frame in frames:
+            assert frame.reason.startswith(BURST_PREFIX), frame.reason
+
     def test_twenty_shuffles_give_identical_rows(self):
         def snapshot(rows: list) -> dict:
             return {
@@ -236,3 +246,83 @@ class TestScreenshotRuleB7Contract:
         dup = [r for r in rows.values() if r.action == "EXACT"]
         assert len(dup) == 1
         assert dup[0].match_confidence == "high"
+
+
+class TestTwoShotMomentsInOneBucket:
+    """Review finding MEDIUM-1: an all-lossy pHash-0 bucket with two moments.
+    Each moment keeps its own pair; the old single keeper lost the second."""
+
+    T_MOMENT_B = T0 + timedelta(hours=34)
+
+    def test_each_moment_keeps_its_own_exact_pair_with_a_cross_moment_hint(self):
+        records = [
+            _hr("/m/a.heic", "ah", PA, None, T0, ftype="heic"),
+            _hr("/m/a.jpg", "aj", PA, None, T0, ftype="jpeg"),
+            _hr("/m/b.heic", "bh", PA, None, self.T_MOMENT_B, ftype="heic"),
+            _hr("/m/b.jpg", "bj", PA, None, self.T_MOMENT_B, ftype="jpeg"),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert _group_sizes(rows) == [2, 2]
+        for row in rows.values():
+            if row.group_id is not None:
+                assert row.match_confidence != "low", row.source_path
+        for group_id in {r.group_id for r in rows.values()}:
+            members = [r for r in rows.values() if r.group_id == group_id]
+            keepers = [r for r in members if r.action != "EXACT"]
+            copies = [r for r in members if r.action == "EXACT"]
+            assert len(keepers) == 1 and len(copies) == 1, group_id
+            assert copies[0].match_confidence == "high"
+        for keeper in (r for r in rows.values() if r.action != "EXACT"):
+            assert "shot 34.0 h apart" in keeper.reason, keeper.reason
+
+
+class TestHintTextAndReclaim:
+    def test_hint_text_counts_the_partners_beyond_the_first(self):
+        """LOW-4: a lone file hinted by three partners names the first by sorted
+        path and counts the other two."""
+        lone = _hr("/x/x.jpg", "xx", PA, PA, T0)
+        # Offsets are not whole half-hours: a 12 h gap would read as a timezone
+        # shift and merge the partners into one moment.
+        partners = [
+            _hr("/p/p1.jpg", "p1", PNEAR, PA, T0 + timedelta(hours=36)),
+            _hr("/p/p2.jpg", "p2", PNEAR, PA, T0 + timedelta(hours=36, minutes=7)),
+            _hr("/p/p3.jpg", "p3", PNEAR, PA, T0 + timedelta(hours=36, minutes=13)),
+        ]
+        rows = _rows(classify([lone] + partners, source_priority=PRIORITY))
+        reason = rows["/x/x.jpg"].group_id, rows["/x/x.jpg"].reason
+        assert reason[0] is None
+        assert "low-confidence match with p1.jpg" in reason[1], reason[1]
+        assert "+2 more" in reason[1], reason[1]
+
+    def test_high_partner_still_gives_the_review_row_when_a_low_partner_sorts_first(self):
+        """LOW-4 (reclaim): L sorts before H and is a low hint to X. X still gets
+        the high REVIEW row from H, because a hint never claims a row."""
+        x = _hr("/c/x.jpg", "xx", PA, PA, T0, "src_b")
+        h = _hr("/b/h.jpg", "hh", PNEAR, PA, T0, "src_a")
+        lo = _hr("/a/l.jpg", "ll", "00000000ffff0ff0", PA,
+                 T0 + timedelta(hours=36), "src_a")
+        rows = _rows(classify([x, h, lo], source_priority=PRIORITY))
+        row_x = rows["/c/x.jpg"]
+        assert row_x.action == "REVIEW_DUPLICATE", row_x.reason
+        assert row_x.match_confidence == "high"
+        assert row_x.duplicate_of.endswith("h.jpg")
+        assert row_x.group_id is not None
+        assert row_x.group_id == rows["/b/h.jpg"].group_id
+        assert rows["/a/l.jpg"].group_id is None
+        assert rows["/a/l.jpg"].match_confidence == "low"
+
+
+class TestShotGapText:
+    def test_a_two_minute_gap_is_named_in_minutes(self):
+        """LOW-3: a gap under an hour prints as minutes, not as "0.0 h"."""
+        records = [
+            _hr("/m/a.heic", "ah", PA, None, T0, ftype="heic"),
+            _hr("/m/a.jpg", "aj", PA, None, T0, ftype="jpeg"),
+            _hr("/m/b.heic", "bh", PA, None, T0 + timedelta(minutes=2), ftype="heic"),
+            _hr("/m/b.jpg", "bj", PA, None, T0 + timedelta(minutes=2), ftype="jpeg"),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        keepers = [r for r in rows.values() if r.action != "EXACT"]
+        assert len(keepers) == 2
+        for keeper in keepers:
+            assert "shot 2 min apart" in keeper.reason, keeper.reason

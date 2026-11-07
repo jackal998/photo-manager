@@ -300,7 +300,8 @@ class TestNearDuplicate:
         b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color=None,
                 source_label="takeout", exif_date=_dt(), dhash="0" * 16)
         rows = _rows(classify([a, b], threshold=10))
-        # No mean_color → gate not applied → flagged on pHash alone
+        # No mean_color → the mean-colour gate is skipped; the pair is flagged on
+        # pHash plus the agreeing dHash (a pHash-only match would be a hint).
         assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
 
 
@@ -1066,7 +1067,9 @@ class TestPhashEntropyGuard:
         # GROUPING 10 (deviation authorised by the lead): with dHash agreeing
         # on all three, every pair is a high edge, so the three icons form one
         # false group. The old GROUPING 6 count (two grouped plus one hint)
-        # came from dHash-missing low links, which no longer chain.
+        # came from dHash-missing low links, which no longer chain. The lead
+        # authorised this expectation change on 2026-11-08, because a pHash-only
+        # hint can no longer attach a lone file to a group.
         gids = {r.group_id for r in rows.values()}
         assert None not in gids and len(gids) == 1, {p: r.action for p, r in rows.items()}
 

@@ -302,6 +302,16 @@ def _screenshot_pair(a: HashResult, b: HashResult) -> bool:
     return a.record.file_type == "png" and b.record.file_type == "png"
 
 
+def _gap_text(seconds: float) -> str:
+    """A shot-time gap for a hint: seconds under a minute, minutes under an
+    hour, hours otherwise. A gap of seconds must not print as "0.0 h"."""
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f} min"
+    return f"{seconds / 3600:.1f} h"
+
+
 def _demotion_note(
     a: HashResult, b: HashResult, screenshot_demotion: bool = True
 ) -> Optional[str]:
@@ -313,8 +323,8 @@ def _demotion_note(
     (the PR-4a B7 rule) is on.
     """
     if _shot_time_vote(a, b) == "disagree":
-        hours = abs((a.exif_date - b.exif_date).total_seconds()) / 3600
-        return f"shot {hours:.1f} h apart"
+        gap = _gap_text(abs((a.exif_date - b.exif_date).total_seconds()))
+        return f"shot {gap} apart"
     if screenshot_demotion and _screenshot_pair(a, b):
         return "both screenshots"
     return None
@@ -691,12 +701,59 @@ def _hint(a: HashResult, b: HashResult, detail: str) -> Hint:
     return (str(a.record.path), str(b.record.path), detail)
 
 
+def _keeper_key(h: HashResult, source_priority: dict[str, int]) -> tuple:
+    """The keeper rule of an all-lossy bucket: highest format, then highest
+    source priority, then lexicographically smallest path (#792)."""
+    return (
+        FORMAT_PRIORITY.get(h.record.file_type, 99),
+        _priority(h.record.source_label, source_priority),
+        str(h.record.path),
+    )
+
+
+def _shot_moments(lossy: list[HashResult]) -> list[list[HashResult]]:
+    """GROUPING "10" — split an all-lossy pHash-0 bucket into shot moments.
+
+    Dated members link when their shot times agree (``_shot_time_vote``),
+    transitively: the same chaining the same-moment burst rule uses, so a burst
+    of frames two seconds apart is one moment. Undated members follow
+    ``_complementary_edges``: after the dated members, each joins the first
+    moment it agrees with (an unknown time agrees with anything), so an undated
+    file never links two moments.
+    """
+    moments: list[list[HashResult]] = []
+    dated = sorted(
+        (h for h in lossy if h.exif_date is not None), key=lambda h: str(h.record.path)
+    )
+    for member in dated:
+        merged = [member]
+        rest: list[list[HashResult]] = []
+        for moment in moments:
+            if any(_shot_time_vote(member, other) != "disagree" for other in moment):
+                merged.extend(moment)
+            else:
+                rest.append(moment)
+        moments = rest + [merged]
+    undated = sorted(
+        (h for h in lossy if h.exif_date is None), key=lambda h: str(h.record.path)
+    )
+    for member in undated:
+        for moment in moments:
+            if any(_shot_time_vote(member, other) != "disagree" for other in moment):
+                moment.append(member)
+                break
+        else:
+            moments.append([member])
+    return moments
+
+
 def _format_verdict(
     keeper: HashResult,
     duplicate: HashResult,
     mean_color_threshold: int,
     dhash_threshold: int,
     screenshot_demotion: bool,
+    same_moment: bool = False,
 ) -> ManifestRow | Hint | None:
     """The verdict for one lossy duplicate of a pHash-0 keeper: a row when the
     match is certain enough to group, a ``Hint`` when it is not, or ``None``
@@ -705,13 +762,21 @@ def _format_verdict(
     Two independent signals make a match ``high`` (GROUPING "10", Principle A):
     the dHash vote agrees, or the 32×32 pixel signatures are identical. A
     demotion note (shot time disagrees, or a PNG pair) and an unknown second
-    signal are hints. EXACT still means pixel-identical (GROUPING "8")."""
+    signal are hints. EXACT still means pixel-identical (GROUPING "8").
+
+    ``same_moment``: the duplicate was clustered into the keeper's shot moment
+    (``_shot_moments``), which already is the shot-time agreement, so only the
+    PNG rule can demote the pair."""
     if not _gates_pass(keeper, duplicate, mean_color_threshold, dhash_threshold):
         return None
     vote = _dhash_vote(keeper, duplicate, dhash_threshold)
     # dedup-core research 2026-11-05 class B — a pHash-0 match is not a certain
     # duplicate when the shot times disagree or both files are PNG screenshots.
-    note = _demotion_note(keeper, duplicate, screenshot_demotion)
+    if same_moment:
+        note = "both screenshots" if screenshot_demotion and _screenshot_pair(
+            keeper, duplicate) else None
+    else:
+        note = _demotion_note(keeper, duplicate, screenshot_demotion)
     if note is not None:
         return _hint(keeper, duplicate, f"same pHash, {note}")
     # EXACT means pixel-identical, not just pHash 0: pHash is greyscale, so
@@ -785,26 +850,37 @@ def _classify_format_group(
             group, mean_color_threshold, dhash_threshold, screenshot_demotion
         )
 
-    # All lossy FORMAT_DUPLICATE: keep highest-format × highest-source-priority
-    lossy.sort(key=lambda h: (
-        FORMAT_PRIORITY.get(h.record.file_type, 99),
-        _priority(h.record.source_label, source_priority),
-        str(h.record.path),  # deterministic tiebreak on same format+priority (#792)
-    ))
-    keeper = lossy[0]
+    # All lossy FORMAT_DUPLICATE. GROUPING "10": one keeper per shot moment, so
+    # a second moment's genuine pair is compared to its own keeper, not lost.
+    # Moments are ordered by their keeper, so the result is deterministic.
+    moments = sorted(
+        (sorted(m, key=lambda h: _keeper_key(h, source_priority))
+         for m in _shot_moments(lossy)),
+        key=lambda ordered: _keeper_key(ordered[0], source_priority),
+    )
     hints: list[Hint] = []
-    for duplicate in lossy[1:]:
-        key = str(duplicate.record.path)
-        if key in rows:
-            continue
-        verdict = _format_verdict(
-            keeper, duplicate, mean_color_threshold, dhash_threshold,
-            screenshot_demotion,
-        )
-        if isinstance(verdict, ManifestRow):
-            rows[key] = verdict
-        elif verdict is not None:
-            hints.append(verdict)
+    for ordered in moments:
+        keeper = ordered[0]
+        for duplicate in ordered[1:]:
+            key = str(duplicate.record.path)
+            if key in rows:
+                continue
+            verdict = _format_verdict(
+                keeper, duplicate, mean_color_threshold, dhash_threshold,
+                screenshot_demotion, same_moment=True,
+            )
+            if isinstance(verdict, ManifestRow):
+                rows[key] = verdict
+            elif verdict is not None:
+                hints.append(verdict)
+    # Cross-moment links: each later moment's keeper hints at the first keeper.
+    # Moments disagree pairwise on shot time, so the note is set; an unknown
+    # time (undated keeper) yields no note and no link.
+    first = moments[0][0]
+    for ordered in moments[1:]:
+        note = _demotion_note(first, ordered[0], screenshot_demotion)
+        if note is not None:
+            hints.append(_hint(first, ordered[0], f"same pHash, {note}"))
     # The component is already carried by the duplicate_of links written above.
     return [], hints
 
