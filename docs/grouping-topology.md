@@ -25,10 +25,12 @@ Grouping runs in `scanner/dedup.py::classify` as the last pass,
   ([#462](https://github.com/jackal998/photo-manager/issues/462)), pHash entropy
   ([#516](https://github.com/jackal998/photo-manager/issues/516)), and minimum
   dimension ([#523](https://github.com/jackal998/photo-manager/issues/523)).
-- **pair edges** (`_collect_pair_edges`) for same-stem Live-Photo / RAW+JPG sets,
-  content-gated since [#539](https://github.com/jackal998/photo-manager/issues/539).
-  An image<->video pair alone never forms a group (GROUPING "9", `_pair_pass`):
-  it joins a group only when its still is grouped for another reason.
+- **pair edges** (`_collect_pair_edges`) for a Live Photo still and its video.
+  GROUPING "10": a filename never creates an edge. An edge exists only when a
+  video and a still share the same Apple ContentIdentifier. Still<->still pairs
+  get no edge and group through the pHash tiers. `_pair_pass` joins a pair
+  cluster to the one group it touches, and refuses to join two components that
+  each hold a still.
 
 Candidate pairs come from a **BK-tree**, O(N log N), proven bit-identical to the
 brute O(N²) scan (`TestBKTreeParity`,

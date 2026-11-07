@@ -1330,7 +1330,8 @@ def run_pipeline(
     if exiftool_missing[0]:
         bus.log(
             "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video"
-            " and scoring signals (GPS, EXIF census, XMP provenance) unavailable"
+            " and scoring signals (GPS, EXIF census, XMP provenance) and Live Photo"
+            " pairing (ContentIdentifier) unavailable"
             " for those formats. (JPEG scoring signals are extracted in-memory"
             " and are unaffected — #786.)\n"
             "Install from https://exiftool.org/ and add to PATH."
