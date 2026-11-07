@@ -383,7 +383,7 @@ class TestReasonAndConfidenceSerialisation:
         assert row["keep_all"] is False
 
     def test_null_reason_serialises_empty_and_confidence_none(self):
-        row = self._row(_FakeRecord("/photos/solo.jpg", action=""))
+        row = self._row(_FakeRecord("/photos/solo.jpg", action="", reason=None, match_confidence=None))
         assert row["reason"] == ""
         assert row["match_confidence"] is None
         assert row["keep_all"] is False
