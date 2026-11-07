@@ -111,7 +111,7 @@ def _rows_by_name(manifest: dict) -> dict[str, dict]:
 def _make_copy_folder(tmpdir: str) -> str:
     """Two byte-identical copies of one unique JPEG (EXACT by pHash and bytes)."""
     folder = os.path.join(tmpdir, "copies")
-    os.makedirs(folder)
+    os.makedirs(folder, exist_ok=True)  # phase 2 rescans the same pair
     for name in _COPY_NAMES:
         shutil.copyfile(_UNIQUE_JPEG, os.path.join(folder, name))
     return folder

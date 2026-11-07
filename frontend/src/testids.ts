@@ -81,7 +81,6 @@ export const SCAN_AGGRESSIVE_DELETE = "scan-aggressive-delete";
 export const SCAN_CONFIRM_BELOW = "scan-confirm-below";
 export const SCAN_AUTOTUNE = "scan-autotune";
 export const SCAN_CLOUD_ANALYSIS_OPT_IN = "scan-cloud-analysis-opt-in";
-// PR-4a — the auto-select rule toggles (ScanRulesBlock).
 export const SCAN_RULES = "scan-rules";
 export const SCAN_RULE_B3 = "scan-rule-b3";
 export const SCAN_RULE_B4 = "scan-rule-b4";
