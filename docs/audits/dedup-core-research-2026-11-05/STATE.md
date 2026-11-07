@@ -347,3 +347,212 @@ worktree, opus reviews, owner says "yes" per merge; the owner launches the app; 
   differs when the deciding partner is outside the set). Details + method: `docs/audits/testset-2026-11/
   summary.md` §Baseline; `compare_testset.py` added (UNC-aware path mapping). From here, grouping changes
   are measured on the test set first; the full library only for a final confirmation.
+- Docs PR **#1045 MERGED 2026-11-06 as 4fc1dcc** (owner's yes; opus privacy review PUBLISH-OK, two should-fix
+  items folded in: the selector no longer overwrites the folder's `.gitignore`, summary.md dates the copy).
+  Test-set tooling and this STATE round are now on master. Next-step plan handed to the owner (A collect:
+  PRD R1/AC-6 → "per-group picture quality + human decision", PR-2 verdict table, PR-1b disclosure_version,
+  T2 UI badge via an API field; B measure on the test set: second human labelling round using the 312
+  test-set groups via decision log, Haiku judge pilot with swap check + abstain, thumbnail-size M-2;
+  C wire: R2 needs Q8, R4 = burst stack, judge behind the switch with delete-set ⊆ invariant).
+  Owner items still open: research-report docs branch 8e1ec4f (push or scrub), Q1/Q8, the 100 Mbps NIC.
+- 2026-11-06 night, owner asks: (1) a product-proxy review of the PRD direction (opus, memo →
+  `docs/audits/auto-select-prd-2026-11/direction-review.md`, then the hand-off artifact is updated) —
+  DONE (see the bullet below); (2) preview performance research → **issue #1046** filed (first view of each scanned file
+  re-reads the original from the NAS and decodes it although the hash step already decoded a draft;
+  the route's disk cache only helps repeat views; option A = persist a 512 px thumbnail at scan time under
+  the same cache key; measure first on the test set; related #887/#790/#865/#826). The owner takes #1046
+  in another session.
+- Direction review DONE 2026-11-06 night (`docs/audits/auto-select-prd-2026-11/direction-review.md`, 153 lines,
+  untracked until the next docs PR; artifact §4b updated): auto-select = one visible reasoned suggested keeper
+  per group, judged on picture quality, accepted by the owner. CUT: people/pet rule (PRD R3), AC-6, the
+  aggressive-mode change (the owner's Sept policies hold by construction — every row defaults to Keep, no
+  new delete path). DEFER: original-vs-edit rule until the owner answers. First three PRs: (1) reason +
+  match_confidence into the review payload + "keep all" badge on burst headers (reason is read from the DB
+  but never reaches PhotoRecord/UI today); (2) "Reviewed" control → append-only verdict table recording the
+  keep set incl. keep-all (the decision log cannot record keep-all); (3) "Suggested" marker = the Keep best
+  keeper with reason "best metadata (score)", aligned with the Ref label (today chosen from different row
+  sets). Judge UX: the #1043 switch IS the consent; ON → runs after each scan on uncached groups, fills the
+  same Suggested marker with a one-line reason / keep all / can't tell; OFF → metadata pick only. Measure
+  first on the test set: metadata-keeper agreement with the owner's labels, keep-all share, Ref≠keeper
+  rate, per-candidate judge precision/abstain/swap/cost; provider retention terms + egress test before any
+  backend PR. Owner questions left (one word each): edit-vs-original policy; one-off thumbnail send for the
+  judge measurement; a bulk "accept all" button once precision is met.
+- 2026-11-06 night — ALIGNMENT RESET. The owner rejected the direction review's three questions as jargon
+  ("labels", "suggestion source", an "accept all" button) and corrected three product facts: (1) no hacky
+  rules such as original-vs-edit — the engine's general gate decides and whoever it picks is the pick;
+  (2) cloud use is simply allowed once the user opted in, but WHICH model, why not local, and whether the
+  user can pick the model are open — the PRD must not hardcode a provider; (3) the flow has no new step:
+  settings → Scan → the view already shows actions (as aggressive mode does today). The owner asked for a
+  full questionnaire to capture their expectations first. Published: **Auto-select 需求問卷**
+  https://claude.ai/artifact/Xs5SMpGfoSVCURQeS3MrXQ (36 questions in 8 sections A–H; answers autosave to the
+  artifact's `db` collection `answers/<qid>` = {choices, text, updatedAt, question}; read them with the
+  ArtifactData tool, action "list", collection "answers"). The PRD §5/§9/§10 and direction-review.md are
+  PROVISIONAL until the answers are in; the next PRD revision is written FROM the answers.
+- 2026-11-06 late — QUESTIONNAIRE ANSWERED (35/36; E4 API key open). Saved verbatim:
+  `docs/audits/auto-select-prd-2026-11/requirements-answers-2026-11-06.md` (untracked until the next docs
+  PR). Product model it fixes: three scan modes (default = groups only, no actions; auto-select = most
+  actions + a list of items to confirm; aggressive = all actions); nothing happens until the user presses
+  Execute; "needs a human" = a CONFIDENCE threshold, never a ratio; the engine judges picture quality only,
+  preferences are the user's (B-section rules become plugin-like toggles in Advanced settings with our
+  defaults; never hardcoded); keep-both on quality-vs-metadata conflicts and RAW+JPEG; bursts keep all;
+  Live-Photo MOV follows its photo; screenshots like photos; people/pets deletable only when an exact dup;
+  PURE LOCAL MODE FIRST with usable quality (G1), cloud only if local cannot, user picks provider/model in
+  settings, cloud budget < $1 per full-library scan, scan time irrelevant; uncertain → REVIEW; engine runs
+  inside the scan; view shows action + one-line reason + confidence; no auto-lock; decision log required;
+  validation on all 312 test-set groups, threshold after seeing numbers, cloud thumbnails allowed during
+  validation. NEW CORE-TASK FINDING (A4): colour-graded edits are being labelled EXACT ("100% match") —
+  they must be near-duplicates, never EXACT → measure on the test set / v6 (pHash-0, different sha, colour
+  differs), then fix the format-duplicate EXACT rule. The PRD will be rewritten FROM these answers.
+- A4 PROBE DONE 2026-11-06 (`docs/audits/testset-2026-11/probe_exact_colour.py`, output gitignored): v6 has
+  11,917 EXACT rows = 9,169 byte copies + **2,748 "format duplicates"** (pHash 0, different sha; heic|heic
+  1,974, jpg|jpg 663; 266 pairs differ in dimensions; 407 pairs differ > 20 % in size). On the test set 65 of
+  85 format pairs decoded: 50 identical-ish, 6 re-encodes, **9 colour/pixel-different** — and the graded
+  examples are CONSECUTIVE shots (IMG_3788 vs IMG_3789, P1011080 vs P1011083): distinct captures labelled
+  EXACT because pHash 0 + shot times within 2 s. Today's rule: `_classify_format_group` dedup.py:597 → EXACT
+  at ~:683; gates = mean colour (#462, :707) + dHash vote (#524, :724); no pixel-identity check. Gate sweep
+  (same dims AND 32×32 RGB mean-abs-diff ≤ T): T=6 keeps 40/65 EXACT, demotes 8/9 graded + 1/6 re-encodes;
+  T=3 demotes 9/9 graded + 5/6 re-encodes. DECISION (core task, owner's A4 "EXACT must be identical"): PR
+  `fix/exact-requires-pixel-identity` — hasher stores a 32×32 RGB signature on HashResult (scan-time only,
+  no manifest column); format duplicates stay EXACT only when dims are equal AND diff ≤ 6, else
+  REVIEW_DUPLICATE/high "same pHash, pixels differ (edited/resized/other shot)"; byte copies untouched;
+  GROUPING "7" → "8"; measured on the test set after the owner's 4-minute rescan.
+- EXACT pixel gate IMPLEMENTED 2026-11-06 (717286d on `fix/exact-requires-pixel-identity`, worktree, not
+  pushed): `rgb32` on HashResult (32×32 BOX of the oriented working image, scan-time only),
+  `FORMAT_DUP_MAX_RGB_DIFF = 6.0`, `_pixels_identical`, gate last before EXACT in `_classify_format_group`,
+  GROUPING "8", 10 new dedup tests + 4 hasher tests, targeted 189 green, full suite green by log (93 %
+  coverage). Implementer caveats under review: the signature is taken from the DRAFT-decoded image while the
+  probe measured full decodes (threshold drift possible → reviewer re-measures the 65 pairs with the branch
+  code); a single-channel +10 shift (mean 3.3) still passes — a per-channel mean-shift ≤ 4 second condition
+  is being evaluated; `_classify_format_group` was already > 50 lines. PRD v2 draft exists
+  (`docs/audits/auto-select-prd-2026-11-v2.md`, 419 lines, every owner requirement cites an answer id);
+  fresh review round 1 NEEDS-FIX (B7 contradicted, C3 condition ignored, videos undesigned, two open
+  questions already answered by A1/C5/B8, branch over-claim) — fixes being applied.
+- PRD v2 ACCEPTED 2026-11-06 night (`docs/audits/auto-select-prd-2026-11-v2.md`, 417 lines, untracked until
+  the next docs PR): rewritten from the owner's answers; fresh review round 1 NEEDS-FIX (13 findings: B7
+  contradicted → screenshot demotion is a toggle default OFF; C3 gating of cloud work on local failing; G2
+  videos line; branch over-claim; B3/B8 attribution; two open questions already answered) → round 2 ACCEPT
+  + three nits applied by the lead. Only open question: E4 (API key storage). Phased plan PR-1 (reason +
+  confidence in the view) → PR-2 (EXACT pixel gate, in review) → PR-3 (three modes + threshold, no lock)
+  → PR-4 rule toggles → PR-5 traceability → M-1 owner labels 312 groups → PR-6 local veto → M-2 local models
+  → PR-7 engine picker → M-3/PR-8/PR-9 cloud only if local is not usable. Artifact §4 updated to v2.
+- EXACT gate REVIEW round 1 (2026-11-06 night): NEEDS-FIX, calibration CONFIRMED on the branch's draft decodes
+  (|draft − full| MAD ≤ 0.42; 85 pairs all decodable incl. 18 .DNG-named JPEGs; T=6 keeps 60/85, demotes 8/9
+  pixel-different; IMG_0405/0406 passes with per-channel shift 5.72). Fixes requested: F1 dimensions are read
+  before `exif_transpose` while the signature is after → accept rotation-swapped dims; F2 add max per-channel
+  mean shift ≤ 4 (`FORMAT_DUP_MAX_CHANNEL_SHIFT`) — demotes only IMG_0406 on the sample, catches the +10
+  single-channel case; F3 confidence from the dHash vote, not hardcoded high; docs → new entry `### Scan
+  grouping — EXACT requires pixel identity`. INFO for a follow-up issue: a REVIEW/high row at Hamming 0 is
+  still aggressive-delete eligible (`auto_select.py:291`) and still shows the 100 % "exact" badge
+  (`review_view.py:85`, `similarityBadge.ts:141`) — the gate relabels without protecting until PRD PR-1/PR-3.
+- **PR #1048 OPEN** 2026-11-06 night (`fix/exact-requires-pixel-identity`: 717286d + a891bfc + news 6605e32).
+  Review round 2 APPROVE; calibration on the branch's own decode over all 85 test-set pairs: 59/85 stay
+  EXACT, 9/9 pixel-different demoted (incl. IMG_0405/0406 via the channel-shift gate), the other 17 are
+  resized copies + one dimension-changed re-encode, no honest same-size re-encode demoted. Gate = equal or
+  90°-swapped dims AND 32×32 MAD ≤ 6 AND max channel shift ≤ 4; confidence from the dHash vote; GROUPING "8";
+  docs entry `Scan grouping — EXACT requires pixel identity`. Follow-up #1047 (REVIEW/high at Hamming 0 still
+  aggressive-eligible + 100 % badge). CI running; needs the owner's "yes". AFTER MERGE: owner rescans the
+  test set (≈ 4 min) → `compare_testset.py` → expect the 26 EXACT→REVIEW moves (9 + 17) and no group change.
+- **PR #1048 MERGED 2026-11-06 night as b47c63c** (owner's yes; CI 11/11; opus review round 2 APPROVE). Local
+  master fast-forwarded; GROUPING "8" is live. NEXT (owner): `.\run.bat` → Start Scan on the test set
+  (≈ 4 min; the previous `migration_manifest_testset.sqlite` is overwritten — copy it to
+  `migration_manifest_testset_g7.sqlite` first if a GROUPING 7 keepsake is wanted); then lead runs
+  `compare_testset.py selection.csv <ROOT> migration_manifest_testset.sqlite` and expects 26 EXACT→REVIEW
+  moves (9 pixel-different + 17 resized/dimension-changed), partition unchanged (312 groups).
+- Test set re-scanned under GROUPING 8 (owner, 2026-11-06 20:07). `compare_manifests.py` (new, diffs two
+  scans of the same file set) g7 → g8: 1,381/1,381 rows, sha256 unchanged, partition identical (312/312),
+  exactly **26 EXACT/high → REVIEW_DUPLICATE/high "same pHash, pixels differ"** (IMG_3789, P1011083 …), no
+  other label change. #1048 behaves as calibrated. GROUPING 7 keepsake: `migration_manifest_testset_g7.sqlite`.
+- NEW OWNER FINDING 2026-11-06 night: groups consisting ONLY of a Live-Photo image + its own video. Measured:
+  test set 16/312 groups; **v6 777/8,337 groups (9.3 %)** are exactly {image, video, same stem}, both rows
+  action "" "unique"; 1,060 groups mix images and videos. Side artefact: in v6 some pair-only groups carry a
+  HEIC labelled REVIEW_DUPLICATE "near-duplicate of IMG_4359" whose partner sits in ANOTHER pair-only group
+  (low edge between two multi-member groups is never merged per #1040, but the label still points across).
+  Opus planner dispatched: design "a pair-only component is not a group" (keep the MOV-follows-photo link
+  outside group membership; GROUPING "9"), with the hint-pass and R-LOCK interplay. Core-task item.
+- 2026-11-07: opus design received and saved as `main-live-pair-design.md` (option (a)): a third Edge kind
+  "pair" for image↔video same-stem edges (image↔image stays "high"); `_assign_group_ids` gains pass 3
+  `_pair_pass` — pair clusters attach WHOLE only when a member is already joined, otherwise nobody gets a
+  group_id; GROUPING "9". Expected on the test set: 16 pair-only groups → NULL (32 rows), 312 → ≈296 minus
+  hint-merges. Contradictions the design surfaced: no "MOV follows photo" behaviour exists (#88 removed it;
+  `scoring.py:423-425` docstring is false — B6 needs its own PR); pairing is filename-only; the IMG_4361
+  cross-group label is the pair-as-high side effect and disappears for free. Scope calls taken by the lead
+  without the owner (flag at report): video↔video same stem stays grouped; image↔image same-stem pairs out
+  of scope; qa `s11_video_live.py` is edited but NOT run locally (owner's OK needed; CI runs the batch).
+  Dispatched haiku implementer in a worktree (`fix/lone-live-pair-not-a-group`).
+- 2026-11-07 prediction (`main-v6-livepair-predict.py`, label-based: a group is pair-only when it has no EXACT,
+  no in-group REVIEW target, no accepted hint, no burst row, and holds a video): test set 312 → 16 dissolve
+  (32 rows NULL) + 1 group keeps its image pair and loses only its video → **296** predicted (matches the
+  design). Full library v6 8,337 → 783 dissolve (1,575 rows; the 777 "both unique" + 6 REVIEW-cross-pointing)
+  + 3 partial → **7,554** predicted, upper bound before hint-merges. To confirm after the owner rescans.
+- 2026-11-07: haiku implemented GROUPING "9" (worktree commit 21a8c07, 9 files, 15 new tests, full suite
+  2,272 passed; mutation check: forcing `_pair_kind` to "high" fails 5 tests). Fresh opus review:
+  NEEDS-FIX — core passes (order independence, hint interplay, scope, docs, privacy), but qa `s11` scanned
+  non-recursively so the `dupe/` copy was never walked (would fail CI), the 6-order cluster test could not
+  fail (video↔video high edge pre-joins the cluster; Windows path filter never matched), the
+  "attaches to high member" test duplicated the near-dup test, a stale comment, a wording nit. Sent back
+  as a second commit. Implementer flagged: a lone HEIC+MOV+MP4 triple still groups (video↔video high) —
+  owner question, documented in the new scan.md entry.
+- 2026-11-07: fixes committed (e03da09: s11 `recursive=True`; 6-order cluster test rebuilt as HEIC + gated
+  JPG byte-copied elsewhere + MOV — real pass 6/6, naive edge-by-edge mutant fails 6/6; low-hint-to-high-
+  member test now really low; comment + wording). Re-review **APPROVE**. **PR #1049** opened
+  (`fix/lone-live-pair-not-a-group`, GROUPING "9", news/1049.bugfix, 10 files). Awaiting CI, then the owner's
+  "yes", then test-set rescan + `compare_manifests.py` g8 → g9 (expect 296 groups, 32 rows → NULL).
+- 2026-11-07: PR #1049 CI green, all 11 checks incl. `web-scenario-batch` (s11 with the `dupe/` copy ran in
+  CI and passed) and `pytest`. Waiting for the owner's merge "yes".
+- 2026-11-07: **#1049 merged** (squash 9c92012), local master fast-forwarded. GROUPING "9" is on master.
+  Test-set manifest from GROUPING 8 kept as `migration_manifest_testset_g8.sqlite` (gitignored); owner to
+  rescan the test set, then `compare_manifests.py migration_manifest_testset_g8.sqlite
+  migration_manifest_testset.sqlite` (expect 296 groups, 32 rows → NULL, no label change outside them).
+  Open owner questions: HEIC+MOV+MP4 triple (video↔video edge stays high); RAW+JPG pairs untouched.
+- 2026-11-07 12:41: test set rescanned under GROUPING 9 (owner). `compare_manifests.py` g8 → g9: 1,381/1,381
+  rows, sha256 unchanged, **312 → 296 groups, 296 identical member sets, 16 only-before, 0 only-after, zero
+  label changes**. Row level: exactly 32 rows grouped → NULL, 0 the other way; the 16 dissolved groups are all
+  one-stem image+video pairs (13 HEIC+MP4, 2 JPG+MP4, 1 HEIC+MOV), every row action "". Matches the
+  prediction exactly. Probe correction: a RAW+JPG(+video) same-stem group is unchanged (the image↔image high
+  edge joins the still, so the video attaches) — `main-v6-livepair-predict.py` fixed; v6 prediction stays
+  8,337 → 7,554. Keepsake: `migration_manifest_testset_g8.sqlite`.
+- OWNER STANDING INSTRUCTION 2026-11-07: update the test set whenever needed and deliberately hunt odd
+  combinations into it. Next: shape census of v6 groups vs the test set (`extend_testset_shapes.py`) → extend
+  `select_testset.py` with the missing shapes → copy → rescan → new baseline.
+- 2026-11-07 13:00 HAND-OFF (session shell wedged — Bash cwd stuck in a subfolder, project hooks resolve
+  `scripts/hooks/*.py` relative to cwd and block every call, subagents inherit it; lesson in memory
+  `never-end-bash-in-subdir`). Written but NOT yet run: `docs/audits/testset-2026-11/extend_testset_shapes.py`
+  (shape census full-library vs test set; writes `selection-shapes.csv` + `shape-census-output.local.txt`, both
+  gitignored). Next session, from the repo root:
+  `python -I docs/audits/testset-2026-11/extend_testset_shapes.py migration_manifest_v6.sqlite
+  migration_manifest_testset_g8.sqlite docs/audits/testset-2026-11/selection.csv docs/audits/testset-2026-11 2`
+  → read the shape table → `copy_testset.py selection-shapes.csv <ROOT> copy-report-shapes.csv` (ROOT in
+  `ROOT.local.txt`) → owner rescans → `compare_manifests.py` against the g9 keepsake → new baseline in
+  `summary.md`. Uncommitted docs for the next docs PR: STATE.md tail, `main-live-pair-design.md`,
+  `main-v6-livepair-predict.py`, `extend_testset_shapes.py`, testset `.gitignore` (+3 lines),
+  `compare_manifests.py`, `probe_exact_colour.py`, PRD v2, `direction-review.md`, requirements answers.
+- 2026-11-07 13:20: shell unwedged (owner typed `! cd <repo root>` with forward slashes — recorded in memory).
+  Shape census ran (`extend_testset_shapes.py`, v6 vs test set g8): 198 shapes in the full library, 84 in
+  the test set, **132 missing covering 1,682 groups**; biggest absentees are cross-folder same-stem HEIC/JPG
+  format duplicates (580 + 108 + 106 groups), screenshot PNG pairs with a cross-group label, Live triples
+  (HEIC+MOV+MP4), video-only same-stem sets, RAW pairs. Proposed extension `selection-shapes.csv`: 2 small
+  groups per missing shape = 213 groups / 662 files / 2.6 GB (5 shapes got 0 picks: size cap). Awaiting the
+  owner's yes before copying to the NAS test-set root.
+- 2026-11-07 13:35: owner approved the 2.6 GB extension copy. g9 keepsake saved (`migration_manifest_testset_g9.sqlite`).
+  First copy attempt did nothing: `testset-2026-11/ROOT.local.txt` held a literal TAB where the `\t` of the
+  drive path should be (written earlier through a printf FORMAT string) → WinError 123, 0 report rows. Fixed
+  with a literal write (never put a Windows path into a printf format string). Copy re-launched.
+- 2026-11-07 13:45: extension copy DONE — 662/662 ok (size + sha256 verified), 2.79 GB in 179 s, report
+  `copy-report-shapes.csv` (gitignored). Test set is now 1,381 + 662 = 2,043 files. Owner to rescan; then
+  `compare_manifests.py migration_manifest_testset_g9.sqlite migration_manifest_testset.sqlite` (the 1,381 old
+  rows must keep partition + labels; the 662 new rows appear as only-after) and a new baseline in `summary.md`.
+- 2026-11-07 14:07: extended test set rescanned (owner). `compare_manifests.py` g9-keepsake → new: 1,381 old
+  rows sha unchanged, **296/296 old groups identical**, 206 new groups, 1 old-row label change (a unique JPEG
+  gained a skipped low hint from a new file — expected). `analyze_extension.py` (new): of the 213 added
+  groups 205 intact, 6 dissolved (all Live-pair shapes incl. HEIC+MOV+PNG where the HEIC↔PNG edge is
+  content-gated) and 2 merged with their cross-group label target — exactly the GROUPING 9 behaviour.
+  **New baseline: 2,043 files, 502 groups, 154 burst rows / 20 groups, 94 groups with video, 18 video-only
+  same-stem sets, 0 pair-only groups** — written to `testset-2026-11/summary.md` §Extension 1. The 18
+  video-only same-stem groups are the owner's pending decision (video↔video edge stays high).
+- 2026-11-07 evidence for the owner's video↔video question: test set — all 18 video-only groups are
+  byte-identical EXACT copies (sha edge, not the stem edge). Full library v6 — 454 same-stem video sets with
+  DISTINCT bytes, every one next to a still (MOV+MP4 376, MOV+MP4×3 48 …); 449 are anchored by an EXACT
+  elsewhere in the group, **5 are pair-only** (HEIC+MOV+MP4, nothing EXACT): under GROUPING 9 these 5 stay a
+  3-member undecided group via the video↔video high edge. Sizes in the examples (MOV 55 MB vs MP4 4.5 MB, same
+  stem) say the two videos are NOT transcodes of each other — same-stem videos are not duplicates by name.
+  Decision pending: treat video↔video same-stem as "pair" too (5 groups hidden; the 449 unaffected).
