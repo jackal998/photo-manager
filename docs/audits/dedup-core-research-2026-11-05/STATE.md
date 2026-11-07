@@ -556,3 +556,90 @@ worktree, opus reviews, owner says "yes" per merge; the owner launches the app; 
   3-member undecided group via the video↔video high edge. Sizes in the examples (MOV 55 MB vs MP4 4.5 MB, same
   stem) say the two videos are NOT transcodes of each other — same-stem videos are not duplicates by name.
   Decision pending: treat video↔video same-stem as "pair" too (5 groups hidden; the 449 unaffected).
+- 2026-11-07 15:10: **#1050 merged** (squash 7b96762; single clean commit after the privacy review found a home
+  path in the two-commit draft's history — the draft branch was never pushed and is now deleted). Local master
+  fast-forwarded. Everything this round produced is tracked.
+- OWNER DECISION 2026-11-07 on same-stem videos (and, by extension, on filename pairing itself): a shared
+  filename stem is only a coincidence of the iPhone naming scheme and proves nothing about content. Two
+  same-stem videos may be grouped ONLY if their content is shown to be the same; "if we do it at all, pairing
+  must use the real content". Consequences: (a) no GROUPING "10" by filename — the video↔video `high` stem edge
+  stays as-is until a content signal exists (today 5 pair-only HEIC+MOV+MP4 groups in v6 depend on it);
+  (b) the Live Photo image↔video link should eventually come from content metadata — Apple writes the same
+  `ContentIdentifier` (QuickTime `com.apple.quicktime.content.identifier` / HEIC `MediaGroupUUID`) into both
+  halves, readable through exiftool — instead of the stem; (c) video↔video identity needs its own signal
+  (duration + a few frame pHashes, or the container's creation time + ContentIdentifier). Research item, not
+  scheduled; it belongs after PRD v2 PR-1/PR-3 unless the owner reorders.
+- 2026-11-07 15:30: owner started **PRD v2 PR-1** (reason + match_confidence in the view; #1047 badge half:
+  "exact" state from `action == EXACT`, not Hamming 0). Opus planner dispatched for the design; then haiku
+  implements in a worktree, opus reviews, PR. The aggressive-eligibility half of #1047 stays PR-3.
+- 2026-11-07 15:50: PR-1 design saved as `docs/audits/auto-select-prd-2026-11/pr1-design.md`. Findings: only
+  `reason` is missing from PhotoRecord (match_confidence already flows); the preview metadata table is pinned
+  at 5 rows; the delete-confirm dialog repeats the #1047 defect ("Exact duplicate of X" for any 100 %). Lead
+  decisions: reason + confidence in every row's hover tooltip (classification / reason / "Confidence: …"),
+  a visible chip only where it changes the decision ("Keep all · burst", "Low confidence"), badge "exact"
+  state from `action == EXACT`, delete-confirm wording fixed too (F7). Deviation from PRD §7 wording ("every
+  row shows a one-line reason") to flag to the owner: shown on hover, not as a column (a column sheds the
+  date at the reference width and reads as debug text). Haiku implementer dispatched in a worktree.
+- 2026-11-07 16:40: PR-1 implemented (haiku worktree, f213dff + 1fb592f; 25 files, backend suite 2,277 passed;
+  mutation: keep_all forced False fails its test). Fresh opus review **APPROVE** with two LOW notes (null-reason
+  test fed no NULL; review.md said `unique` is "a row outside any group" — it is the keeper's reason) → fixed
+  in 17289de. Reviewer also classified the s07 fixture live: pHash distance exactly 10 (on the threshold),
+  dHash 1 → near-duplicate path, HEIC keeper reason `unique`, so Assertion G holds. **PR #1051** opened
+  (`feat/review-reason-confidence`, news/1051.feature). Frontend lint/typecheck/build/vitest run in CI only.
+- 2026-11-07 17:00: PR #1051 CI green — 12/12 incl. the `frontend` workflow (lint / typecheck / build / vitest
+  on the unverified-locally TS) and `web-scenario-batch` (s07 Assertion G). Waiting for the owner's merge "yes".
+- 2026-11-07 17:20: **PR #1051 merged** (squash 7d48ebd), local master fast-forwarded. PRD v2 PR-1 done. Next: PR-3
+  (three modes + confidence threshold, keeper lock removed, aggressive-eligibility half of #1047); opus planner
+  design first, then haiku worktree implementation as before.
+- 2026-11-07 20:00: **PR-3 design** by the opus planner saved as `docs/audits/auto-select-prd-2026-11/pr3-design.md` (untracked,
+  next docs PR). Key calls: keep the two wire booleans (off/auto/aggressive), one new field + settings key
+  `scan.auto_select.confirm_below` in {high, medium}; a per-row level low < medium(REVIEW_DUPLICATE) < high(EXACT or
+  confidence high); auto mode stamps KEEP only in groups with every row admitted, never locks; aggressive never deletes a
+  below-threshold row (#1047 half); "Needs your look" is a status-bar group filter. Census on the test set: T=high 263/502
+  groups need a look, aggressive deletes 497 -> 316 (54 are #1047 rows); T=medium 148 need a look, deletes unchanged.
+  Owner decides the default threshold before implementation starts.
+- 2026-11-07 20:30: owner: default threshold **high**, PR-3 started. Haiku implements B1-B9 / F0-F9 / s80 / R-SCAN-4-5 from
+  pr3-design.md in a worktree, opus reviews, lead opens the PR.
+- 2026-11-07 21:20: PR-3 implemented (haiku worktree, 4 commits b909ee7/a117e60/71435bb/119006e; 53 files). Haiku could not
+  run the frontend (worktree guard refused the node_modules junction); lead made the junction and ran it: typecheck caught
+  `SettingsMap` missing the new key, vitest caught the PR-1 "unknown level" probe using "medium" -> fixed in 269e38d; then
+  typecheck / lint / vitest 1,203 / build all green. Backend 2,297 passed, 2 timing failures in
+  test_scan_runner_exif_rotation.py (pass alone; full-suite rerun in progress). Mutation check: below_threshold forced
+  False fails the #1047 test. Opus review dispatched.
+- 2026-11-07 22:50: fresh opus review of PR-3 **APPROVE**; one MEDIUM (help text hid that aggressive mode still deletes a
+  needs-look group's admitted copies) + two LOW (write_manifest docstring said pass None for empty keepers -> new decision-log
+  test pins the empty-set path; two docs claims aligned with the UI) fixed in 1dfaf8a. Full backend suite: the 2
+  test_scan_runner_exif_rotation.py failures reproduce on MASTER under the same full-suite load (1,600-file scans, 60 s
+  budget) -> pre-existing, not PR-3; CI is the gate. Master also fails test_check_rules_register because the UNTRACKED
+  pr3-design.md cites R-SCAN-4/5 -> the docs PR carrying it must land AFTER PR-3. Blob scan on all 6 commits: controls ok,
+  only pre-existing placeholders. **PR #1052** opened (`feat/auto-select-confidence-threshold`, news/1052.feature, Closes
+  #1047). CI watch running. Lesson: the 30-min local full suite is not worth blocking on; run touched files + CI.
+- 2026-11-07 23:10: PR #1052 CI 11/12; web-scenario-batch failed s80: on the CI runner the near-dup fixture's q88 re-encode
+  decodes pixel-identical -> EXACT (high), which the design admits and deletes inside a needs-look group (keeper unstamped,
+  REVIEW rows untouched) — code right, scenario assumed all five rows REVIEW. Fixed the assertion (26902ce, one CI
+  iteration). Re-watching CI.
+- 2026-11-07 23:30: **PR #1052 CI green** — 12/12 incl. web-scenario-batch (s49 / s57 / s80 all pass). Waiting for the owner's
+  merge "yes". After merge: owner rescans the test set; expected at default high: 263 groups under "Needs your look",
+  aggressive candidates 497 -> 316; verify with a scratch census on the new manifest.
+- 2026-11-07 23:40: **PR #1052 merged** (squash fada596), local master fast-forwarded; #1047 closed by the PR. PRD v2 PR-3 done.
+  Next: owner rescans the test set (aggressive, threshold high) -> census on the new manifest; then the docs PR (STATE.md
+  tail + pr3-design.md, now safe since R-SCAN-4/5 are in the register); then PR-4 (rule toggles v1) per PRD §11.
+- 2026-11-08 00:05: owner rescanned the test set on fada596 (reported: aggressive + high). Census on the new manifest:
+  502 groups, **263 need a look (= prediction), 239 KEEP-stamped groups (= prediction), 0 locked rows, 0 needs-look group
+  with a stamp, 0 below-threshold or pixels-differ row deleted** — but **0 delete rows (expected 316)** and no "marked N
+  row(s) for delete" line in the app log, only "marked 239 keeper(s); 263 group(s) need your look (confirm below high)".
+  That is exactly auto mode without aggressive; CI s57 on this commit writes deletes through the real dialog, so the wire
+  path works. Most likely the aggressive checkbox (resets on every dialog open, nested under auto-select) was not ticked.
+  Asked the owner to rescan with it ticked. Side note confirmed: decision_log is EMPTY after an auto-only scan (R-LOG-1,
+  design Contradiction 5) — traceability gap for PR-5.
+- 2026-11-08 01:00: owner rescanned with BOTH boxes confirmed ticked (aggressive + high). Census on the new manifest: 502 groups,
+  **263 need a look, 239 KEEP-stamped groups, 0 locked, 0 needs-look group with a stamp, 0 below-threshold or pixels-differ
+  row deleted, 449 delete rows — all EXACT/high.** Not 316: the pre-measurement script (scratch) modelled the keeper as
+  first-index max(score) and counted only action EXACT/REVIEW rows as eligible; the pre-change manifest already carried KEEP
+  stamps, so in every group where the stamped keeper tied on score with a byte copy the script dropped one delete (same
+  artifact made "today" 497 instead of 619). Re-running the SHIPPED plan_auto_select on the manifest rows reproduces the
+  writes exactly: stamped 239 = 239, deletes 449 = 449, needs-look 263; at medium the set would be 619, so high spares 170
+  REVIEW rows (the #1047 class). 136 of the 449 are admitted EXACT copies inside needs-look groups (design: copy deleted,
+  keeper unstamped) — a group can carry delete marks and still sit under "Needs your look"; watch for UX confusion in PR-4/5.
+  Lesson: verify a count with the shipped function, never with a re-modelled predictor (judgment-rubrics "same instrument").
+  PR-3 verified end to end on the real test set. Next: docs PR (STATE.md tail + pr1/pr3-design.md), then PR-4.
