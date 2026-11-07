@@ -25,7 +25,9 @@ import { useAppStore } from "@/store/useAppStore";
 import { useT } from "@/i18n/useT";
 import { formatEta, isEtaReady } from "@/lib/scanProgress";
 import { getSettings, patchSettings } from "@/api/client";
-import type { ConfirmBelow, WebScanRequest } from "@/api/types";
+import type { ConfirmBelow, RuleToggles, WebScanRequest } from "@/api/types";
+import { DEFAULT_RULES, rulesFromSettings } from "@/lib/ruleToggles";
+import { ScanRulesBlock } from "./scan/ScanRulesBlock";
 import {
   SCAN_ADD_SOURCE,
   SCAN_ADVANCED,
@@ -246,6 +248,17 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
   // open, like the cloud opt-in; a late settings GET must not overwrite a pick.
   const [confirmBelow, setConfirmBelow] = useState<ConfirmBelow>("high");
   const confirmBelowTouched = useRef(false);
+  // PR-4a — the auto-select rule toggles. Persisted on change and loaded on
+  // open, like the threshold; a late settings GET must not overwrite a toggle.
+  const [rules, setRules] = useState<RuleToggles>(DEFAULT_RULES);
+  const rulesTouched = useRef(false);
+  const onRulesChange = useCallback((next: RuleToggles) => {
+    rulesTouched.current = true;
+    setRules(next);
+    void patchSettings({ "scan.auto_select.rules": next }).catch((err) => {
+      console.warn("Failed to persist scan rules:", err);
+    });
+  }, []);
   const [autotuneReadKnee, setAutotuneReadKnee] = useState(true);
   // Cloud-analysis opt-in (privacy policy) — default OFF. Persisted on change
   // and loaded on open; nothing reads it yet (no cloud call exists).
@@ -312,6 +325,8 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     setAggressiveDelete(false);
     setConfirmBelow("high");
     confirmBelowTouched.current = false;
+    setRules(DEFAULT_RULES);
+    rulesTouched.current = false;
     setAutotuneReadKnee(true);
     setCloudAnalysisOptIn(false);
     cloudOptInTouched.current = false;
@@ -353,6 +368,9 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
           !confirmBelowTouched.current
         ) {
           setConfirmBelow(below);
+        }
+        if (!rulesTouched.current) {
+          setRules(rulesFromSettings(settings["scan.auto_select.rules"]));
         }
       })
       .catch(() => {
@@ -534,6 +552,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
       // Aggressive only takes effect under auto-select; never send it alone.
       auto_select_aggressive_delete: autoSelect && aggressiveDelete,
       auto_select_confirm_below: confirmBelow,
+      auto_select_rules: rules,
       autotune_read_knee: autotuneReadKnee,
       // Grouping-sensitivity thresholds (#736) — per-scan only, see the
       // useState declarations above. NEVER added to the patchSettings call
@@ -570,6 +589,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
     autoSelect,
     aggressiveDelete,
     confirmBelow,
+    rules,
     autotuneReadKnee,
     phashThresholdInput,
     dhashThresholdInput,
@@ -870,6 +890,13 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
                 )}
               </p>
             </div>
+
+            <ScanRulesBlock
+              rules={rules}
+              disabled={isRunning}
+              aggressiveOn={autoSelect && aggressiveDelete}
+              onChange={onRulesChange}
+            />
 
             {/* Cloud analysis opt-in — default OFF. Persists on change via
                 /api/settings. Setting only: no feature reads it yet. */}

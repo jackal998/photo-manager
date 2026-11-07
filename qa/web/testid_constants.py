@@ -379,6 +379,24 @@ SCAN_CLOUD_ANALYSIS_OPT_IN = "scan-cloud-analysis-opt-in"
 """'Allow cloud analysis of thumbnails' checkbox (Advanced settings) — default
 OFF; persisted as scan.cloud_analysis_opt_in. Setting only: no feature reads it yet."""
 
+SCAN_RULES = "scan-rules"
+"""PR-4a — the 'Rules' sub-block of the scan dialog (auto-select rule toggles)."""
+
+SCAN_RULE_B3 = "scan-rule-b3"
+"""PR-4a rule toggle: exact copies (B3)."""
+
+SCAN_RULE_B4 = "scan-rule-b4"
+"""PR-4a rule toggle: RAW + JPEG keep both (B4)."""
+
+SCAN_RULE_B5 = "scan-rule-b5"
+"""PR-4a rule toggle: burst keep every frame (B5)."""
+
+SCAN_RULE_B7 = "scan-rule-b7"
+"""PR-4a rule toggle: screenshots (B7)."""
+
+SCAN_RULE_B8 = "scan-rule-b8"
+"""PR-4a rule toggle: people and pets, delete only exact copies (B8)."""
+
 SCAN_PHASH_THRESHOLD = "scan-phash-threshold"
 """pHash Similarity Threshold number input (Advanced settings, #736) —
 Hamming-distance ceiling (default 10, range 2-20 since #823) between two

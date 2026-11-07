@@ -68,6 +68,10 @@ export interface FileRow {
  *  a look and gets no keeper stamp. */
 export type ConfirmBelow = "high" | "medium";
 
+/** PR-4a — the auto-select rule ids, and one on/off flag per id. */
+export type RuleId = "B3" | "B4" | "B5" | "B7" | "B8";
+export type RuleToggles = Record<RuleId, boolean>;
+
 export interface Group {
   group_number: number;
   member_count: number;
@@ -166,6 +170,8 @@ export interface WebScanRequest {
   auto_select_enabled?: boolean;
   auto_select_aggressive_delete?: boolean;
   auto_select_confirm_below?: ConfirmBelow;
+  /** PR-4a — the rule toggles; omitted, the server reads settings. */
+  auto_select_rules?: RuleToggles;
   autotune_read_knee?: boolean;
   autotune_knees?: Record<string, number>;
 }
@@ -225,6 +231,12 @@ export interface SettingsMap {
    * other stored value to "high".
    */
   "scan.auto_select.confirm_below"?: ConfirmBelow | null;
+  /**
+   * PR-4a rule toggles: GET /api/settings serves the stored object and
+   * ScanDialog persists all five ids. Unknown ids and non-boolean values are
+   * refused with 422; the client resolves a missing id to its default.
+   */
+  "scan.auto_select.rules"?: Partial<Record<string, unknown>> | null;
 }
 
 // ---------------------------------------------------------------------------

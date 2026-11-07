@@ -38,8 +38,12 @@ import {
   SCAN_ADD_SOURCE,
   SCAN_AUTO_SELECT,
   SCAN_AUTOTUNE,
+  SCAN_AGGRESSIVE_DELETE,
   SCAN_CONFIRM_BELOW,
   SCAN_CLOUD_ANALYSIS_OPT_IN,
+  SCAN_RULE_B3,
+  SCAN_RULE_B8,
+  SCAN_RULES,
   SCAN_CANCEL_BUTTON,
   SCAN_COLOR_THRESHOLD,
   SCAN_DHASH_PARITY_NOTE,
@@ -557,6 +561,100 @@ describe("ScanDialog", () => {
 
     const select = await screen.findByTestId(SCAN_CONFIRM_BELOW);
     await waitFor(() => expect(select).toHaveValue("high"));
+  });
+
+  it("rules block shows the defaults when unset", async () => {
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [],
+      "sources.output": "",
+    } as never);
+    renderDialog();
+
+    await screen.findByTestId(SCAN_RULES);
+    for (const testid of [SCAN_RULE_B3, SCAN_RULE_B8]) {
+      await waitFor(() =>
+        expect(screen.getByTestId(testid)).toHaveAttribute("data-state", "checked")
+      );
+    }
+  });
+
+  it("rules load the saved values and are sent on Start", async () => {
+    const user = userEvent.setup();
+    mockGetSettings.mockResolvedValueOnce({
+      "sources.list": [],
+      "sources.output": "",
+      "scan.auto_select.rules": { B8: false },
+    } as never);
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+
+    renderDialog();
+    const b8 = await screen.findByTestId(SCAN_RULE_B8);
+    await waitFor(() => expect(b8).toHaveAttribute("data-state", "unchecked"));
+    await user.type(screen.getByRole("textbox", { name: /source label/i }), "MyPhotos");
+    await user.type(screen.getByRole("textbox", { name: /source path/i }), "D:/pics");
+    await user.type(screen.getByTestId(SCAN_OUTPUT_PATH), "D:/out.db");
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+
+    const [req] = startScanMock.mock.calls[0] as [{ auto_select_rules: Record<string, boolean> }];
+    expect(req.auto_select_rules).toEqual({ B3: true, B4: true, B5: true, B7: true, B8: false });
+  });
+
+  it("a rule change is persisted with all five ids", async () => {
+    const user = userEvent.setup();
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [],
+      "sources.output": "",
+    } as never);
+    renderDialog();
+    const b8 = await screen.findByTestId(SCAN_RULE_B8);
+
+    await user.click(b8);
+
+    expect(mockPatchSettings).toHaveBeenCalledWith({
+      "scan.auto_select.rules": { B3: true, B4: true, B5: true, B7: true, B8: false },
+    });
+  });
+
+  it("a late settings load does not overwrite a rule the user already changed", async () => {
+    const user = userEvent.setup();
+    let resolveSettings: (value: unknown) => void = () => undefined;
+    mockGetSettings.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSettings = resolve;
+      }) as never
+    );
+    renderDialog();
+    const b8 = await screen.findByTestId(SCAN_RULE_B8);
+
+    await user.click(b8); // user turns B8 off before the settings arrive
+    resolveSettings({
+      "sources.list": [],
+      "sources.output": "",
+      "scan.auto_select.rules": { B3: false, B8: true },
+    });
+
+    await waitFor(() => expect(mockGetSettings).toHaveBeenCalled());
+    expect(b8).toHaveAttribute("data-state", "unchecked");
+    expect(screen.getByTestId(SCAN_RULE_B3)).toHaveAttribute("data-state", "checked");
+  });
+
+  it("decision rules read muted while aggressive delete is off", async () => {
+    const user = userEvent.setup();
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [],
+      "sources.output": "",
+    } as never);
+    renderDialog();
+    await screen.findByTestId(SCAN_RULES);
+    const b3Label = screen.getByText("Exact copies: mark the extra copies for delete");
+    expect(b3Label).toHaveClass("text-ink-muted");
+
+    await user.click(screen.getByTestId(SCAN_AUTO_SELECT));
+    await user.click(screen.getByTestId(SCAN_AGGRESSIVE_DELETE));
+
+    expect(b3Label).toHaveClass("text-ink");
+    expect(b3Label).not.toHaveClass("text-ink-muted");
   });
 
   it("cloud analysis opt-in renders unchecked by default and PATCHes the key on change", async () => {
