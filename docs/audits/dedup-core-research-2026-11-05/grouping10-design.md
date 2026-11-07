@@ -148,8 +148,9 @@ Out of scope: the embedding tier, `core/services/auto_select.py` semantics, and 
 - New signature: `_pair_pass(pair_pairs, find, union, joined) -> list[str]`.
 - For each cluster, in sorted root order, let `roots = {find(m) for m in members if m in joined}`:
   - **zero roots:** nothing joins (lone pair, as in GROUPING 9);
-  - **one root:** union the whole cluster;
-  - **two or more roots:** no union. The cluster's unjoined members are returned. `classify` appends `; pair link skipped: its stills are in different groups` to their reasons.
+  - **at most one root holds a still:** union the whole cluster. `has_still` maps each component root to whether any non-video row in that component is a still; it is built once in `_assign_group_ids` from all rows, after the high unions, and updated on every union;
+  - **two or more roots hold a still:** no union. The cluster's unjoined members are returned. `classify` appends `; pair link skipped: its stills are in different groups` to their reasons.
+  - **Why (refined 2026-11-08):** the refusal stops a cluster from joining two components that content kept apart as separate captures, and each of those holds a still. A video-only component (a MOV's byte copies) joins the still it shares a ContentIdentifier with, because that is one capture's artefacts. The first, unrefined rule refused that case and broke it.
 - Clusters are disjoint, and a guarded union never merges two components, so the result is independent of order.
 - Tests:
   - **January/June stem cluster:** JPG+MOV+MP4+DNG in one folder. The JPG and the DNG each have a byte copy elsewhere, and their pHashes are far apart.

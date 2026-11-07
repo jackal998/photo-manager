@@ -46,7 +46,6 @@ except ImportError:
     _IMAGEHASH_AVAILABLE = False
 
 from scanner.media import RAW_EXTENSIONS, is_video
-from scanner.phash_distance import hamming_distance
 from scanner.walker import FileRecord
 
 # ---------------------------------------------------------------------------
@@ -398,7 +397,7 @@ def classify(
             frames) and 15.36 (a 2023 photo of two lights in the dark), so
             16.0 removes all three from pHash grouping, plus ~1 % of real
             photos (~5 % of PNG screenshots). Such files still get exact-SHA
-            dedup and the same-stem pair edge. A file below this is excluded
+            dedup and the Live Photo pair edge. A file below this is excluded
             from pHash near-dup grouping; ``None`` quality (video / legacy
             manifest / failure) passes. ``0`` disables the gate.
     """
@@ -441,19 +440,17 @@ def classify(
             rows[key] = _make_row(hr, "", reason="unique")
 
     # Pass 4 (was: action propagation, removed in #88): collect Live Photo
-    # pair edges. A pair shares a group_id only when its still is grouped for
-    # another reason (GROUPING "9"); each row keeps its own action /
-    # user_decision — the image's classification no longer dictates the video's.
-    pair_edges = _collect_pair_edges(records, rows, threshold)
+    # pair edges. Each row keeps its own action / user_decision — the image's
+    # classification no longer dictates the video's. GROUPING "10": only a
+    # Live video whose ContentIdentifier equals its still's yields an edge.
+    pair_edges = _collect_pair_edges(records, rows)
 
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
-    # pHash transitive edges (#538 near-dup, #824 complementary).
-    # Image<->video pair edges are "pair" (conditional); image<->image pair
-    # edges (RAW+JPG, HEIC+JPG) stay "high"; pHash edges carry their own.
-    _assign_group_ids(
-        rows,
-        [(a, b, _pair_kind(a, b)) for a, b in pair_edges] + phash_edges,
-    )
+    # pHash transitive edges (#538 near-dup, #824 complementary). A pair
+    # cluster that would bridge two groups is skipped and says so in its reason.
+    skipped_pairs = _assign_group_ids(rows, pair_edges + phash_edges)
+    for path in skipped_pairs:
+        rows[path].reason += _PAIR_SKIPPED_SUFFIX
     if burst_stacks:
         _mark_burst_stacks(rows)
     # GROUPING 10: hints run last, so a burst reason stays first in the text.
@@ -1236,65 +1233,26 @@ def _edge_confidence(vote: str, note: Optional[str]) -> str:
     return "high" if vote == "agree" and note is None else "low"
 
 
-def _pair_kind(a: str, b: str) -> str:
-    """Edge kind for a same-stem pair edge. An image<->video pair is "pair"
-    (GROUPING "9": it groups only with a still that is grouped anyway). An
-    image<->image pair (RAW+JPG, HEIC+JPG) stays "high", as in GROUPING "8"."""
-    return "pair" if is_video(a) != is_video(b) else "high"
-
-
 def _collect_pair_edges(
-    records: list[HashResult], rows: dict[str, ManifestRow], threshold: int = 10
-) -> list[tuple[str, str]]:
-    """Return ``(own_path, peer_path)`` edges for every Live Photo cluster
-    member that survived classification.
+    records: list[HashResult], rows: dict[str, ManifestRow]
+) -> list[Edge]:
+    """Return the Live Photo "pair" edges between same-stem cluster members.
 
-    #539 — same-capture gate. The cluster comes from the walker keyed on
-    filename only (``(clean_stem, number)`` + directory); it assumes
-    "same stem ⇒ same capture", which is false when unrelated files collide
-    on a name (merged folders, multi-camera, Takeout). To stop a name
-    collision from unioning genuinely-different photos, an edge is dropped
-    when BOTH members carry a pHash AND their Hamming distance exceeds
-    ``threshold`` — positive evidence they are different images. The gate is
-    deliberately conservative: it fires only on disconfirming content
-    evidence, so any pair where a side lacks a pHash (a Live Photo's MOV/MP4)
-    or whose pHashes agree (a RAW+JPG / HEIC+JPG of one shot) is preserved
-    exactly as before. A pHash gate is used rather than a shot-date gate
-    because a Live Photo's HEIC (``DateTimeOriginal``, camera-local) and its
-    MOV (QuickTime date, frequently UTC) legitimately differ by a whole
-    timezone offset — a date gate would split real pairs.
+    GROUPING "10" (G4, owner decision 2026-11-07): a filename never creates an
+    edge. The walker's ``pair_cluster`` is keyed on the name alone, so it
+    proves nothing about capture. Two rules replace the stem edge:
 
-    Per photo-manager#88: files with the same exact stem (clean_stem AND
-    ``(N)`` dupe-marker number) in the same directory are linked. GROUPING
-    "9": an image<->video link is a "pair" edge, which shares a ``group_id``
-    only when the still is grouped for another reason; a lone pair gets none
-    (``_pair_pass``). An image<->image link is still "high" and always groups.
-    Action / ``user_decision`` / ``reason`` are NOT propagated — each row keeps
-    its independent classification. The image's destruction is no longer
-    automatically the video's; the user makes those decisions per-row in the UI.
+    * still <-> still: no edge. Stills group only through the pHash tiers,
+      which compare every candidate pair with content evidence anyway.
+    * any pair with a video side: a ``"pair"`` edge only when both files carry
+      the same non-None Apple ContentIdentifier. A video whose identity is
+      missing or different is not its still's passenger.
 
-    A "cluster" is computed by the walker's ``pair_cluster`` field and
-    typically holds one peer (the simple HEIC+MP4 case observed across
-    most production data). Larger clusters surface for:
-
-    * HEIC + MOV + MP4 (Google transcoded one Live Photo into both
-      video formats — same exact stem, no ``(N)``).
-    * HEIC + JPG + MP4 (a Live Photo with an extra image variant).
-
-    Cluster members share one group_id only when one of them is grouped for
-    another reason (see ``_pair_pass``).
-
-    Implementation: emit edges as a list (not in-place mutation of
-    ``duplicate_of``) so ``_assign_group_ids`` can transitively close
-    every component via union-find — handles the asymmetric case where
-    each cluster member sits in its own SHA-group, plus the cluster
-    edges union them all.
-
-    The walker computes the cluster symmetrically (every member sees
-    every other member as a peer), so duplicate edges flow in both
-    directions. Union-find dedupes them implicitly.
+    Action, ``user_decision`` and ``reason`` are never propagated. Each row keeps
+    its own classification. A pair edge only links rows into a group, and
+    ``_pair_pass`` decides whether that link may join a group at all.
     """
-    edges: list[tuple[str, str]] = []
+    edges: list[Edge] = []
     by_path: dict[str, HashResult] = {str(hr.record.path): hr for hr in records}
     for hr in records:
         own_key = str(hr.record.path)
@@ -1302,19 +1260,15 @@ def _collect_pair_edges(
             continue
         for peer_path in hr.record.pair_cluster:
             peer_key = str(peer_path)
-            if peer_key not in rows:
-                continue
-            # #539 — drop the edge only on positive evidence the two
-            # same-stem files are different images. ``hamming_distance``
-            # returns None when either pHash is missing (a video peer) or
-            # imagehash is unavailable; None means "no evidence" → keep the
-            # edge, preserving Live Photo and same-shot RAW+JPG pairings.
             peer_hr = by_path.get(peer_key)
-            if peer_hr is not None:
-                d = hamming_distance(hr.phash, peer_hr.phash)
-                if d is not None and d > threshold:
-                    continue
-            edges.append((own_key, peer_key))
+            if peer_key not in rows or peer_hr is None:
+                continue
+            if not (is_video(own_key) or is_video(peer_key)):
+                continue  # still <-> still: content tiers only (G4)
+            cid = hr.content_identifier
+            if cid is None or peer_hr.content_identifier != cid:
+                continue  # no device-written identity shared: not a pair
+            edges.append((own_key, peer_key, "pair"))
     return edges
 
 
@@ -1329,6 +1283,9 @@ def _row_edges(rows: dict[str, ManifestRow]) -> list[Edge]:
 
 HINT_ONLY_PREFIX = "hint only (not grouped): "
 BURST_PREFIX = "burst stack (keep all): "
+# GROUPING 10 (G7) — appended to an unjoined pair member whose cluster would
+# have bridged two groups that content kept apart.
+_PAIR_SKIPPED_SUFFIX = "; pair link skipped: its stills are in different groups"
 
 
 def _mark_hints(rows: dict[str, ManifestRow], hints: list[Hint]) -> None:
@@ -1423,16 +1380,28 @@ def _mark_burst_stacks(rows: dict[str, ManifestRow]) -> None:
 
 def _pair_pass(
     pair_pairs: list[tuple[str, str]],
+    find: Callable[[str], str],
     union: Callable[[str, str], None],
     joined: set[str],
-) -> None:
-    """GROUPING "9" — apply the image<->video "pair" edges after the hints.
+    has_still: dict[str, bool],
+) -> list[str]:
+    """GROUPING "10" (G7) — apply the "pair" edges after the high edges.
 
     The pairs form clusters of their own (a separate union-find, so the
-    clusters never depend on edge order). A cluster attaches whole when any of
-    its members is already ``joined`` (grouped by a high edge):
-    every edge of the cluster is unioned. Otherwise no member joins, so a lone
-    Live Photo still and its video stay ``group_id=None``."""
+    clusters never depend on edge order). ``has_still`` maps each component
+    root to whether that component holds any still (non-video) file. Per
+    cluster, by the roots of its already-``joined`` members:
+
+    * no joined member: nothing joins. A lone Live Photo stays ungrouped.
+    * at most one root holds a still: the whole cluster joins, so one capture's
+      still and its video-only copies become one group.
+    * two or more roots hold a still: content kept those stills apart, so the
+      cluster would bridge them. Nothing is unioned, and its unjoined members
+      are returned for the caller's reason text.
+
+    After a union the merged component's ``has_still`` is updated, so later
+    clusters see the same facts whatever the order. Clusters are disjoint.
+    """
     parent: dict[str, str] = {}
 
     def root(x: str) -> str:
@@ -1447,33 +1416,44 @@ def _pair_pass(
     clusters: dict[str, list[tuple[str, str]]] = {}
     for a, b in pair_pairs:
         clusters.setdefault(root(a), []).append((a, b))
-    for cluster_edges in clusters.values():
+    skipped: list[str] = []
+    for key in sorted(clusters):
+        cluster_edges = clusters[key]
         members = {node for edge in cluster_edges for node in edge}
-        if members & joined:
-            for a, b in cluster_edges:
-                union(a, b)
-            joined.update(members)
+        roots = {find(m) for m in members if m in joined}
+        if not roots:
+            continue
+        if sum(1 for r in roots if has_still.get(r, False)) > 1:
+            skipped.extend(sorted(members - joined))
+            continue
+        touched = {find(m) for m in members}
+        merged_still = any(has_still.get(r, False) for r in touched)
+        for a, b in cluster_edges:
+            union(a, b)
+        joined.update(members)
+        has_still[find(next(iter(members)))] = merged_still
+    return skipped
 
 
 def _assign_group_ids(
     rows: dict[str, ManifestRow],
     edges: list[Edge] | None = None,
-) -> None:
+) -> list[str]:
     """Assign group_id via union-find over duplicate_of edges + ``edges``.
 
     Files transitively connected by ``high`` edges (A→B, B→C) all receive the
     same group_id — the lexicographically smallest source_path in the
     component. Isolated files (no edge at all) receive group_id = None.
 
-    ``edges`` carries the non-``duplicate_of`` union edges: Live Photo
-    image<->video pairs (photo-manager#88; "pair" since GROUPING "9"), image
-    <-> image same-stem pairs (always high) and the pHash near-duplicate and
-    complementary edges (#538 / #824). Only ``high`` and ``pair`` edges exist
-    (GROUPING "10"): low-confidence evidence is a ``Hint`` and never unions.
+    ``edges`` carries the non-``duplicate_of`` union edges: the Live Photo
+    "pair" edges (content-gated, GROUPING "10") and the pHash near-duplicate
+    and complementary edges (#538 / #824). Only ``high`` and ``pair`` edges
+    exist: low-confidence evidence is a ``Hint`` and never unions.
 
-    Then the "pair" edges (``_pair_pass``): a Live Photo cluster joins a group
-    only when one of its members is already grouped. A lone pair stays
-    ungrouped.
+    The "pair" edges run last (``_pair_pass``). A cluster joins only through a
+    member that is already grouped, and never bridges two components that each
+    hold a still. Returns the
+    unjoined members of every refused cluster, for the caller's reason text.
 
     Which lone file pairs with which follows path spelling (the lex-min rule);
     that is deliberate, so a rescore reproduces the same groups.
@@ -1505,12 +1485,19 @@ def _assign_group_ids(
     pair_pairs = sorted(
         (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "pair"
     )
-    _pair_pass(pair_pairs, union, joined)
+    # Component root -> does the component hold any still? Built from every row
+    # (a still with no group is its own component), after the high unions.
+    has_still: dict[str, bool] = {}
+    for path in rows:
+        r = find(path)
+        has_still[r] = has_still.get(r, False) or not is_video(path)
+    skipped = _pair_pass(pair_pairs, find, union, joined, has_still)
 
     for row in rows.values():
         if row.source_path in joined:
             row.group_id = find(row.source_path)
         # else: stays None (isolated file, or a hint, which never groups)
+    return skipped
 
 
 # ---------------------------------------------------------------------------

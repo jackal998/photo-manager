@@ -57,6 +57,9 @@ def _hr(
     # Constant signature: every row reads as the same pixels, so a pHash-0
     # format duplicate keeps EXACT (the pixel gate, GROUPING "8", passes).
     rgb32: bytes | None = bytes(3072),
+    # GROUPING 10 (G4): the Apple ContentIdentifier that pairs a Live still
+    # with its video. None = no identity read (the default for every fixture).
+    content_identifier: str | None = None,
 ) -> HashResult:
     return HashResult(
         record=_record(
@@ -71,6 +74,7 @@ def _hr(
         pixel_width=pixel_width,
         pixel_height=pixel_height,
         rgb32=rgb32,
+        content_identifier=content_identifier,
     )
 
 
@@ -344,12 +348,13 @@ class TestLivePhotoPair:
         mov_path = Path("/iphone/IMG_1234.MOV")
         orig_heic_path = Path("/jdrive/IMG_1234.HEIC")
 
+        # GROUPING 10 (G4): a pair needs the same ContentIdentifier on both.
         heic = _hr(str(heic_path), sha256="x", source_label="jdrive",
                    file_type="heic", exif_date=_dt(),
-                   pair_partner=mov_path)
+                   pair_partner=mov_path, content_identifier="CID-1234")
         mov = _hr(str(mov_path), sha256="y", phash=None,
                   source_label="jdrive", file_type="mov", exif_date=_dt(),
-                  pair_partner=heic_path)
+                  pair_partner=heic_path, content_identifier="CID-1234")
         orig = _hr(str(orig_heic_path), sha256="x", source_label="iphone",
                    file_type="heic", exif_date=_dt())
 
@@ -409,10 +414,10 @@ class TestLivePhotoPair:
 
         heic = _hr(str(heic_path), sha256="hh", source_label="jdrive",
                    file_type="heic", exif_date=_dt(),
-                   pair_partner=mov_path)
+                   pair_partner=mov_path, content_identifier="CID-IMG")
         mov = _hr(str(mov_path), sha256="mm", phash=None,
                   source_label="jdrive", file_type="mov", exif_date=_dt(),
-                  pair_partner=heic_path)
+                  pair_partner=heic_path, content_identifier="CID-IMG")
         orig_heic = _hr(str(orig_heic_path), sha256="hh", source_label="iphone",
                         file_type="heic", exif_date=_dt())
         other_mov = _hr(str(other_mov_path), sha256="mm", phash=None,
@@ -448,14 +453,19 @@ class TestLivePhotoPair:
         mp4_path = Path("/iphone/IMG_4278.MP4")
         cluster = (heic_path, mov_path, mp4_path)
 
+        # GROUPING 10 (G4): the three share one ContentIdentifier, so the
+        # cluster is a real capture rather than a name collision.
+        cid = "CID-4278"
         heic = _hr(str(heic_path), sha256="h1", source_label="iphone",
-                   file_type="heic", exif_date=_dt(),
+                   file_type="heic", exif_date=_dt(), content_identifier=cid,
                    pair_cluster=tuple(p for p in cluster if p != heic_path))
         mov = _hr(str(mov_path), sha256="m1", phash=None,
                   source_label="iphone", file_type="mov", exif_date=_dt(),
+                  content_identifier=cid,
                   pair_cluster=tuple(p for p in cluster if p != mov_path))
         mp4 = _hr(str(mp4_path), sha256="p1", phash=None,
                   source_label="iphone", file_type="mp4", exif_date=_dt(),
+                  content_identifier=cid,
                   pair_cluster=tuple(p for p in cluster if p != mp4_path))
 
         # The byte copy of the still is the test's real subject (the still is
@@ -485,10 +495,10 @@ class TestLivePhotoPair:
         orig_path = Path("/iphone/IMG_5678.HEIC")
         heic = _hr(str(heic_path), sha256="dup", source_label="jdrive",
                    file_type="heic", exif_date=_dt(),
-                   pair_partner=mov_path)
+                   pair_partner=mov_path, content_identifier="CID-5678")
         mov = _hr(str(mov_path), sha256="solo", phash=None,
                   source_label="jdrive", file_type="mov", exif_date=_dt(),
-                  pair_partner=heic_path)
+                  pair_partner=heic_path, content_identifier="CID-5678")
         orig = _hr(str(orig_path), sha256="dup", source_label="iphone",
                    file_type="heic", exif_date=_dt())
 
@@ -552,12 +562,13 @@ class TestSameStemCaptureGate:
         gate has no disconfirming evidence and keeps the pair edge (no
         regression to the #88 pair invariant). GROUPING "9": a lone pair has no
         group, so the byte copy is what makes the group legitimate."""
+        # GROUPING 10 (G4): the pair needs the same ContentIdentifier on both.
         heic = _hr("/cam/IMG_1.heic", sha256="hh", phash="f0f0f0f0f0f0f0f0",
                    source_label="src", file_type="heic", exif_date=_dt(),
-                   pair_cluster=(Path("/cam/IMG_1.mov"),))
+                   pair_cluster=(Path("/cam/IMG_1.mov"),), content_identifier="CID-IMG1")
         mov = _hr("/cam/IMG_1.mov", sha256="mm", phash=None,
                   source_label="src", file_type="mov", exif_date=_dt(),
-                  pair_cluster=(Path("/cam/IMG_1.heic"),))
+                  pair_cluster=(Path("/cam/IMG_1.heic"),), content_identifier="CID-IMG1")
         copy = _hr("/copy/IMG_1.heic", sha256="hh", phash="f0f0f0f0f0f0f0f0",
                    source_label="src", file_type="heic", exif_date=_dt())
         rows = _rows(classify([heic, mov, copy]))
@@ -627,10 +638,11 @@ class TestGroupId:
         orig_path = Path("/jdrive/IMG.HEIC")
 
         heic = _hr(str(heic_path), sha256="x", source_label="jdrive",
-                   file_type="heic", exif_date=_dt(), pair_partner=mov_path)
+                   file_type="heic", exif_date=_dt(), pair_partner=mov_path,
+                   content_identifier="CID-IMG")
         mov = _hr(str(mov_path), sha256="y", phash=None,
                   source_label="jdrive", file_type="mov", exif_date=_dt(),
-                  pair_partner=heic_path)
+                  pair_partner=heic_path, content_identifier="CID-IMG")
         orig = _hr(str(orig_path), sha256="x", source_label="iphone",
                    file_type="heic", exif_date=_dt())
 
@@ -1009,9 +1021,11 @@ class TestCaseSensitiveCollision:
             _hr(r"D:\Photos\earlier.heic", sha256="dup",
                 source_label="takeout", exif_date=_dt()),
             _hr(str(heic), sha256="dup", source_label="jdrive",
-                file_type="heic", pair_partner=mov_lower, exif_date=_dt()),
+                file_type="heic", pair_partner=mov_lower, exif_date=_dt(),
+                content_identifier="CID-IMG-X"),
             _hr(str(mov_lower), sha256="movhash", phash=None,
-                source_label="jdrive", file_type="mov", exif_date=_dt()),
+                source_label="jdrive", file_type="mov", exif_date=_dt(),
+                content_identifier="CID-IMG-X"),
             _hr(str(mov_upper), sha256="distinct", phash=None,
                 source_label="jdrive", file_type="mov", exif_date=_dt()),
         ]
