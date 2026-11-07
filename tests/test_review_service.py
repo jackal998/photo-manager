@@ -166,6 +166,27 @@ class TestLoadReview:
         assert len(result["roots"]) > 0, "roots must be non-empty"
         assert any("photos" in r for r in result["roots"])
 
+    @pytest.mark.parametrize(
+        ("stored", "expected"),
+        [(None, "high"), ("medium", "medium"), ("junk", "high")],
+    )
+    def test_load_review_returns_confirm_below_from_settings(
+        self, tmp_path, stored, expected
+    ):
+        """PR-3 — the review payload carries the confirm threshold the web
+        client filters on. Unset and junk resolve to "high" (fail to the safe
+        default), and "medium" passes through."""
+
+        class _Settings:
+            def get(self, key, default=None):
+                if key == "scan.auto_select.confirm_below" and stored is not None:
+                    return stored
+                return default
+
+        manifest = _make_pair(tmp_path)
+        result = load_review(str(manifest), settings=_Settings())
+        assert result["confirm_below"] == expected
+
     def test_manifest_path_echoed(self, tmp_path):
         manifest = _make_pair(tmp_path)
         result = load_review(str(manifest))

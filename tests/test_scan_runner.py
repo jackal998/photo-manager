@@ -212,18 +212,20 @@ class TestAutoSelectPipeline:
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
-                "SELECT source_path, user_decision, is_locked FROM migration_manifest"
+                "SELECT source_path, action, user_decision, is_locked"
+                " FROM migration_manifest"
             ).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
-    def test_auto_select_enabled_locks_keeper(self, tmp_path):
-        """run_pipeline with auto_select_enabled=True locks the top keeper.
+    def test_auto_select_enabled_stamps_keeper_without_lock(self, tmp_path):
+        """run_pipeline with auto_select_enabled=True stamps the top keeper KEEP.
 
-        After a successful scan of a dup group:
+        PR-3 — the keeper lock is removed. After a successful scan of a dup group:
         - bus.finished() fires (no bus.failed())
-        - exactly one row has is_locked=1 (the keeper)
+        - exactly one row has action='KEEP' (the keeper)
+        - no row has is_locked=1
         - that keeper's user_decision is '' (canonical keep, not 'keep')
         """
         from core.app_service.cancel_token import _CancelToken
@@ -255,11 +257,14 @@ class TestAutoSelectPipeline:
         )
 
         rows = self._read_manifest_rows(out)
-        locked = [r for r in rows if r["is_locked"]]
-        assert len(locked) >= 1, (
-            f"auto-select must lock at least one keeper; rows={rows!r}"
+        keepers = [r for r in rows if r["action"] == "KEEP"]
+        assert len(keepers) == 1, (
+            f"auto-select must stamp exactly one keeper KEEP; rows={rows!r}"
         )
-        for r in locked:
+        assert not any(r["is_locked"] for r in rows), (
+            f"PR-3: auto-select must not lock any row; rows={rows!r}"
+        )
+        for r in keepers:
             assert r["user_decision"] == "", (
                 f"keeper user_decision must be '' (not 'keep'); got {r['user_decision']!r}"
             )
@@ -270,7 +275,7 @@ class TestAutoSelectPipeline:
         After a successful scan of a dup group with auto_select_aggressive_delete:
         - bus.finished() fires
         - non-keeper rows get user_decision='delete'
-        - the keeper row stays user_decision='' with is_locked=1
+        - the keeper row is stamped action='KEEP' with user_decision='' and no lock
         """
         from core.app_service.cancel_token import _CancelToken
         from core.app_service.dtos import ScanConfig
@@ -302,10 +307,13 @@ class TestAutoSelectPipeline:
         )
 
         rows = self._read_manifest_rows(out)
-        locked = [r for r in rows if r["is_locked"]]
+        keepers = [r for r in rows if r["action"] == "KEEP"]
         deleted = [r for r in rows if r["user_decision"] == "delete"]
-        assert len(locked) >= 1, (
-            f"aggressive auto-select must still lock a keeper; rows={rows!r}"
+        assert len(keepers) >= 1, (
+            f"aggressive auto-select must still stamp a keeper KEEP; rows={rows!r}"
+        )
+        assert not any(r["is_locked"] for r in rows), (
+            f"PR-3: aggressive auto-select must not lock any row; rows={rows!r}"
         )
         assert len(deleted) >= 1, (
             f"aggressive auto-select must mark at least one non-keeper for delete; rows={rows!r}"
@@ -359,13 +367,13 @@ class TestAutoSelectPipeline:
         names = {Path(r["source_path"]).name for r in rows}
         assert names == {"a.jpg", "b.jpg"}, f"unexpected rows: {rows!r}"
 
-        locked = [r for r in rows if r["is_locked"]]
-        assert len(locked) == 1, (
-            "exactly one keeper must be locked in the SAME manifest that "
+        keepers = [r for r in rows if r["action"] == "KEEP"]
+        assert len(keepers) == 1, (
+            "exactly one keeper must be stamped KEEP in the SAME manifest that "
             f"holds all scanned rows; rows={rows!r}"
         )
-        assert locked[0]["user_decision"] == "", (
-            f"keeper's user_decision must be canonical ''; got {locked[0]!r}"
+        assert keepers[0]["user_decision"] == "", (
+            f"keeper's user_decision must be canonical ''; got {keepers[0]!r}"
         )
 
     def test_failed_auto_select_write_leaves_no_partial_manifest(
@@ -429,11 +437,11 @@ class TestAutoSelectPipeline:
         """#651 — the load-bearing durability guarantee: a failed RE-SCAN
         must never destroy an existing good manifest.
 
-        First write a real manifest (auto-select on → rows + a locked
-        keeper). Then inject a failure inside write_manifest's auto-select
+        First write a real manifest (auto-select on → rows + a KEEP
+        stamp). Then inject a failure inside write_manifest's auto-select
         block on a second scan to the SAME output_path. The second
         run_pipeline must raise and the ORIGINAL manifest — every row and
-        the keeper lock — must survive byte-for-byte, because os.replace()
+        the KEEP stamp — must survive byte-for-byte, because os.replace()
         is skipped and the destination is never touched. This is the exact
         real-user scenario #651 protects (re-scanning over prior decisions);
         the fresh-scan sibling test only proves no partial file is created.
@@ -462,8 +470,8 @@ class TestAutoSelectPipeline:
         run_pipeline(config, _CancelToken(), _SpyBus())
         good_rows = self._read_manifest_rows(out)
         good_bytes = out.read_bytes()
-        assert len(good_rows) == 2 and sum(r["is_locked"] for r in good_rows) == 1, (
-            f"precondition: first scan must write 2 rows + 1 lock; got {good_rows!r}"
+        assert len(good_rows) == 2 and sum(r["action"] == "KEEP" for r in good_rows) == 1, (
+            f"precondition: first scan must write 2 rows + 1 KEEP; got {good_rows!r}"
         )
 
         # 2. Second scan fails inside the folded auto-select write.

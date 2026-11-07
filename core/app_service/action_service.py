@@ -321,7 +321,11 @@ def apply_best_copy(
             "groups": serialize_groups(vm.groups),
         }
 
-    non_keepers = non_keepers_for_aggressive_delete(scored, keepers)
+    # PR-3: a user-invoked best-copy keeps #517 semantics (threshold "medium")
+    # and its keeper lock; the user is already looking at this group.
+    non_keepers = non_keepers_for_aggressive_delete(
+        scored, keepers, confirm_below="medium"
+    )
     decisions, lock_states = build_auto_select_writes(keepers, non_keepers)
 
     # The keeper is written with lock_after=True and every other row with None:

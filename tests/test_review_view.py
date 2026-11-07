@@ -248,7 +248,7 @@ class TestSerializeGroups:
             "is_locked", "is_ref_winner", "similarity", "score",
             "file_size_bytes", "pixel_width", "pixel_height",
             "shot_date", "creation_date", "phash", "hamming_distance",
-            "thumbnail_url",
+            "thumbnail_url", "confidence_level",
             "exif_tag_count", "gps_present", "xmp_derived",
             "reason", "match_confidence", "keep_all",
         }
@@ -363,6 +363,18 @@ class TestReasonAndConfidenceSerialisation:
         assert row["reason"] == "near-duplicate (hamming=3)"
         assert row["match_confidence"] == "high"
         assert row["keep_all"] is False
+
+    def test_review_high_row_serialises_medium_confidence_level(self):
+        """PR-3 — a REVIEW_DUPLICATE row whose match_confidence is "high" is
+        serialised as confidence_level "medium". match_confidence alone cannot
+        express the medium tier; the classifier action adds it. Master had no
+        confidence_level field at all."""
+        row = self._row(_FakeRecord(
+            "/photos/near.jpg", action="REVIEW_DUPLICATE", hamming_distance=2,
+            reason="near-duplicate (hamming=2)", match_confidence="high",
+        ))
+        assert row["match_confidence"] == "high"
+        assert row["confidence_level"] == "medium"
 
     def test_burst_reason_sets_keep_all(self):
         """Deleting the BURST_PREFIX derivation in _build_file_row would leave

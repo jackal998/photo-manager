@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.services.auto_select import row_confidence_level
 from scanner.dedup import BURST_PREFIX
 from scanner.media import is_video as _is_video
 from scanner.phash_distance import hamming_distance as _phash_hamming
@@ -169,6 +170,9 @@ def _build_file_row(
         # client never copies an English string.
         "reason": reason,
         "match_confidence": getattr(record, "match_confidence", None),
+        # PR-3 — the threshold level ("high" | "medium" | "low" | None), which
+        # adds the classifier-action medium tier that match_confidence lacks.
+        "confidence_level": row_confidence_level(record),
         "keep_all": reason.startswith(BURST_PREFIX),
     }
 

@@ -84,20 +84,21 @@ def write_manifest(
         cleanup on the next call, but the live manifest stays consistent.
 
     #651 — ``keepers`` / ``non_keepers_for_delete`` fold the post-scan
-    auto-select decisions (keeper locks, optional aggressive-delete
-    decisions) INTO this same write. When ``keepers is not None`` the
-    schema is lazily migrated and the auto-select UPDATEs run on the
-    SAME tmp connection, BEFORE the single ``conn.commit()`` and the
-    atomic ``os.replace()`` below — so a crash or exception mid-write
-    never leaves a manifest on disk with rows but no keeper lock (the
-    incoherence window the separate post-write call used to leave
-    open). ``keepers is None`` (the default) is the byte-identical
+    auto-select decisions (keeper KEEP stamps, optional aggressive-delete
+    decisions) INTO this same write. PR-3: the fold no longer locks the
+    keepers, so a stamped keeper stays unlocked and editable. When
+    ``keepers is not None`` the schema is lazily migrated and the
+    auto-select UPDATEs run on the SAME tmp connection, BEFORE the single
+    ``conn.commit()`` and the atomic ``os.replace()`` below — so a crash
+    or exception mid-write never leaves a manifest on disk with rows but
+    no auto-select decisions (the incoherence window the separate
+    post-write call used to leave open). ``keepers is None`` (the default) is the byte-identical
     pre-#651 code path: no migration, no auto-select UPDATEs.
 
     Args:
         rows: Classified manifest rows to insert.
         output: Destination path for the manifest SQLite file.
-        keepers: Paths receiving ``user_decision=""`` + ``is_locked=1``.
+        keepers: Paths receiving ``user_decision=""`` (no lock, PR-3).
             ``None`` skips the auto-select write entirely (no
             auto-select configured for this scan). An empty set is
             treated the same as ``None`` by the caller's convention —
@@ -190,7 +191,7 @@ def write_manifest(
             # so the UPDATEs below never hit a missing column.
             migrate_manifest_schema(conn)
             decisions, lock_states = build_auto_select_writes(
-                keepers, non_keepers_for_delete
+                keepers, non_keepers_for_delete, lock_keepers=False
             )
             ctx = decision_log.make_context(
                 verb="scan_auto_select", source="auto_select"

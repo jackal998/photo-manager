@@ -1367,22 +1367,31 @@ def run_pipeline(
     keepers: set[str] = set()
     non_keepers: "set[str] | None" = None
     if config.auto_select_enabled:
-        from core.services.auto_select import top_score_path_per_group
-        keepers = top_score_path_per_group(rows)
-        if keepers:
-            for row in rows:
-                if row.source_path in keepers:
-                    row.action = "KEEP"
-            bus.log(f"Auto-select: marked {len(keepers):,} keeper(s) per group.")
-            if config.auto_select_aggressive_delete:
-                from core.services.auto_select import (
-                    non_keepers_for_aggressive_delete,
-                )
-                non_keepers = non_keepers_for_aggressive_delete(rows, keepers)
-                bus.log(
-                    f"Auto-select aggressive: marked {len(non_keepers):,}"
-                    f" non-keeper(s) for delete."
-                )
+        from core.services.auto_select import (
+            groups_needing_look,
+            plan_auto_select,
+        )
+        confirm_below = config.auto_select_confirm_below
+        look_groups = groups_needing_look(rows, confirm_below)
+        stamped, deletes = plan_auto_select(
+            rows,
+            aggressive=config.auto_select_aggressive_delete,
+            confirm_below=confirm_below,
+        )
+        for row in rows:
+            if row.source_path in stamped:
+                row.action = "KEEP"
+        bus.log(
+            f"Auto-select: marked {len(stamped):,} keeper(s);"
+            f" {len(look_groups):,} group(s) need your look"
+            f" (confirm below {confirm_below})."
+        )
+        if config.auto_select_aggressive_delete:
+            bus.log(
+                f"Auto-select aggressive: marked {len(deletes):,} row(s) for delete."
+            )
+        keepers = stamped
+        non_keepers = deletes or None
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -1401,15 +1410,12 @@ def run_pipeline(
     write_manifest(
         rows,
         config.output_path,
-        keepers=keepers if keepers else None,
+        keepers=keepers if (keepers or non_keepers) else None,
         non_keepers_for_delete=non_keepers,
     )
     _emit_stage(bus, write_tracker, 1, 1, force=True)
-    if keepers:
-        bus.log(
-            f"Auto-select: locked {len(keepers):,} keeper(s);"
-            f" decisions written."
-        )
+    if keepers or non_keepers:
+        bus.log("Auto-select: decisions written (no keeper is locked).")
 
     bus.log("Done.")
     bus.finished(str(config.output_path))

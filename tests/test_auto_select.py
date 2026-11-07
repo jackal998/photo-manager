@@ -327,3 +327,158 @@ class TestNonKeepersForAggressiveDelete:
         ]
         targets = non_keepers_for_aggressive_delete(rows, keepers={"/p/A.tiff"})
         assert targets == set()
+
+
+class TestConfidenceThreshold:
+    """PR-3 — the confirm threshold, the #1047 aggressive half, and the
+    keeper-lock removal. Pure functions only; no I/O."""
+
+    def test_row_confidence_level_maps_action_and_confidence(self):
+        """Catches: a level mapping that drops the medium tier (REVIEW_DUPLICATE
+        read as high would let a pixels-differ near-duplicate be deleted as a
+        copy, #1047) or that ranks a low row above its action."""
+        from core.services.auto_select import row_confidence_level as level
+
+        assert level(_Row("/a", "g", 0.5, "high", "EXACT")) == "high"
+        assert level(_Row("/a", "g", 0.5, "high", "REVIEW_DUPLICATE")) == "medium"
+        assert level(_Row("/a", "g", 0.5, "low", "REVIEW_DUPLICATE")) == "low"
+        assert level(_Row("/a", "g", 0.5, "low", "UNDATED")) == "low"
+        assert level(_Row("/a", "g", 0.5, None, "")) is None
+        assert level(_Row("/a", "g", 0.5, None, "EXACT")) == "high"
+        assert level(_Row("/a", "g", 0.5, "high", "")) == "high"
+
+    def test_review_high_not_delete_eligible_when_threshold_high(self):
+        """#1047 — at confirm-below "high", a REVIEW_DUPLICATE/high row (same
+        pHash, pixels differ) is a near-duplicate, not a copy, so it must NOT be
+        marked delete. The EXACT copy in the same group stays eligible.
+        Flipped by PR-3 threshold; master deleted both."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+
+        rows = [
+            _Row("/p/keep.jpg", "g1", 0.9, "high", "EXACT"),
+            _Row("/p/copy.jpg", "g1", 0.5, "high", "EXACT"),
+            _Row("/p/near.jpg", "g1", 0.4, "high", "REVIEW_DUPLICATE"),
+        ]
+        targets = non_keepers_for_aggressive_delete(
+            rows, keepers={"/p/keep.jpg"}, confirm_below="high"
+        )
+        assert "/p/near.jpg" not in targets
+        assert "/p/copy.jpg" in targets
+
+    def test_review_high_delete_eligible_when_threshold_medium(self):
+        """#517 parity — at confirm-below "medium" the REVIEW_DUPLICATE/high
+        row is admitted and deleted exactly as before PR-3."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+
+        rows = [
+            _Row("/p/keep.jpg", "g1", 0.9, "high", "EXACT"),
+            _Row("/p/copy.jpg", "g1", 0.5, "high", "EXACT"),
+            _Row("/p/near.jpg", "g1", 0.4, "high", "REVIEW_DUPLICATE"),
+        ]
+        targets = non_keepers_for_aggressive_delete(
+            rows, keepers={"/p/keep.jpg"}, confirm_below="medium"
+        )
+        assert targets == {"/p/copy.jpg", "/p/near.jpg"}
+
+    def test_low_row_never_eligible_at_either_threshold(self):
+        """A low-confidence row is never a delete candidate, whichever threshold
+        is set; a pHash-only match stays a manual decision (#517)."""
+        from core.services.auto_select import non_keepers_for_aggressive_delete
+
+        rows = [
+            _Row("/p/keep.jpg", "g1", 0.9, "high", "EXACT"),
+            _Row("/p/low.jpg", "g1", 0.4, "low", "REVIEW_DUPLICATE"),
+        ]
+        for threshold in ("high", "medium"):
+            targets = non_keepers_for_aggressive_delete(
+                rows, keepers={"/p/keep.jpg"}, confirm_below=threshold
+            )
+            assert "/p/low.jpg" not in targets, threshold
+
+    def test_plan_auto_select_auto_stamps_no_keeper_in_a_below_threshold_group(self):
+        """Catches: the keeper of an uncertain group is stamped KEEP anyway,
+        which is the PR-3 bug (auto mode decides a group it cannot judge).
+        g1 holds a REVIEW/high row so at "high" it gets no stamp; g2 is all EXACT
+        and is stamped."""
+        from core.services.auto_select import plan_auto_select
+
+        rows = [
+            _Row("/p/a1.jpg", "g1", 0.9, "high", "REVIEW_DUPLICATE"),
+            _Row("/p/a2.jpg", "g1", 0.4, "high", "EXACT"),
+            _Row("/p/b1.jpg", "g2", 0.8, "high", "EXACT"),
+            _Row("/p/b2.jpg", "g2", 0.3, "high", "EXACT"),
+        ]
+        stamped, deletes = plan_auto_select(
+            rows, aggressive=False, confirm_below="high"
+        )
+        assert stamped == {"/p/b1.jpg"}
+        assert deletes == set()
+
+    def test_plan_auto_select_aggressive_never_deletes_the_unstamped_keeper(self):
+        """Catches: an unstamped keeper is treated as an ordinary non-keeper and
+        deleted. Delete protection uses every group's top scorer, stamped or not,
+        so the uncertain group's keeper survives while its EXACT copy is removed."""
+        from core.services.auto_select import plan_auto_select
+
+        rows = [
+            _Row("/p/a1.jpg", "g1", 0.9, "high", "REVIEW_DUPLICATE"),
+            _Row("/p/a2.jpg", "g1", 0.4, "high", "EXACT"),
+        ]
+        stamped, deletes = plan_auto_select(
+            rows, aggressive=True, confirm_below="high"
+        )
+        assert "/p/a1.jpg" not in stamped
+        assert "/p/a1.jpg" not in deletes
+        assert deletes == {"/p/a2.jpg"}
+
+    def test_plan_auto_select_aggressive_mixed_group_deletes_only_admitted_rows(self):
+        """Catches: a below-threshold row (REVIEW/high at "high") is deleted
+        just because its group has an admitted EXACT copy. The group needs a look,
+        so it gets no stamp; only the admitted EXACT non-keeper is deleted."""
+        from core.services.auto_select import plan_auto_select
+
+        rows = [
+            _Row("/p/keep.jpg", "g1", 0.9, "high", "EXACT"),
+            _Row("/p/copy.jpg", "g1", 0.5, "high", "EXACT"),
+            _Row("/p/near.jpg", "g1", 0.4, "high", "REVIEW_DUPLICATE"),
+        ]
+        stamped, deletes = plan_auto_select(
+            rows, aggressive=True, confirm_below="high"
+        )
+        assert stamped == set()
+        assert deletes == {"/p/copy.jpg"}
+
+    def test_groups_needing_look_ignores_unrated_rows(self):
+        """Catches: an unrated row (no level, e.g. a Ref-tier passenger) marks
+        its whole group as needing a look. g2 has only unrated rows and must
+        stay quiet; g1's REVIEW row counts at "high" but not at "medium"."""
+        from core.services.auto_select import groups_needing_look
+
+        rows = [
+            _Row("/p/a1.jpg", "g1", 0.9, "high", "REVIEW_DUPLICATE"),
+            _Row("/p/a2.jpg", "g1", 0.4, "high", "EXACT"),
+            _Row("/p/b1.jpg", "g2", 0.5, None, ""),
+        ]
+        assert groups_needing_look(rows, "high") == {"g1"}
+        assert groups_needing_look(rows, "medium") == set()
+
+    def test_resolve_confirm_below_falls_back_to_high(self):
+        """Catches: a junk or missing stored value widening the threshold. Only
+        "high" and "medium" are accepted; anything else resolves to "high"."""
+        from core.services.auto_select import resolve_confirm_below
+
+        assert resolve_confirm_below(None) == "high"
+        assert resolve_confirm_below("junk") == "high"
+        assert resolve_confirm_below("low") == "high"
+        assert resolve_confirm_below("medium") == "medium"
+
+    def test_build_writes_without_lock_returns_no_lock_states(self):
+        """Catches: the scan path still locking its keepers. PR-3 writes the
+        KEEP stamp without a lock; lock_keepers=True keeps the best-copy lock."""
+        from core.services.auto_select import build_auto_select_writes
+
+        decisions, locks = build_auto_select_writes({"/a"}, lock_keepers=False)
+        assert decisions == {"/a": ""}
+        assert locks == {}
+        _, locks_default = build_auto_select_writes({"/a"})
+        assert locks_default == {"/a": True}

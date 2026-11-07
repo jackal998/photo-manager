@@ -17,6 +17,7 @@ from infrastructure.manifest_repository import DecisionWrite, ManifestRepository
 from infrastructure.settings import load_settings
 from app.viewmodels.main_vm import MainVM
 from core.app_service.review_view import serialize_groups
+from core.services.auto_select import resolve_confirm_below
 
 # Valid stored user_decision values.
 # Cross-reference: core.constants.IGNORE_DECISION == "ignore". Kept as an
@@ -62,6 +63,7 @@ def load_review(
             "total_groups": int,
             "total_files": int,
             "roots": [sorted distinct folder_path strings],
+            "confirm_below": "high" | "medium" (PR-3 threshold),
         }
 
     Raises:
@@ -95,6 +97,9 @@ def load_review(
         "total_groups": len(groups),
         "total_files": total_files,
         "roots": roots,
+        "confirm_below": resolve_confirm_below(
+            settings.get("scan.auto_select.confirm_below")
+        ),
     }
 
 

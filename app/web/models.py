@@ -8,7 +8,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,7 @@ from core.app_service.dtos import (
     ScanConfig,
 )
 from core.app_service.scan_runner import hash_pool_fingerprint
+from core.services.auto_select import DEFAULT_CONFIRM_BELOW, resolve_confirm_below
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +282,8 @@ class WebScanRequest(BaseModel):
     hash_pool_rates: dict | None = None
     auto_select_enabled: bool = False
     auto_select_aggressive_delete: bool = False
+    # None = resolve from settings.json (scan.auto_select.confirm_below).
+    auto_select_confirm_below: Literal["high", "medium"] | None = None
     autotune_read_knee: bool = False
     autotune_knees: dict = {}
 
@@ -322,12 +325,19 @@ class WebScanRequest(BaseModel):
             except (TypeError, ValueError):
                 exif_workers = 2
 
+        confirm_below = self.auto_select_confirm_below
+        if confirm_below is None:
+            confirm_below = resolve_confirm_below(
+                settings.get("scan.auto_select.confirm_below")
+            )
+
         return self.model_copy(
             update={
                 "hash_pool": hash_pool,
                 "hash_pool_rates": hash_pool_rates,
                 "autotune_knees": autotune_knees,
                 "exif_workers": exif_workers,
+                "auto_select_confirm_below": confirm_below,
             }
         )
 
@@ -355,6 +365,9 @@ class WebScanRequest(BaseModel):
             hash_pool_rates=dict(self.hash_pool_rates) if self.hash_pool_rates else None,
             auto_select_enabled=self.auto_select_enabled,
             auto_select_aggressive_delete=self.auto_select_aggressive_delete,
+            auto_select_confirm_below=(
+                self.auto_select_confirm_below or DEFAULT_CONFIRM_BELOW
+            ),
             autotune_read_knee=self.autotune_read_knee,
             autotune_knees=dict(self.autotune_knees),
         )
