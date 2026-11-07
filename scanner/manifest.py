@@ -101,8 +101,10 @@ def write_manifest(
         keepers: Paths receiving ``user_decision=""`` (no lock, PR-3).
             ``None`` skips the auto-select write entirely (no
             auto-select configured for this scan). An empty set is
-            treated the same as ``None`` by the caller's convention —
-            pass ``None`` when there are no keepers to write.
+            valid and different from ``None``: the auto-select writes
+            still run and only ``non_keepers_for_delete`` lands (PR-3 —
+            an aggressive scan whose every group needs a look stamps no
+            keeper but still deletes the admitted copies).
         non_keepers_for_delete: Paths receiving
             ``user_decision='delete'`` (the aggressive #393 path).
             Ignored when ``keepers`` is ``None``.

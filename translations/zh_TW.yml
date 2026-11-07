@@ -660,7 +660,7 @@ web:
     confirm_below_label: "信心低於此等級時請我確認"
     confirm_below_high: "高 — 每組近似重複都要確認"
     confirm_below_medium: "中 — 只確認低信心的配對"
-    confirm_below_help: "信心低於此等級的群組，自動選擇不會做任何決定，並列在「需要你看」。"
+    confirm_below_help: "群組裡有列低於此等級時，自動選擇不蓋保留章，也絕不把低於此等級的列標成刪除；這些群組列在「需要你看」。"
     grouping_sensitivity_label: "分組敏感度"
     phash_label: "pHash 相似度閾值（預設：10，範圍：2–20）"
     phash_desc: "兩張 64 位元 pHash 可相差幾個位元仍算同組。越低 = 越嚴格。"

@@ -366,6 +366,23 @@ class TestScanAutoSelect:
         assert {e.verb for e in entries} == {"scan_auto_select"}
         assert by_path[str(loser)].new_decision == "delete"
 
+    def test_write_manifest_with_empty_keepers_still_writes_deletes(self, tmp_path):
+        """PR-3 — an aggressive scan whose every group needs a look stamps no
+        keeper but still deletes the admitted copies, so the runner passes an
+        EMPTY keeper set (not ``None``). ``None`` would skip the fold and drop
+        those deletes silently."""
+        keeper, loser = _file(tmp_path, "keep.jpg"), _file(tmp_path, "loser.jpg")
+        manifest = _scan(
+            tmp_path,
+            [_row(keeper, "g1", score=0.9), _row(loser, "g1", score=0.5)],
+            keepers=set(),
+            non_keepers_for_delete={str(loser)},
+        )
+
+        by_path = {e.source_path: e for e in _log(manifest)}
+        assert set(by_path) == {str(loser)}
+        assert by_path[str(loser)].new_decision == "delete"
+
     def test_write_manifest_without_keepers_logs_nothing(self, tmp_path):
         f1 = _file(tmp_path, "a.jpg")
         manifest = _scan(tmp_path, [_row(f1, "g1")])

@@ -866,7 +866,7 @@ export function ScanDialog({ open, onOpenChange }: ScanDialogProps) {
               <p className="text-xs text-ink-muted">
                 {t(
                   "web.scan.confirm_below_help",
-                  "Auto-select makes no decision on a group below this level; those groups appear under Needs your look."
+                  "In a group below this level auto-select stamps no keeper and never marks a row below it for delete; those groups appear under Needs your look."
                 )}
               </p>
             </div>

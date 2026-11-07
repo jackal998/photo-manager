@@ -802,7 +802,7 @@ web:
     confirm_below_label: "Ask me to confirm when confidence is below"
     confirm_below_high: "High — confirm every near-duplicate"
     confirm_below_medium: "Medium — confirm only low-confidence matches"
-    confirm_below_help: "Auto-select makes no decision on a group below this level; those groups appear under Needs your look."
+    confirm_below_help: "In a group below this level auto-select stamps no keeper and never marks a row below it for delete; those groups appear under Needs your look."
     grouping_sensitivity_label: "Grouping sensitivity"
     phash_label: "pHash Similarity Threshold (default: 10, range: 2–20)"
     phash_desc: "How many bits two 64-bit pHashes may differ before grouping. Lower = stricter."
