@@ -156,14 +156,14 @@ code decides it, and which test or scenario pins it.
 
 - **Rule:** The exact-copies rule (B3, default on) covers byte copies and pixel-identical format duplicates. Off leaves them undecided; the keeper stamp is unchanged.
 - **Owning code:** `core/services/auto_select.py::non_keepers_for_aggressive_delete`, `core/services/auto_select_rules.py::RuleToggles`
-- **Pins:** `tests/test_auto_select.py::TestRuleToggles::test_b3_off_spares_exact_rows`, `tests/test_scan_runner.py::TestAutoSelectPipeline::test_rules_b3_off_writes_no_delete_for_byte_copies`
+- **Pins:** `tests/test_auto_select.py::TestRuleToggles::test_b3_off_spares_exact_rows`, `tests/test_scan_runner.py::TestAutoSelectPipeline::test_rules_b3_off_writes_no_delete_for_byte_copies`, `qa/web/scenarios/s81_rule_toggles.py`
 - **Status:** pinned
 
 ### R-SCAN-7 — With the people-and-pets rule on, aggressive auto-select marks only EXACT rows for delete, at either threshold
 
 - **Rule:** Default on. A rule can veto a delete the threshold admits; it never admits a row below the threshold.
 - **Owning code:** `core/services/auto_select.py::non_keepers_for_aggressive_delete`
-- **Pins:** `tests/test_auto_select.py::TestRuleToggles::test_b8_on_excludes_review_at_medium`, `tests/test_auto_select.py::TestRuleToggles::test_b8_on_changes_nothing_at_high`
+- **Pins:** `tests/test_auto_select.py::TestRuleToggles::test_b8_on_excludes_review_at_medium`, `tests/test_auto_select.py::TestRuleToggles::test_b8_on_changes_nothing_at_high`, `qa/web/scenarios/s81_rule_toggles.py`
 - **Status:** pinned
 
 ### R-SCAN-8 — With the RAW + JPEG rule on, the best non-RAW row of a RAW-kept group is never marked for delete
