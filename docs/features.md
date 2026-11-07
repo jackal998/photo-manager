@@ -85,6 +85,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Scan flow — manifest summary in progress log](features/scan.md#scan-flow--manifest-summary-in-progress-log) | Scan |
 | [Scan flow — rescan confirm](features/scan.md#scan-flow--rescan-confirm) | Scan |
 | [Scan flow — visual selection of KEEP rows after scan](features/scan.md#scan-flow--visual-selection-of-keep-rows-after-scan) | Scan |
+| [Scan grouping — a lone Live Photo is not a group](features/scan.md#scan-grouping--a-lone-live-photo-is-not-a-group) | Scan |
 | [Scan grouping — complementary RAW + lossy pair](features/scan.md#scan-grouping--complementary-raw--lossy-pair) | Scan |
 | [Scan grouping — EXACT requires pixel identity](features/scan.md#scan-grouping--exact-requires-pixel-identity) | Scan |
 | [Scan grouping — low-confidence hints never chain](features/scan.md#scan-grouping--low-confidence-hints-never-chain) | Scan |

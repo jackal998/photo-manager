@@ -1,0 +1,1 @@
+A Live Photo still and its own video no longer form a group by themselves; the video joins its still's group only when the still is a duplicate of something else, so lone pairs disappear from the group view and are no longer locked KEEP (#1049)
