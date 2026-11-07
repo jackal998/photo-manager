@@ -38,6 +38,7 @@ import {
   SCAN_ADD_SOURCE,
   SCAN_AUTO_SELECT,
   SCAN_AUTOTUNE,
+  SCAN_CONFIRM_BELOW,
   SCAN_CLOUD_ANALYSIS_OPT_IN,
   SCAN_CANCEL_BUTTON,
   SCAN_COLOR_THRESHOLD,
@@ -507,6 +508,55 @@ describe("ScanDialog", () => {
 
     const knee = await screen.findByTestId(SCAN_AUTOTUNE);
     await waitFor(() => expect(knee).not.toBeChecked());
+  });
+
+  it("confirm-below loads the saved value and sends it on Start", async () => {
+    const user = userEvent.setup();
+    mockGetSettings.mockResolvedValueOnce({
+      "sources.list": [],
+      "sources.output": "",
+      "scan.auto_select.confirm_below": "medium",
+    } as never);
+    const startScanMock = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ startScan: startScanMock } as never);
+
+    renderDialog();
+    const select = await screen.findByTestId(SCAN_CONFIRM_BELOW);
+    await waitFor(() => expect(select).toHaveValue("medium"));
+    await user.type(screen.getByRole("textbox", { name: /source label/i }), "MyPhotos");
+    await user.type(screen.getByRole("textbox", { name: /source path/i }), "D:/pics");
+    await user.type(screen.getByTestId(SCAN_OUTPUT_PATH), "D:/out.db");
+    await user.click(screen.getByTestId(SCAN_START_BUTTON));
+
+    const [req] = startScanMock.mock.calls[0] as [{ auto_select_confirm_below: string }];
+    expect(req.auto_select_confirm_below).toBe("medium");
+  });
+
+  it("confirm-below change is persisted", async () => {
+    const user = userEvent.setup();
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [],
+      "sources.output": "",
+    } as never);
+    renderDialog();
+    const select = await screen.findByTestId(SCAN_CONFIRM_BELOW);
+
+    await user.selectOptions(select, "medium");
+
+    expect(mockPatchSettings).toHaveBeenCalledWith({
+      "scan.auto_select.confirm_below": "medium",
+    });
+  });
+
+  it("confirm-below defaults to high when unset", async () => {
+    mockGetSettings.mockResolvedValue({
+      "sources.list": [],
+      "sources.output": "",
+    } as never);
+    renderDialog();
+
+    const select = await screen.findByTestId(SCAN_CONFIRM_BELOW);
+    await waitFor(() => expect(select).toHaveValue("high"));
   });
 
   it("cloud analysis opt-in renders unchecked by default and PATCHes the key on change", async () => {

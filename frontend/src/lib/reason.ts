@@ -36,6 +36,8 @@ export function verdictChipLabel(
 
 const CONFIDENCE_TEXT: Record<string, [key: string, fallback: string]> = {
   high: ["web.reason.confidence_high", "Confidence: high"],
+  // PR-3 — the medium tier (REVIEW_DUPLICATE) comes from confidence_level.
+  medium: ["web.reason.confidence_medium", "Confidence: medium"],
   low: ["web.reason.confidence_low", "Confidence: low"],
 };
 
@@ -58,8 +60,11 @@ export function confidenceLabel(
 export function rowTooltip(row: FileRow, t: TranslateFn = IDENTITY_T): string {
   const lines: string[] = [classificationLabel(row.action, t)];
   if (row.reason && row.reason !== "unique") lines.push(row.reason);
-  if (row.match_confidence) {
-    lines.push(confidenceLabel(row.match_confidence, t));
+  // PR-3 — prefer the server's threshold level (it has the medium tier that
+  // match_confidence lacks); fall back to match_confidence on an older backend.
+  const level = row.confidence_level ?? row.match_confidence;
+  if (level) {
+    lines.push(confidenceLabel(level, t));
   }
   return lines.join("\n");
 }

@@ -141,4 +141,48 @@ describe("visibleSelectedPaths", () => {
     expect(visibleSelectedPaths(GROUPS, "japan", ALL)).toHaveLength(2);
     expect(visibleSelectedPaths(GROUPS, "", ALL)).toHaveLength(4);
   });
+
+  it("needs-look filter keeps whole groups with a below-threshold row", () => {
+    const levelled: Group[] = [
+      {
+        group_number: 1,
+        member_count: 2,
+        items: [
+          { ...mkRow("/a", "x.jpg"), confidence_level: "high" },
+          { ...mkRow("/a", "y.jpg"), confidence_level: "medium" },
+        ],
+      },
+      {
+        group_number: 2,
+        member_count: 1,
+        items: [{ ...mkRow("/b", "z.jpg"), confidence_level: "high" }],
+      },
+    ];
+    const kept = filterGroups(levelled, "", "high");
+    expect(kept.map((g) => g.group_number)).toEqual([1]);
+    expect(kept[0].items).toHaveLength(2);
+  });
+
+  it("returns groups by identity when both filters are off", () => {
+    expect(filterGroups(GROUPS, "", null)).toBe(GROUPS);
+  });
+
+  it("visibleSelectedPaths drops rows the needs-look filter hides", () => {
+    const levelled: Group[] = [
+      {
+        group_number: 1,
+        member_count: 1,
+        items: [{ ...mkRow("/a", "x.jpg"), confidence_level: "medium" }],
+      },
+      {
+        group_number: 2,
+        member_count: 1,
+        items: [{ ...mkRow("/b", "z.jpg"), confidence_level: "high" }],
+      },
+    ];
+    const picked = ["/a/x.jpg", "/b/z.jpg"];
+    expect(visibleSelectedPaths(levelled, "", picked, "high")).toEqual([
+      "/a/x.jpg",
+    ]);
+  });
 });

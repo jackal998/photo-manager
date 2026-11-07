@@ -23,6 +23,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { describeApiError } from "@/lib/apiErrorText";
 import { formatBytes } from "@/lib/format";
 import { deleteTotals } from "@/lib/deleteTotals";
+import { countNeedsLook } from "@/lib/needsLook";
 import type { Density } from "@/lib/density";
 import {
   MAIN_DENSITY_COMFORTABLE,
@@ -32,6 +33,7 @@ import {
   MAIN_STATUS_BAR,
   MAIN_STATUS_ERROR,
   MAIN_STATUS_DELETE_COUNT,
+  MAIN_STATUS_NEEDS_LOOK,
   MAIN_STATUS_RECLAIM,
   MAIN_STATUS_STRIP,
 } from "@/testids";
@@ -125,6 +127,14 @@ export function StatusBar({ statusText }: StatusBarProps) {
   const executeError = useAppStore((s) => s.execute.executeError);
   const executeOpen = useAppStore((s) => s.execute.executeOpen);
   const { count: deleteCount, bytes: deleteBytes } = deleteTotals(manifest.groups);
+  // PR-3 — the "Needs your look" toggle counts groups over the whole manifest,
+  // like the delete counter, so it reads the same with the filter on or off.
+  const needsLookOnly = useAppStore((s) => s.resultView.needsLookOnly ?? false);
+  const setNeedsLookOnly = useAppStore((s) => s.setNeedsLookOnly);
+  const needsLookCount = countNeedsLook(
+    manifest.groups,
+    manifest.confirmBelow ?? "high"
+  );
 
   // Both figures render together, at zero as well, whenever a manifest is
   // loaded — the same "never moves" reasoning as the danger CTA. A counter that
@@ -158,6 +168,22 @@ export function StatusBar({ statusText }: StatusBarProps) {
             </span>
           </>
         )}
+        <button
+          type="button"
+          aria-pressed={needsLookOnly}
+          data-testid={MAIN_STATUS_NEEDS_LOOK}
+          title={t(
+            "web.status.needs_look_tip",
+            "Show only the groups whose confidence is below your confirm threshold (Advanced settings). Click again to show all."
+          )}
+          disabled={needsLookCount === 0 && !needsLookOnly}
+          onClick={() => setNeedsLookOnly(!needsLookOnly)}
+          className="whitespace-nowrap px-1 disabled:opacity-40"
+        >
+          {t("web.status.needs_look", "⚑ Needs your look · {count}", {
+            count: needsLookCount,
+          })}
+        </button>
         <span className="min-w-0 flex-1" />
         {/* «Right-aligned, because it is a view preference and belongs
             furthest from the data.» */}

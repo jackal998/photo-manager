@@ -188,6 +188,17 @@ Entries for the **Web UI** area of the feature inventory. The index and the sect
 
 ---
 
+### Web — Needs your look filter
+- **Area:** Web UI
+
+- **Entry point:** The **⚑ Needs your look · N** toggle in the status strip (testid `main-status-needs-look`), after the delete counter and the reclaim figure — [frontend/src/components/StatusBar.tsx](../../frontend/src/components/StatusBar.tsx). Pressing it sets `resultView.needsLookOnly` ([frontend/src/store/useAppStore.ts](../../frontend/src/store/useAppStore.ts)).
+- **Trigger:** A click. The toggle is `aria-pressed` while on, and disabled at 0 unless it is already on, so an empty filter cannot be entered.
+- **Behaviour:** Shows only whole groups that hold at least one row whose `confidence_level` is below the saved confirm threshold (`manifest.confirmBelow`, the **Advanced settings** select — see [Scan dialog — confirm threshold](scan.md#scan-dialog--confirm-threshold-setting)). An unrated row (`confidence_level` null) never flags its group; an unknown level does, so it stays visible. The filter is applied in the group stage ([frontend/src/lib/rowFilter.ts](../../frontend/src/lib/rowFilter.ts), `filterGroups` and `visibleSelectedPaths`, pure logic in [frontend/src/lib/needsLook.ts](../../frontend/src/lib/needsLook.ts)) before the text filter, so the result tree, the bulk verbs and the **Set Action** selection count all see the same visible set. The toggle's count is the number of groups that need a look over the **whole manifest**, the way the delete counter counts, so it does not shrink while the filter is on.
+- **Conditions / variants:** View-only: it never writes a decision, a lock or the manifest, and it is not persisted, so a reload starts with the toggle off (the same rule as the toolbar text filter). It applies in every auto-select mode, including off, where those groups are simply the uncertain ones. The count uses the current threshold, not the one the scan used, so changing the setting moves the filter but not the stored stamps (see the scan entry). The tooltip points at the Advanced-settings select; it does not repeat the level.
+- **Related:** [#1047](https://github.com/jackal998/photo-manager/issues/1047); PR-3 of the auto-select PRD. Pinned by `frontend/src/lib/needsLook.test.ts`, `frontend/src/lib/rowFilter.test.ts` ("needs-look filter keeps whole groups with a below-threshold row"), `frontend/src/components/StatusBar.test.tsx` ("needs-look toggle shows the group count and toggles the filter") and [`qa/web/scenarios/s80_needs_your_look.py`](../../qa/web/scenarios/s80_needs_your_look.py) (high threshold: the toggle reads 1 and hides the admitted copy pair).
+
+---
+
 ### Web — manifest decision persistence
 - **Area:** Web UI
 

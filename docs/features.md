@@ -76,6 +76,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Scan dialog — auto-select aggressive ("delete all others")](features/scan.md#scan-dialog--auto-select-aggressive-delete-all-others) | Scan |
 | [Scan dialog — cloud analysis opt-in (setting-only)](features/scan.md#scan-dialog--cloud-analysis-opt-in-setting-only) | Scan |
 | [Scan dialog — collapse Advanced Settings](features/scan.md#scan-dialog--collapse-advanced-settings) | Scan |
+| [Scan dialog — confirm threshold (setting)](features/scan.md#scan-dialog--confirm-threshold-setting) | Scan |
 | [Scan dialog — exiftool workers (setting-only)](features/scan.md#scan-dialog--exiftool-workers-setting-only) | Scan |
 | [Scan dialog — folder list (no priority arrows)](features/scan.md#scan-dialog--folder-list-no-priority-arrows) | Scan |
 | [Scan dialog — hash pool mode](features/scan.md#scan-dialog--hash-pool-mode) | Scan |
@@ -116,6 +117,7 @@ Each entry lives in its Area file under [`features/`](features/). The table belo
 | [Web — filesystem browse dialog](features/web-ui.md#web--filesystem-browse-dialog) | Web UI |
 | [Web — main result tree multi-selection](features/web-ui.md#web--main-result-tree-multi-selection) | Web UI |
 | [Web — manifest decision persistence](features/web-ui.md#web--manifest-decision-persistence) | Web UI |
+| [Web — Needs your look filter](features/web-ui.md#web--needs-your-look-filter) | Web UI |
 | [Web — overlay window geometry (movable / resizable / persisted)](features/web-ui.md#web--overlay-window-geometry-movable--resizable--persisted) | Web UI |
 | [Web — preview panel resizable + persistence](features/web-ui.md#web--preview-panel-resizable--persistence) | Web UI |
 | [Web — result-tree column sort and resize persistence](features/web-ui.md#web--result-tree-column-sort-and-resize-persistence) | Web UI |

@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from app.web.models import SettingsUpdate
+from core.services.auto_select import DEFAULT_CONFIRM_BELOW
 from infrastructure.settings import load_settings
 
 router = APIRouter()
@@ -33,6 +34,10 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     # web ScanDialog pre-fill/display the exif worker count the way the
     # POST /api/scan resolver (WebScanRequest.resolved_with) reads it.
     "scan.exif_workers",
+    # PR-3 — the auto-select confirm threshold ("high" | "medium"). Read by the
+    # scan request resolver and by GET /api/manifest; the ScanDialog select
+    # writes it. Unknown values resolve to "high" server-side.
+    "scan.auto_select.confirm_below",
     # Cloud-analysis opt-in (privacy policy, 2026-11-06). Boolean, default
     # false. Setting only: NOTHING reads this flag yet — no cloud call exists.
     # Any future cloud tier must check it and send media only when true. The
@@ -51,10 +56,11 @@ _WEB_SETTINGS_KEYS: tuple[str, ...] = (
     "ui.action_dialog.recent_patterns",
 )
 
-# Served in place of None when the key has never been written. Only the
-# cloud-analysis opt-in needs a non-None default: absent means OFF.
+# Served in place of None when the key has never been written. The cloud-
+# analysis opt-in defaults OFF; the confirm threshold defaults to "high".
 _WEB_SETTINGS_DEFAULTS: dict[str, object] = {
     "scan.cloud_analysis_opt_in": False,
+    "scan.auto_select.confirm_below": DEFAULT_CONFIRM_BELOW,
 }
 
 

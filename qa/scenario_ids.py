@@ -347,6 +347,10 @@ ALL_SCENARIOS = [
     # user — a decision change never moves a row: a 4px stale dot appears and
     # the next click re-sorts. The View-menu mirror drives the same state.
     "s79_decision_sort",
+    # WEB-ONLY (PR-3, #1047) — "Needs your look" under the high threshold. The
+    # aggressive scan deletes the admitted copy pair and leaves the REVIEW
+    # near-dup group undecided; the status-bar toggle narrows the list to it.
+    "s80_needs_your_look",
 ]
 
 # Scenario ids that exist ONLY as qa/web/ Playwright drivers — the removed
@@ -367,4 +371,5 @@ WEB_ONLY_SCENARIOS: frozenset[str] = frozenset({
     "s77_preview_pane",
     "s78_empty_state",
     "s79_decision_sort",
+    "s80_needs_your_look",
 })

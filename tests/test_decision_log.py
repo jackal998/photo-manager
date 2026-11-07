@@ -343,7 +343,14 @@ class TestLockToggle:
 
 
 class TestScanAutoSelect:
-    def test_write_manifest_logs_keepers_and_aggressive_deletes(self, tmp_path):
+    def test_write_manifest_logs_aggressive_deletes_and_no_keeper_lock(self, tmp_path):
+        """PR-3 — the scan no longer locks the keeper.
+
+        The keeper's write is ``""`` over ``""`` with no lock, so it is not a
+        change and is absent from the log. Flipped: the keeper entry used to
+        assert ``(old_locked, new_locked) == (False, True)``. Only the aggressive
+        loser remains logged, as ``delete``.
+        """
         keeper, loser = _file(tmp_path, "keep.jpg"), _file(tmp_path, "loser.jpg")
         manifest = _scan(
             tmp_path,
@@ -354,10 +361,26 @@ class TestScanAutoSelect:
 
         entries = _log(manifest)
         by_path = {e.source_path: e for e in entries}
-        assert set(by_path) == {str(keeper), str(loser)}
+        assert set(by_path) == {str(loser)}
         assert {e.source for e in entries} == {"auto_select"}
         assert {e.verb for e in entries} == {"scan_auto_select"}
-        assert (by_path[str(keeper)].old_locked, by_path[str(keeper)].new_locked) == (False, True)
+        assert by_path[str(loser)].new_decision == "delete"
+
+    def test_write_manifest_with_empty_keepers_still_writes_deletes(self, tmp_path):
+        """PR-3 — an aggressive scan whose every group needs a look stamps no
+        keeper but still deletes the admitted copies, so the runner passes an
+        EMPTY keeper set (not ``None``). ``None`` would skip the fold and drop
+        those deletes silently."""
+        keeper, loser = _file(tmp_path, "keep.jpg"), _file(tmp_path, "loser.jpg")
+        manifest = _scan(
+            tmp_path,
+            [_row(keeper, "g1", score=0.9), _row(loser, "g1", score=0.5)],
+            keepers=set(),
+            non_keepers_for_delete={str(loser)},
+        )
+
+        by_path = {e.source_path: e for e in _log(manifest)}
+        assert set(by_path) == {str(loser)}
         assert by_path[str(loser)].new_decision == "delete"
 
     def test_write_manifest_without_keepers_logs_nothing(self, tmp_path):

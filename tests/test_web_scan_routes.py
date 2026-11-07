@@ -579,6 +579,45 @@ class TestCalibrationReadback:
         assert config.autotune_knees == {r"\\MINE": {"knee": 1, "recipe": "2"}}
 
 
+class TestConfirmBelowResolution:
+    """PR-3 — the auto-select confirm threshold on POST /api/scan. An unset
+    request reads scan.auto_select.confirm_below from settings; an explicit
+    request value wins; a junk value is refused at the boundary."""
+
+    @staticmethod
+    def _settings(confirm_below):
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.get.side_effect = lambda key, default=None: {
+            "scan.auto_select.confirm_below": confirm_below,
+        }.get(key, default)
+        return settings
+
+    def test_unset_request_reads_settings(self):
+        from app.web.models import WebScanRequest
+
+        req = WebScanRequest(sources={"D": "/x"}, output_path="/o.sqlite")
+        resolved = req.resolved_with(self._settings("medium"))
+        assert resolved.auto_select_confirm_below == "medium"
+
+    def test_explicit_value_wins_over_settings(self):
+        from app.web.models import WebScanRequest
+
+        req = WebScanRequest(
+            sources={"D": "/x"},
+            output_path="/o.sqlite",
+            auto_select_confirm_below="high",
+        )
+        resolved = req.resolved_with(self._settings("medium"))
+        assert resolved.auto_select_confirm_below == "high"
+
+    def test_invalid_value_is_422(self, client):
+        body = _valid_scan_body(auto_select_confirm_below="junk")
+        resp = client.post("/api/scan", json=body)
+        assert resp.status_code == 422
+
+
 class TestExifWorkersResolution:
     """WebScanRequest.resolved_with() exif_workers read-back — unit-level,
     isolated from the route/registry machinery (mirrors scan_dialog.py's

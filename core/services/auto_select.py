@@ -53,6 +53,8 @@ def _is_raw_path(source_path: str) -> bool:
 def build_auto_select_writes(
     keepers: set[str],
     non_keepers_for_delete: set[str] | None = None,
+    *,
+    lock_keepers: bool = True,
 ) -> tuple[dict[str, str], dict[str, bool]]:
     """Build the ``(decisions, lock_states)`` write-sets for the post-scan
     auto-select pass. Pure — no I/O, no schema access.
@@ -69,32 +71,40 @@ def build_auto_select_writes(
     click "Set Action → keep" path writes. Earlier versions wrote the
     literal ``"keep"`` string which then leaked into the tree's Action
     column as raw text instead of an empty cell (#425). The lock badge
-    in COL_LOCK is what signals the user that a row was auto-selected
-    as the keeper.
+    in COL_LOCK is what signals the user that a row was locked as the
+    keeper; the scan path no longer locks (PR-3), so it passes
+    ``lock_keepers=False``.
 
     Args:
         keepers: Paths of the per-group top-scored rows from
             :func:`top_score_path_per_group`. Each receives
-            ``user_decision=""`` AND ``is_locked=1``.
+            ``user_decision=""``, and ``is_locked=1`` when
+            ``lock_keepers`` is true.
         non_keepers_for_delete: Paths to receive
             ``user_decision='delete'``. ``None`` (the default) leaves
             non-keepers' decision untouched — that's the non-aggressive
             behaviour. Pass an empty set or ``None`` interchangeably;
             both skip the delete writes.
+        lock_keepers: When false, ``lock_states`` is empty and no
+            keeper is locked (PR-3: the scan path stamps without a
+            lock). Default true keeps the user-invoked best-copy lock.
 
     Returns:
         ``(decisions, lock_states)`` — ``decisions`` maps
         ``source_path -> user_decision``; ``lock_states`` maps
-        ``source_path -> True`` for every keeper.
+        ``source_path -> True`` for every keeper (empty when
+        ``lock_keepers`` is false).
     """
     # #425 — was {p: "keep" ...} which leaked as raw "keep" text in the
     # tree's Action column. "" is the canonical keep state per
     # settable_decisions(); the lock badge in COL_LOCK is the user-
-    # visible signal that the row was auto-selected.
+    # visible signal that the row was locked as the keeper.
     decisions: dict[str, str] = {p: "" for p in keepers}
     if non_keepers_for_delete:
         decisions.update({p: "delete" for p in non_keepers_for_delete})
-    lock_states: dict[str, bool] = {p: True for p in keepers}
+    lock_states: dict[str, bool] = (
+        {p: True for p in keepers} if lock_keepers else {}
+    )
     return decisions, lock_states
 
 
@@ -198,6 +208,69 @@ def top_score_path_per_group(rows: Iterable) -> set[str]:
 # excluded by default — fail-safe.
 _DUPLICATE_ACTIONS = frozenset({"EXACT", "REVIEW_DUPLICATE"})
 
+# PR-3 — the confidence threshold ("confirm below"). The setting names the
+# lowest level auto-select decides on alone: a group with any row below it
+# is "needs your look" and gets no keeper stamp. ``"high"`` is the default
+# (the safe direction for deletes, #1047).
+CONFIRM_BELOW_CHOICES: tuple[str, ...] = ("high", "medium")
+DEFAULT_CONFIRM_BELOW = "high"
+_LEVEL_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+
+def resolve_confirm_below(value: object) -> str:
+    """Return ``value`` when it is a known threshold, else the default.
+
+    An unset or junk stored value resolves to ``"high"`` so a bad settings
+    file can never silently widen what auto-select decides on.
+    """
+    if isinstance(value, str) and value in CONFIRM_BELOW_CHOICES:
+        return value
+    return DEFAULT_CONFIRM_BELOW
+
+
+def row_confidence_level(row: object) -> str | None:
+    """Return the decision-confidence level of one manifest row.
+
+    Duck-typed on ``action`` / ``match_confidence``; checked in order:
+
+    * ``match_confidence == "low"`` -> ``"low"``
+    * ``action == "REVIEW_DUPLICATE"`` -> ``"medium"`` (pixels differ, so
+      the keeper pick is metadata-only)
+    * ``action == "EXACT"`` or ``match_confidence == "high"`` -> ``"high"``
+    * anything else (Ref-tier passenger, RAW+lossy pair, old shapes) ->
+      ``None``, which is ignored by the threshold.
+    """
+    match_confidence = getattr(row, "match_confidence", None)
+    action = getattr(row, "action", "")
+    if match_confidence == "low":
+        return "low"
+    if action == "REVIEW_DUPLICATE":
+        return "medium"
+    if action == "EXACT" or match_confidence == "high":
+        return "high"
+    return None
+
+
+def below_threshold(row: object, confirm_below: str) -> bool:
+    """True when the row's level ranks under the threshold.
+
+    A row with no level (``None``) is never below: it is ignored, not
+    flagged. Ranks are low < medium < high.
+    """
+    level = row_confidence_level(row)
+    if level is None:
+        return False
+    return _LEVEL_RANK[level] < _LEVEL_RANK[confirm_below]
+
+
+def groups_needing_look(rows: Iterable, confirm_below: str) -> set[str]:
+    """Return the ``group_id`` of every group holding a below-threshold row."""
+    return {
+        row.group_id
+        for row in rows
+        if row.group_id is not None and below_threshold(row, confirm_below)
+    }
+
 
 def _raw_displaced_keepers(rows: Iterable, keepers: set[str]) -> set[str]:
     """#824 — paths a RAW keeper must not be allowed to demote into the
@@ -245,7 +318,12 @@ def _raw_displaced_keepers(rows: Iterable, keepers: set[str]) -> set[str]:
     return protected
 
 
-def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[str]:
+def non_keepers_for_aggressive_delete(
+    rows: Iterable,
+    keepers: set[str],
+    *,
+    confirm_below: str = "medium",
+) -> set[str]:
     """Return source_paths to auto-mark ``user_decision='delete'`` in the
     aggressive auto-select path (#393).
 
@@ -264,6 +342,13 @@ def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[
     so a shaky match is never auto-deleted; the user confirms it manually.
     Rows lacking ``match_confidence`` (older shapes) are treated as not-low and
     remain eligible *provided* their action is a duplicate action.
+
+    #1047 / PR-3 — a row BELOW ``confirm_below`` (see
+    :func:`below_threshold`) is EXCLUDED too. At ``"high"`` a REVIEW_DUPLICATE
+    row (same pHash, pixels differ) is a near-duplicate, not a copy, and must
+    not be deleted as one; an EXACT copy in the same group stays eligible. At
+    ``"medium"`` the set is exactly the #517 set. The default ``"medium"``
+    keeps existing callers on #517 semantics.
 
     #824 — when a group's keeper is a RAW, the best non-RAW row is protected
     alongside it (:func:`_raw_displaced_keepers`). A RAW joining a component
@@ -289,4 +374,50 @@ def non_keepers_for_aggressive_delete(rows: Iterable, keepers: set[str]) -> set[
         and row.source_path not in protected
         and getattr(row, "action", "") in _DUPLICATE_ACTIONS
         and getattr(row, "match_confidence", None) != "low"
+        and not below_threshold(row, confirm_below)
     }
+
+
+def plan_auto_select(
+    rows: Iterable,
+    *,
+    aggressive: bool,
+    confirm_below: str,
+) -> tuple[set[str], set[str]]:
+    """Return ``(stamped, deletes)`` for the post-scan auto-select pass.
+
+    PR-3 — a group is decided only when every one of its rows is at or above
+    ``confirm_below``. Such a group gets its top scorer stamped KEEP. A group
+    with a below-threshold row gets no stamp; it is shown under "Needs your
+    look" instead.
+
+    Delete protection uses every group's top scorer, stamped or not, so the
+    unstamped keeper of an uncertain group is never a delete candidate. In
+    aggressive mode, deletes are the eligible rows of :func:`non_keepers_for_
+    aggressive_delete` (the threshold excludes below rows). No mode sets a
+    lock. Pure: no I/O.
+
+    Args:
+        rows: ``ManifestRow``-shaped objects.
+        aggressive: Whether the aggressive delete set is wanted.
+        confirm_below: ``"high"`` or ``"medium"``; the threshold.
+
+    Returns:
+        ``(stamped, deletes)`` — ``stamped`` are the keeper paths to stamp
+        KEEP; ``deletes`` are paths to mark for delete (empty when not
+        aggressive).
+    """
+    rows = list(rows)
+    keepers = top_score_path_per_group(rows)
+    needs_look = groups_needing_look(rows, confirm_below)
+    stamped = {
+        row.source_path
+        for row in rows
+        if row.source_path in keepers and row.group_id not in needs_look
+    }
+    deletes: set[str] = set()
+    if aggressive:
+        deletes = non_keepers_for_aggressive_delete(
+            rows, keepers, confirm_below=confirm_below
+        )
+    return stamped, deletes

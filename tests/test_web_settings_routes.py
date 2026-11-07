@@ -179,6 +179,20 @@ class TestPatchSettings:
         on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
         assert on_disk["scan"]["exif_workers"] == 6
 
+    def test_confirm_below_round_trip(self, client, tmp_settings: Path):
+        """scan.auto_select.confirm_below (PR-3) is PATCH-writable and reads back
+        as "high" when unset (the server default), then "medium" once written.
+        The ScanDialog select depends on both halves of this contract."""
+        assert client.get("/api/settings").json()["scan.auto_select.confirm_below"] == "high"
+
+        resp = client.patch("/api/settings", json={
+            "updates": {"scan.auto_select.confirm_below": "medium"}
+        })
+        assert resp.status_code == 200
+        assert client.get("/api/settings").json()["scan.auto_select.confirm_below"] == "medium"
+        on_disk = json.loads(tmp_settings.read_text(encoding="utf-8"))
+        assert on_disk["scan"]["auto_select"]["confirm_below"] == "medium"
+
     def test_cloud_analysis_opt_in_round_trip(self, client, tmp_settings: Path):
         """scan.cloud_analysis_opt_in (privacy policy) is a boolean switch that
         defaults to false when unset, round-trips true and false through PATCH

@@ -192,6 +192,11 @@ MAIN_STATUS_RECLAIM = "main-status-reclaim"
 """'↺ reclaims X MB' in the status strip (#906) — the byte sum of the
 delete-marked rows, through the same formatBytes the rest of the UI uses."""
 
+MAIN_STATUS_NEEDS_LOOK = "main-status-needs-look"
+"""'⚑ Needs your look · N' toggle in the status strip (PR-3). Counts the
+groups under the confirm threshold over the WHOLE manifest; pressing it
+narrows the list to those groups."""
+
 MAIN_DENSITY_TOGGLE = "main-density-toggle"
 """The segmented Comfortable/Compact control at the right end of the status
 strip.  Writes the persisted `resultView.density` preference that layout slice
@@ -355,12 +360,16 @@ SCAN_ADVANCED = "scan-advanced"
 """Collapsible 'Advanced settings' section summary/toggle in the scan dialog."""
 
 SCAN_AUTO_SELECT = "scan-auto-select"
-"""'Auto select after scan' checkbox (Advanced settings) — promotes the
-top-scored row per group to action=KEEP + is_locked before the manifest write."""
+"""'Auto select after scan' checkbox (Advanced settings) — stamps the top-scored
+row of each group admitted by the confirm threshold as action=KEEP (no lock, PR-3)."""
 
 SCAN_AGGRESSIVE_DELETE = "scan-aggressive-delete"
 """'Also mark all other files for delete' sub-checkbox — enabled only when
-auto-select is on; tags every non-keeper in a scored group user_decision=delete."""
+auto-select is on; tags every eligible non-keeper in an admitted group user_decision=delete."""
+
+SCAN_CONFIRM_BELOW = "scan-confirm-below"
+"""'Ask me to confirm when confidence is below' select (Advanced settings, PR-3):
+'high' (default) or 'medium'. Saved on change to scan.auto_select.confirm_below."""
 
 SCAN_AUTOTUNE = "scan-autotune"
 """'Auto-tune reader concurrency' checkbox (Advanced settings) — default ON

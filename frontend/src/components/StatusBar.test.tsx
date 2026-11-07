@@ -16,6 +16,7 @@ import {
   MAIN_DENSITY_COMPACT,
   MAIN_STATUS_BAR,
   MAIN_STATUS_DELETE_COUNT,
+  MAIN_STATUS_NEEDS_LOOK,
   MAIN_STATUS_RECLAIM,
   MAIN_STATUS_STRIP,
 } from "@/testids";
@@ -116,6 +117,35 @@ describe("StatusBar figures (#906)", () => {
     expect(screen.getByTestId(MAIN_STATUS_DELETE_COUNT)).toHaveTextContent(
       "0 marked to delete"
     );
+  });
+});
+
+describe("StatusBar needs-look toggle (PR-3)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useI18nStore.setState({ locale: "en", catalog: {} });
+    useAppStore.setState({
+      resultView: { ...useAppStore.getState().resultView, needsLookOnly: false },
+    });
+  });
+
+  it("needs-look toggle shows the group count and toggles the filter", async () => {
+    seed([
+      { ...mkRow("a.jpg"), confidence_level: "medium" } as FileRow,
+      { ...mkRow("b.jpg"), confidence_level: "high" } as FileRow,
+    ]);
+    render(<StatusBar statusText="1 group · 2 files" />);
+    const toggle = screen.getByTestId(MAIN_STATUS_NEEDS_LOOK);
+    expect(toggle).toHaveTextContent("1");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(useAppStore.getState().resultView.needsLookOnly).toBe(true);
+  });
+
+  it("needs-look toggle is disabled at zero", () => {
+    seed([{ ...mkRow("a.jpg"), confidence_level: "high" } as FileRow]);
+    render(<StatusBar statusText="1 group · 1 file" />);
+    expect(screen.getByTestId(MAIN_STATUS_NEEDS_LOOK)).toBeDisabled();
   });
 });
 

@@ -58,7 +58,15 @@ export interface FileRow {
    *  server derives it from the scanner's burst prefix; the client never
    *  parses `reason` for it. */
   keep_all?: boolean;
+  /** PR-3 — the threshold level: "high" (EXACT / high match), "medium"
+   *  (REVIEW_DUPLICATE: pixels differ), "low", or null (unrated, ignored). The
+   *  server computes it; the client never derives it from an English prefix. */
+  confidence_level?: "high" | "medium" | "low" | null;
 }
+
+/** PR-3 — the auto-select confirm threshold: a group with a row below it needs
+ *  a look and gets no keeper stamp. */
+export type ConfirmBelow = "high" | "medium";
 
 export interface Group {
   group_number: number;
@@ -71,6 +79,8 @@ export interface ManifestResponse {
   groups: Group[];
   total_groups: number;
   total_files: number;
+  /** PR-3 — the saved confirm threshold; absent on a pre-PR-3 backend. */
+  confirm_below?: ConfirmBelow;
 }
 
 export type DecisionValue = "" | "delete" | "ignore";
@@ -155,6 +165,7 @@ export interface WebScanRequest {
   hash_pool?: string;
   auto_select_enabled?: boolean;
   auto_select_aggressive_delete?: boolean;
+  auto_select_confirm_below?: ConfirmBelow;
   autotune_read_knee?: boolean;
   autotune_knees?: Record<string, number>;
 }
@@ -208,6 +219,12 @@ export interface SettingsMap {
    * Default false; setting only — no backend consumer reads it yet.
    */
   "scan.cloud_analysis_opt_in"?: boolean | null;
+  /**
+   * Auto-select confirm threshold (PRD v2 PR-3): GET /api/settings serves it
+   * and ScanDialog persists it. "high" | "medium"; the server resolves any
+   * other stored value to "high".
+   */
+  "scan.auto_select.confirm_below"?: ConfirmBelow | null;
 }
 
 // ---------------------------------------------------------------------------

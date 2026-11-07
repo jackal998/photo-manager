@@ -50,6 +50,7 @@ from qa.web._invariants import (
 from qa.web.testid_constants import (
     SCAN_ADVANCED,
     SCAN_AUTO_SELECT,
+    SCAN_CONFIRM_BELOW,
     row_file_testid,
 )
 
@@ -66,7 +67,7 @@ def _get_manifest(base_url: str, db_path: str) -> dict:
 
 
 def _collect(manifest: dict) -> dict[str, dict]:
-    """Return {basename: {action, user_decision, is_locked}} across all groups."""
+    """Return {basename: {action, user_decision, is_locked, confidence_level}}."""
     out: dict[str, dict] = {}
     for group in manifest.get("groups", []):
         for it in group.get("items", []):
@@ -74,6 +75,7 @@ def _collect(manifest: dict) -> dict[str, dict]:
                 "action": it.get("action", "") or "",
                 "user_decision": it.get("user_decision", "") or "",
                 "is_locked": bool(it.get("is_locked")),
+                "confidence_level": it.get("confidence_level"),
             }
     return out
 
@@ -98,6 +100,10 @@ def run(*, base_url: str) -> None:
             )
             auto.click()  # toggle ON
             assert auto.is_checked(), "Auto-select did not turn ON after click."
+            # PR-3 — medium admits the REVIEW_DUPLICATE near-dups, so the keeper
+            # is still stamped. The fixture's dHash agreement is platform-
+            # dependent; the probe below prints each row's level.
+            page.get_by_test_id(SCAN_CONFIRM_BELOW).select_option("medium")
 
             add_scan_source(page, _NEAR_DUPS_DIR, idx=0)
             set_output_path(page, db_path)
@@ -113,15 +119,16 @@ def run(*, base_url: str) -> None:
                 f"Expected keeper {_EXPECTED_KEEPER!r} missing from the manifest."
             )
 
-            # Keeper: action=KEEP, is_locked, canonical-empty decision (#393/#425).
+            # Keeper: action=KEEP, NOT locked (PR-3 removed the keeper lock),
+            # canonical-empty decision (#393/#425).
             keeper = rows[_EXPECTED_KEEPER]
             assert keeper["action"] == "KEEP", (
                 f"{_EXPECTED_KEEPER}.action={keeper['action']!r}, expected 'KEEP' "
-                f"(top-scored row must be promoted by auto-select)."
+                f"(top-scored row must be stamped by auto-select)."
             )
-            assert keeper["is_locked"] is True, (
-                f"{_EXPECTED_KEEPER}.is_locked={keeper['is_locked']!r}, expected True "
-                f"(#393 keep+lock write missing)."
+            assert keeper["is_locked"] is False, (
+                f"{_EXPECTED_KEEPER}.is_locked={keeper['is_locked']!r}, expected False "
+                f"(PR-3: auto-select stamps without a lock)."
             )
             assert keeper["user_decision"] == "", (
                 f"{_EXPECTED_KEEPER}.user_decision={keeper['user_decision']!r}, "

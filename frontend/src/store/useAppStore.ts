@@ -129,6 +129,7 @@ const initialManifest: ManifestState = {
   groups: [],
   totalGroups: 0,
   totalFiles: 0,
+  confirmBelow: "high",
   loading: false,
   error: null,
 };
@@ -167,6 +168,8 @@ const initialResultView: ResultViewState = {
   // Slice TB — view-only, and deliberately not hydrated from anywhere: a
   // filter that came back after a reload hides rows with no visible cause.
   filterText: "",
+  // PR-3 — the "Needs your look" toggle. Off on every launch and every load.
+  needsLookOnly: false,
   // #923 — the Action sort's decision snapshot and its explicit re-sort count.
   // Never hydrated: the Action sort does not persist (F3).
   decisionSortSnapshot: null,
@@ -336,6 +339,9 @@ export const useAppStore = create<AppStore>()(
           state.manifest.groups = data.groups;
           state.manifest.totalGroups = data.total_groups;
           state.manifest.totalFiles = data.total_files;
+          state.manifest.confirmBelow = data.confirm_below ?? "high";
+          // PR-3 — a freshly loaded manifest starts with the toggle off.
+          state.resultView.needsLookOnly = false;
           state.manifest.loading = false;
           // #923 — an Action sort survives the load (one sort state, like
           // name/size), but its snapshot described the OLD rows. Left alone,
@@ -743,6 +749,14 @@ export const useAppStore = create<AppStore>()(
         state.resultView.filterText = text;
       });
       // #923 — a filter change is one of F3's silent re-sort triggers.
+      get().refreshDecisionSort();
+    },
+
+    /** PR-3 — the "Needs your look" group filter. View state, like filterText. */
+    setNeedsLookOnly(on: boolean) {
+      set((state) => {
+        state.resultView.needsLookOnly = on;
+      });
       get().refreshDecisionSort();
     },
 
@@ -1666,10 +1680,15 @@ export const useAppStore = create<AppStore>()(
       // bulk write whose extent the user cannot see, and it would disagree with
       // the count the verb's own label just showed them. Same selector the
       // label uses (lib/rowFilter.ts) so the two cannot drift.
+      // PR-3 — the needs-look toggle narrows the same visible set.
+      const needsLookBelow = get().resultView.needsLookOnly
+        ? (get().manifest.confirmBelow ?? "high")
+        : null;
       const selected = visibleSelectedPaths(
         get().manifest.groups,
         get().resultView.filterText,
-        get().selection.selectedPaths
+        get().selection.selectedPaths,
+        needsLookBelow
       );
       if (selected.length === 0) return;
 
