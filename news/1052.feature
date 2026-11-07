@@ -1,0 +1,1 @@
+Make auto-select respect a confidence threshold: a persisted "confirm below high / medium" setting, no keeper lock, aggressive mode never deletes a row below the threshold (#1047), and a "Needs your look" status-bar filter for the groups left to the user (#1052)
