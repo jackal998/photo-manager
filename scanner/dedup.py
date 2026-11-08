@@ -761,11 +761,15 @@ def _rescue_identity(
     writes nothing — not a
     REVIEW row and not a hint — because the pHash carries no evidence for these
     rows. Undated gated rows are left alone: without a shot time there is no
-    second signal. Buckets are small (same pHash and dims among gated rows), so
-    the pairwise pixel check is cheap.
+    second signal. Only lossy rows (``LOSSY_TYPES``) take part: a RAW is never a
+    dedup decision (the complementary policy of ``_classify_format_group``), so
+    a gated RAW and its gated JPEG stay as they were. Buckets are small (same
+    pHash and dims among gated rows), so the pairwise pixel check is cheap.
     """
     buckets: dict[tuple, list[HashResult]] = {}
     for hr in gated:
+        if hr.record.file_type not in LOSSY_TYPES:
+            continue
         if hr.exif_date is None or hr.pixel_width is None or hr.pixel_height is None:
             continue
         dims = (min(hr.pixel_width, hr.pixel_height), max(hr.pixel_width, hr.pixel_height))
@@ -1128,8 +1132,8 @@ def _gates_pass(
 # that is not pixel-identical stays a hint (Principle C narrowed to non-identical pixels).
 # "13": a row excluded from pHash grouping by the entropy, dimension or quality gate
 # is still checked for pixel identity against gated rows with the same pHash, the same
-# dimensions and the same shot moment (``_rescue_identity``); a pass is EXACT, anything
-# less writes nothing. Byte-different copies of flat or low-contrast images were only
+# dimensions and the same shot moment (``_rescue_identity``, lossy rows only); a pass is
+# EXACT, anything less writes nothing. Byte-different copies of flat or low-contrast images were only
 # ever found by SHA before.
 GROUPING_STRATEGY_VERSION = "13"
 

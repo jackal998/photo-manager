@@ -41,6 +41,7 @@ def _hq(
     dhash: str | None = AGREEING_DHASH,
     mean_color: str | None = "120,110,100",
     source_label: str = "jdrive",
+    grey128: GreyBytes | None = GreyBytes(bytes(16384)),
 ) -> HashResult:
     return HashResult(
         record=FileRecord(
@@ -55,19 +56,24 @@ def _hq(
         pixel_height=3000,
         phash_quality=quality,
         rgb32=bytes(3072),  # constant signature: format dups read as same pixels
-        grey128=GreyBytes(bytes(16384)),  # constant grey: the structure gate passes
+        # Constant grey by default: the structure gate passes. A fixture of
+        # distinct pictures passes its own (GROUPING 13 groups identical ones).
+        grey128=grey128,
     )
 
 
 def _class_a_trio(quality_a: float | None, quality_b: float | None, quality_c: float | None):
-    """Three distinct files, identical degenerate pHash, mean colours within 30."""
+    """Three distinct files, identical degenerate pHash, mean colours within 30.
+
+    Each frame carries its own grey128: three identical signatures would be
+    three pixel-identical copies, which GROUPING 13 groups even below the gate."""
     return [
         _hq("/eclipse/MVIMG_160439.jpg", "sha-1", DEGENERATE_PHASH, quality_a,
-            mean_color="120,110,100"),
+            mean_color="120,110,100", grey128=GreyBytes(bytes([10]) * 16384)),
         _hq("/eclipse/MVIMG_160730.jpg", "sha-2", DEGENERATE_PHASH, quality_b,
-            mean_color="125,112,101"),
+            mean_color="125,112,101", grey128=GreyBytes(bytes([60]) * 16384)),
         _hq("/lights/IMG_8511.JPG", "sha-3", DEGENERATE_PHASH, quality_c,
-            mean_color="118,108,99"),
+            mean_color="118,108,99", grey128=GreyBytes(bytes([200]) * 16384)),
     ]
 
 
