@@ -7,6 +7,8 @@ Out of scope: the embedding tier, `core/services/auto_select.py` semantics, and 
 
 ## Lead decisions (2026-11-08, after the planner returned; these override the text below where they differ)
 
+**Owner decision (2026-11-08, after #1055 merged):** a lone Live Photo — a still plus its own video with no other copy anywhere — must not become a group. The pair is one "photo" by product design, so "a lone Live Photo is not a group" (#88 / GROUPING 9) is confirmed, not an open question.
+
 - **Two iterations on one branch (`fix/grouping-10-content-gated-identity`), each verified by a real headless rescan
   of the test set before the next starts.**
   - **Iteration 1 = G5 + G6 + G8 + G9** (low evidence never unions; pixel identity as second signal; B7 contract text;
