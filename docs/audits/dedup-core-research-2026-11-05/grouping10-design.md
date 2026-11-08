@@ -26,6 +26,15 @@ Out of scope: the embedding tier, `core/services/auto_select.py` semantics, and 
   the GROUPING 9 baseline -> `grouping-health-census.py` -> contact sheets of a lost-pair sample and of every
   surviving cross-day group. No merge request to the owner until both iterations pass E with the lost-pair sample
   explained.
+- **Iteration 3 (lead decision, 2026-11-08): an undated row never links two shot moments.** A real rescan of the test
+  set grouped three rows whose only link was an undated file: it was a near-duplicate of a row shot 31 Jan and of a row
+  shot 6 May, and the two dated rows were not near-duplicates of each other. An unknown shot time agrees with anything,
+  so union-find joined the two moments. The pHash-identical path already refused this (`_shot_moments`,
+  `_complementary_edges`); the near-duplicate and `duplicate_of` edges did not. The rule, in `_assign_group_ids`: union
+  identity edges first (an EXACT row, byte or pixel identity, ignores dates); then dated-dated content edges; then
+  content edges with an undated end. The last kind is refused when both components already hold a dated row and no
+  dated row of one agrees (`_time_vote`) with a dated row of the other. A refused edge becomes a hint, and the pair pass
+  runs last, unchanged. `GROUPING_STRATEGY_VERSION` stays `"10"` because the branch is unreleased.
 
 ## Contradictions with the brief (read first)
 

@@ -326,3 +326,69 @@ class TestShotGapText:
         assert len(keepers) == 2
         for keeper in keepers:
             assert "shot 2 min apart" in keeper.reason, keeper.reason
+
+
+class TestUndatedRowNeverLinksTwoMoments:
+    """GROUPING 10 iteration 3: an undated row has no shot time, so a content
+    edge through it must not join two dated rows shot at different moments.
+    Identity edges (EXACT copies) ignore dates altogether."""
+
+    T_JAN = datetime(2024, 1, 31, 18, 0, 0)
+    T_MAY = datetime(2024, 5, 6, 9, 30, 0)
+    # 8 bits from PA, 12 from PNEAR: a near-duplicate of PA, not of PNEAR.
+    P_FAR = "ff000000ffffffff"
+
+    def test_undated_bridge_is_refused_and_the_far_moment_is_a_hint(self):
+        records = [
+            _hr("/m/a_undated.jpg", "ua", PA, PA, None),
+            _hr("/m/b_jan.jpg", "jb", PNEAR, PA, self.T_JAN),
+            _hr("/m/c_may.jpg", "kc", self.P_FAR, PA, self.T_MAY),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        a, b, c = rows["/m/a_undated.jpg"], rows["/m/b_jan.jpg"], rows["/m/c_may.jpg"]
+        assert a.group_id is not None and a.group_id == b.group_id
+        assert c.group_id is None
+        assert c.match_confidence == "low"
+        assert HINT_ONLY_PREFIX in c.reason, c.reason
+        assert "a_undated.jpg" in c.reason, c.reason
+        assert "hint:" in a.reason, a.reason
+
+    def test_agreeing_moments_group_all_three(self):
+        """The rule does not fire when the two dated moments agree (2 s apart,
+        the BURST_MAX_GAP_S tolerance)."""
+        records = [
+            _hr("/m/a_undated.jpg", "ua", PA, PA, None),
+            _hr("/m/b_jan.jpg", "jb", PNEAR, PA, self.T_JAN),
+            _hr("/m/c_jan_2s.jpg", "kc", self.P_FAR, PA,
+                self.T_JAN + timedelta(seconds=2)),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert _group_sizes(rows) == [3]
+        assert all(r.match_confidence != "low" for r in rows.values())
+
+    def test_undated_format_duplicate_groups_through_identity(self):
+        """Identity edges ignore dates: an undated JPG that is a pixel-identical
+        copy of a dated HEIC joins the HEIC's group, whose dated near-duplicate
+        is from the same moment."""
+        records = [
+            _hr("/m/h.heic", "hh", PA, PA, self.T_JAN, ftype="heic"),
+            _hr("/m/j_undated.jpg", "jj", PA, None, None, "src_b", ftype="jpeg"),
+            _hr("/m/n_same_moment.jpg", "nn", PNEAR, PA, self.T_JAN),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        j = rows["/m/j_undated.jpg"]
+        assert j.action == "EXACT"
+        assert j.group_id is not None
+        assert j.group_id == rows["/m/h.heic"].group_id
+        assert j.group_id == rows["/m/n_same_moment.jpg"].group_id
+
+    def test_undated_pair_joins_a_dated_component(self):
+        """Both ends undated: one already in a dated component, the other alone.
+        No second moment exists to disagree, so the edge unions."""
+        records = [
+            _hr("/m/x_jan.jpg", "xx", PA, PA, self.T_JAN),
+            _hr("/m/u1_undated.jpg", "u1", PNEAR, PA, None),
+            _hr("/m/u2_undated.jpg", "u2", "ff000000fffffff0", PA, None),
+        ]
+        rows = _rows(classify(records, source_priority=PRIORITY))
+        assert _group_sizes(rows) == [3]

@@ -288,9 +288,18 @@ def _shot_time_vote(a: HashResult, b: HashResult, tolerance_s: int = BURST_MAX_G
       * ``"unknown"``  — either side has no EXIF date (RAW, scan, stripped
                          metadata): no evidence either way, nothing demoted.
     """
-    if a.exif_date is None or b.exif_date is None:
+    return _time_vote(a.exif_date, b.exif_date, tolerance_s)
+
+
+def _time_vote(
+    a_dt: datetime | None, b_dt: datetime | None, tolerance_s: int = BURST_MAX_GAP_S
+) -> str:
+    """``_shot_time_vote`` on two bare shot times: the same three answers and the
+    same tolerance. The union rule (``_would_link_two_moments``) needs it for
+    dated rows that are not HashResults."""
+    if a_dt is None or b_dt is None:
         return "unknown"
-    delta = abs((a.exif_date - b.exif_date).total_seconds())
+    delta = abs((a_dt - b_dt).total_seconds())
     if delta <= tolerance_s:
         return "agree"
     if delta <= 14 * 3600 + tolerance_s and abs(delta - round(delta / 1800) * 1800) <= tolerance_s:
@@ -448,13 +457,15 @@ def classify(
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
     # pHash transitive edges (#538 near-dup, #824 complementary). A pair
     # cluster that would bridge two groups is skipped and says so in its reason.
-    skipped_pairs = _assign_group_ids(rows, pair_edges + phash_edges)
+    # A content edge that would link two shot moments through an undated row
+    # comes back as a hint (GROUPING 10, iteration 3).
+    skipped_pairs, undated_hints = _assign_group_ids(rows, pair_edges + phash_edges)
     for path in skipped_pairs:
         rows[path].reason += _PAIR_SKIPPED_SUFFIX
     if burst_stacks:
         _mark_burst_stacks(rows)
     # GROUPING 10: hints run last, so a burst reason stays first in the text.
-    _mark_hints(rows, phash_hints)
+    _mark_hints(rows, [*phash_hints, *undated_hints])
 
     return list(rows.values())
 
@@ -997,6 +1008,8 @@ def _gates_pass(
 # sets an action. Two signals make a pHash match high: dHash agreement, or
 # identical 32x32 pixels (G6). Two PNGs group only as byte copies while B7 is
 # on. Stem and pair edges are unchanged in this version (iteration 2).
+# Iteration 3: an undated row never links two shot moments through a content
+# edge either (``_assign_group_ids``); the refused edge is a hint.
 GROUPING_STRATEGY_VERSION = "10"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
@@ -1439,10 +1452,38 @@ def _pair_pass(
     return skipped
 
 
+# GROUPING 10 iteration 3: the hint text for a content edge refused because an
+# undated row would have linked two shot moments.
+_UNDATED_BRIDGE_DETAIL = "shot time unknown; would link two moments"
+
+
+def _shot_times(rows: dict[str, ManifestRow]) -> dict[str, datetime]:
+    """Each dated row's ``shot_date``, parsed once. A missing or unparseable
+    value is undated: the row is absent from the map."""
+    times: dict[str, datetime] = {}
+    for path, row in rows.items():
+        if not row.shot_date:
+            continue
+        try:
+            times[path] = datetime.fromisoformat(row.shot_date)
+        except ValueError:
+            continue
+    return times
+
+
+def _would_link_two_moments(dated_a: list[datetime], dated_b: list[datetime]) -> bool:
+    """True when both components hold a dated row and no dated row of one agrees
+    (``_time_vote``) with a dated row of the other. An undated row has no time to
+    disagree with, so only the components' dated rows are compared."""
+    if not dated_a or not dated_b:
+        return False
+    return not any(_time_vote(x, y) == "agree" for x in dated_a for y in dated_b)
+
+
 def _assign_group_ids(
     rows: dict[str, ManifestRow],
     edges: list[Edge] | None = None,
-) -> list[str]:
+) -> tuple[list[str], list[Hint]]:
     """Assign group_id via union-find over duplicate_of edges + ``edges``.
 
     Files transitively connected by ``high`` edges (A→B, B→C) all receive the
@@ -1454,15 +1495,25 @@ def _assign_group_ids(
     and complementary edges (#538 / #824). Only ``high`` and ``pair`` edges
     exist: low-confidence evidence is a ``Hint`` and never unions.
 
-    The "pair" edges run last (``_pair_pass``). A cluster joins only through a
-    member that is already grouped, and never bridges two components that each
-    hold a still. Returns the
-    unjoined members of every refused cluster, for the caller's reason text.
+    Content edges are unioned in four phases (GROUPING "10", iteration 3):
+    identity (a ``duplicate_of`` to an EXACT row, dates ignored); dated-dated
+    content; content with an undated end, refused when it would link two shot
+    moments (``_would_link_two_moments``) and returned as a hint; then the
+    "pair" edges (``_pair_pass``). A cluster joins only through a member that
+    is already grouped, and never bridges two components that each hold a
+    still.
+
+    Returns the unjoined members of every refused pair cluster, for the
+    caller's reason text, and the refused undated hints, for ``_mark_hints``.
 
     Which lone file pairs with which follows path spelling (the lex-min rule);
     that is deliberate, so a rescore reproduces the same groups.
     """
     parent: dict[str, str] = {}
+    shot_times = _shot_times(rows)
+    # Component root -> the dated shot times of its rows. A root absent here
+    # holds no dated row. Merged on every union.
+    dated: dict[str, list[datetime]] = {path: [t] for path, t in shot_times.items()}
 
     def find(x: str) -> str:
         while x in parent:
@@ -1471,23 +1522,44 @@ def _assign_group_ids(
 
     def union(a: str, b: str) -> None:
         ra, rb = find(a), find(b)
-        if ra != rb:
-            if ra < rb:
-                parent[rb] = ra
-            else:
-                parent[ra] = rb
+        if ra == rb:
+            return
+        lo, hi = (ra, rb) if ra < rb else (rb, ra)
+        parent[hi] = lo
+        dated[lo] = dated.get(lo, []) + dated.pop(hi, [])
 
-    all_edges = _row_edges(rows) + list(edges or [])
     # ``joined``: nodes a high edge touched. A pair cluster joins only through
     # one of these.
     joined: set[str] = set()
-    for a, b, confidence in all_edges:
-        if confidence == "high":
-            union(a, b)
-            joined.update((a, b))
+
+    def link(a: str, b: str) -> None:
+        union(a, b)
+        joined.update((a, b))
+
+    row_edges = _row_edges(rows)
+    identity = sorted(e for e in row_edges if rows[e[0]].action == "EXACT")
+    row_content = sorted(e for e in row_edges if rows[e[0]].action != "EXACT")
+    high_content = sorted(e for e in (edges or []) if e[2] == "high")
+    ordered_content = [*row_content, *high_content]
+
+    for a, b, _ in identity:
+        link(a, b)
+    for a, b, _ in ordered_content:
+        if a in shot_times and b in shot_times:
+            link(a, b)
+    refused: list[Hint] = []
+    for a, b, _ in ordered_content:
+        if a in shot_times and b in shot_times:
+            continue
+        if find(a) != find(b) and _would_link_two_moments(
+            dated.get(find(a), []), dated.get(find(b), [])
+        ):
+            refused.append((a, b, _UNDATED_BRIDGE_DETAIL))
+        else:
+            link(a, b)
 
     pair_pairs = sorted(
-        (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "pair"
+        (min(a, b), max(a, b)) for a, b, confidence in (edges or []) if confidence == "pair"
     )
     # Component root -> does the component hold any still? Built from every row
     # (a still with no group is its own component), after the high unions.
@@ -1501,7 +1573,7 @@ def _assign_group_ids(
         if row.source_path in joined:
             row.group_id = find(row.source_path)
         # else: stays None (isolated file, or a hint, which never groups)
-    return skipped
+    return skipped, refused
 
 
 # ---------------------------------------------------------------------------
