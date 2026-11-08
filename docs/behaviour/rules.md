@@ -198,7 +198,7 @@ code decides it, and which test or scenario pins it.
 
 - **Rule:** Default on (B6). A Live video follows its photo when every qualifying still (same group, folder, clean stem and ContentIdentifier, not edited) is in the delete set. The video must not be a keeper, nor already in the set, and an EXACT video needs B3 on. A follower is withheld when it would leave its capture with no kept motion clip. With the rule off, the delete set is R-SCAN-5 to R-SCAN-11 alone.
 - **Owning code:** `core/services/live_photo.py::live_photo_stills`, `core/services/auto_select.py::_live_video_followers`, `core/services/auto_select.py::_keep_one_motion_clip`
-- **Pins:** `tests/test_auto_select.py::TestLiveVideoRule`, `tests/test_live_photo_pairs.py`
+- **Pins:** `tests/test_auto_select.py::TestLiveVideoRule::test_b6_video_follows_deleted_photo`, `tests/test_auto_select.py::TestLiveVideoRule::test_decision3_video_spared_when_one_still_is_kept`, `tests/test_auto_select.py::TestLiveVideoRule::test_decision2_motion_guard_keeps_last_clip`, `tests/test_auto_select.py::TestLiveVideoRule::test_decision1_exact_video_spared_when_b3_off`, `tests/test_auto_select.py::TestLiveVideoRule::test_b6_never_deletes_a_keeper_video`, `tests/test_auto_select.py::TestLiveVideoRule::test_b6_off_is_today`
 - **Status:** pinned
 
 ## SORT
