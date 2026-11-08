@@ -303,7 +303,7 @@ class TestComputeHashes:
             # (not the dropped rawpy.open_buffer); the path fallback also uses imread.
             mock_rawpy.imread.side_effect = unsupported
 
-            sha, ph, dh, ch, dt, w, h, _, _q, _px = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
+            sha, ph, dh, ch, dt, w, h, _, _q, _px, _g = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None
@@ -363,7 +363,7 @@ class TestRealDecodeFailures:
         # path fallback — the #75 non-camera-TIFF class, routed to "raw".
         f.write_bytes(b"II*\x00" + b"\x00" * 256)
 
-        sha, ph, dh, ch, dt, w, h, _, _q, _px = compute_hashes(f, "raw")  # #786 added index 7
+        sha, ph, dh, ch, dt, w, h, _, _q, _px, _g = compute_hashes(f, "raw")  # #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None and dh is None and ch is None
@@ -1014,7 +1014,7 @@ class TestRawSingleLibRawOpen:
 
         f = tmp_path / "shot.dng"
         f.write_bytes(b"\x00" * 64)
-        sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px = hasher.compute_hashes(f, "raw")
+        sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g = hasher.compute_hashes(f, "raw")
 
         assert len(opens) == 1, (
             f"LibRaw opened {len(opens)}× for one RAW file — #826 wants exactly 1 "
@@ -1063,7 +1063,7 @@ class TestRawSingleLibRawOpen:
 
         f = tmp_path / "nothumb.dng"
         f.write_bytes(b"\x00" * 64)
-        _sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px = hasher.compute_hashes(f, "raw")
+        _sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g = hasher.compute_hashes(f, "raw")
 
         assert len(opens) == 1, f"LibRaw opened {len(opens)}× on the full-decode route"
         assert (px_w, px_h) == (8064, 6048)
@@ -1121,7 +1121,7 @@ class TestPhashQuality:
         f = tmp_path / "flat.jpg"
         Image.new("RGB", (300, 300), (128, 128, 128)).save(f, "JPEG", quality=95)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 10
+        assert len(out) == 11
         assert out[1] is not None  # a real pHash was produced
         assert out[8] is not None and out[8] < 1.0
 
@@ -1154,7 +1154,7 @@ class TestPhashQuality:
         v = tmp_path / "clip.mov"
         v.write_bytes(b"\x00" * 64)
         out = compute_hashes(v, "mov")
-        assert len(out) == 10
+        assert len(out) == 11
         assert out[8] is None
 
     def test_compute_from_bytes_sets_phash_quality(self, tmp_path):
@@ -1207,7 +1207,7 @@ class TestHashRecipeParity:
 
 class TestRgb32PixelSignature:
     """Catches: the signature missing, mis-sized, not EXIF-oriented, or the
-    9-element arity of an early-exit return drifting from the 10-element
+    10-element arity of an early-exit return drifting from the 11-element
     success tuple (the dedup gate would then read the wrong slot)."""
 
     def test_decoded_image_yields_3072_byte_signature(self, tmp_path):
@@ -1216,28 +1216,30 @@ class TestRgb32PixelSignature:
         f = tmp_path / "a.jpg"
         _write_jpeg(f)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 10
+        assert len(out) == 11
         assert isinstance(out[9], bytes)
         assert len(out[9]) == 3072  # 32 * 32 * 3
 
-    def test_video_early_exit_is_ten_elements_with_no_signature(self, tmp_path):
+    def test_video_early_exit_is_eleven_elements_with_no_signature(self, tmp_path):
         from scanner.hasher import compute_hashes
 
         v = tmp_path / "clip.mov"
         v.write_bytes(b"\x00" * 64)
         out = compute_hashes(v, "mov")
-        assert len(out) == 10
+        assert len(out) == 11
         assert out[9] is None
+        assert out[10] is None
 
-    def test_undecodable_image_early_exit_is_ten_elements_with_no_signature(self, tmp_path):
+    def test_undecodable_image_early_exit_is_eleven_elements_with_no_signature(self, tmp_path):
         from scanner.hasher import compute_hashes
 
         f = tmp_path / "bad.jpg"
         f.write_bytes(b"not an image at all" * 20)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 10
+        assert len(out) == 11
         assert out[1] is None  # phash: decode failed
         assert out[9] is None
+        assert out[10] is None
 
     def test_exif_orientation_is_applied_before_signature(self, tmp_path):
         """A PNG stored rotated with Orientation=6 displays as the upright
@@ -1262,4 +1264,43 @@ class TestRgb32PixelSignature:
         sig_up = compute_hashes(upright, "png")[9]
         assert compute_hashes(tagged, "png")[9] == sig_up
         assert compute_hashes(untagged, "png")[9] != sig_up
+
+
+class TestGrey128Signature:
+    """GROUPING 11: the 128x128 grey signature (element 10) of the EXACT
+    structure gate. Catches: the signature missing, mis-sized, or not
+    EXIF-oriented (the gate would then compare a rotated picture)."""
+
+    def test_decoded_image_yields_16384_byte_grey_signature(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "a.jpg"
+        _write_jpeg(f)
+        out = compute_hashes(f, "jpeg")
+        assert len(out) == 11
+        assert isinstance(out[10], bytes)
+        assert len(out[10]) == 16384  # 128 * 128, one byte per pixel
+
+    def test_exif_orientation_is_applied_before_grey_signature(self, tmp_path):
+        """Same fixture as the rgb32 orientation test: the tagged file must
+        match the upright one on grey too, and the untagged one must differ."""
+        from scanner.hasher import compute_hashes
+
+        base = Image.new("RGB", (40, 20), (0, 0, 255))
+        for x in range(20):
+            for y in range(20):
+                base.putpixel((x, y), (255, 0, 0))  # left half red
+        upright = tmp_path / "upright.png"
+        base.save(upright, "PNG")
+        stored = base.transpose(Image.Transpose.ROTATE_90)  # 20x40 on disk
+        exif = Image.Exif()
+        exif[0x0112] = 6  # Orientation: rotate the stored pixels 90 deg CW to display
+        tagged = tmp_path / "tagged.png"
+        stored.save(tagged, "PNG", exif=exif)
+        untagged = tmp_path / "untagged.png"
+        stored.save(untagged, "PNG")
+
+        grey_up = compute_hashes(upright, "png")[10]
+        assert compute_hashes(tagged, "png")[10] == grey_up
+        assert compute_hashes(untagged, "png")[10] != grey_up
 

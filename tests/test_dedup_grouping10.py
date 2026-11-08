@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from scanner.dedup import BURST_PREFIX, HINT_ONLY_PREFIX, HashResult, classify
+from scanner.grey_store import GreyBytes, GreySig
 from scanner.walker import FileRecord
 
 T0 = datetime(2024, 6, 12, 20, 38, 0)
@@ -42,6 +43,7 @@ def _hr(
     label: str = "src_a",
     ftype: str = "jpeg",
     rgb32: bytes | None = bytes(3072),
+    grey128: GreySig | None = GreyBytes(bytes(16384)),
     pair_cluster: tuple[str, ...] = (),
 ) -> HashResult:
     return HashResult(
@@ -57,6 +59,7 @@ def _hr(
         pixel_width=4000,
         pixel_height=3000,
         rgb32=rgb32,
+        grey128=grey128,
     )
 
 
@@ -209,8 +212,10 @@ class TestPixelIdentityIsASecondSignal:
 
     def test_different_pixels_without_dhash_is_a_hint(self):
         heic = _hr("/a/x.heic", "hx", PA, None, T0, ftype="heic")
+        # Same colour signature; the grey structure differs in a 12x12 patch.
+        patch = bytes(60 if (i // 128 < 12 and i % 128 < 12) else 0 for i in range(16384))
         jpg = _hr("/b/x.jpg", "jx", PA, None, T0, "src_b", ftype="jpeg",
-                  rgb32=bytes([60]) * 3072)
+                  grey128=GreyBytes(patch))
         rows = _rows(classify([heic, jpg], source_priority=PRIORITY))
         assert _group_sizes(rows) == []
         dup = rows["/b/x.jpg"]

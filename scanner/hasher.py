@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from scanner.dedup import HashResult
 from scanner.exif import extract_pil_scoring_signals, parse_exif_date
+from scanner.grey_store import GREY_SIDE, GreyBytes
 
 if TYPE_CHECKING:
     from scanner.walker import FileRecord
@@ -121,6 +122,8 @@ except ImportError:
 # (a contrast scalar the grouping gate reads, see scanner/dedup.py
 # ``_phash_quality_ok``). Hash VALUES are unchanged (the parity test still
 # pins recipe-"3" values); per-file cost is one extra LANCZOS resize.
+# "6" — an eleventh element, the 128x128 grey signature grey128 (GROUPING 11).
+# Hash VALUES unchanged; per-file cost is one more convert("L") + BOX resize.
 #
 # What the bump does and does NOT do: this token is consumed by exactly one
 # code path — ``scan_runner.hash_pool_fingerprint`` (core/app_service/
@@ -129,7 +132,7 @@ except ImportError:
 # manifest keeps its recipe-"3" hashes with no staleness signal, so its rotated
 # pairs stay ungrouped until the user re-scans that library; the two changes are
 # folded into ONE bump so that re-scan is needed once, not twice.
-HASH_RECIPE_VERSION = "5"
+HASH_RECIPE_VERSION = "6"
 
 # Shrink-on-load target shared by every pixel path, so RAW and JPEG hash at the
 # same working resolution (#569 chose it; #826 pointed the RAW path at it).
@@ -172,10 +175,18 @@ def _pixel_signature(img: "Image.Image") -> bytes:
     return img.resize((32, 32), Image.BOX).tobytes()
 
 
+def _grey_signature(img: "Image.Image") -> bytes:
+    """128x128 grey BOX thumbnail as 16,384 raw bytes: the structure half of
+    the EXACT gate in ``scanner/dedup.py`` (``_grey_identical``). ``img`` is the
+    EXIF-oriented RGB working image. Scan-time only: spilled to a
+    ``GreySigStore`` and never persisted to the manifest."""
+    return img.convert("L").resize((GREY_SIDE, GREY_SIDE), Image.BOX).tobytes()
+
+
 def _hashes_from_data(
     path: Path, file_type: str, data: bytes
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes]]:
-    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality, rgb32)``
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes]]:
+    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality, rgb32, grey128)``
     from bytes that have already been read off disk.
 
     ``phash_quality`` (recipe "5") is :func:`_phash_quality` of the working
@@ -184,6 +195,9 @@ def _hashes_from_data(
     ``rgb32`` is :func:`_pixel_signature` of the working image (3,072 bytes);
     ``None`` for video and whenever the image did not decode. Scan-time only,
     never persisted to the manifest.
+
+    ``grey128`` (recipe "6") is :func:`_grey_signature` of the same working
+    image (16,384 bytes); ``None`` exactly when ``rgb32`` is ``None``.
 
     This is the single implementation used by both :func:`compute_hashes`
     (which reads the bytes) and :func:`compute_from_bytes` (which receives
@@ -198,7 +212,7 @@ def _hashes_from_data(
     sha = hashlib.sha256(data).hexdigest()
 
     if not _HASH_AVAILABLE:
-        return sha, None, None, None, None, None, None, None, None, None
+        return sha, None, None, None, None, None, None, None, None, None, None
 
     img: Optional[Image.Image] = None
     raw_date: Optional[str] = None
@@ -274,7 +288,7 @@ def _hashes_from_data(
             img = None
 
     if img is None:
-        return sha, None, None, None, raw_date, None, None, inmemory_signals, None, None
+        return sha, None, None, None, raw_date, None, None, inmemory_signals, None, None, None
     try:
         tiny = img.resize((1, 1), Image.LANCZOS)
         mc = tiny.getpixel((0, 0))[:3]
@@ -290,22 +304,25 @@ def _hashes_from_data(
             inmemory_signals,
             _phash_quality(img),
             _pixel_signature(img),
+            _grey_signature(img),
         )
     except (ValueError, TypeError):
         # #470 — preserve px_w / px_h measured before the phash compute attempt.
         # Wiping them to None would force scoring._score_resolution to 0.0 even
         # though the dimensions are known and valid; phash failure shouldn't
         # cascade into a fake resolution-zero penalty.
-        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals, None, None
+        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals, None, None, None
 
 
 def compute_hashes(
     path: Path, file_type: str
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes]]:
-    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals, phash_quality, rgb32)``.
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes]]:
+    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals, phash_quality, rgb32, grey128)``.
 
     ``rgb32`` is the 32×32 RGB pixel signature (3,072 bytes) for the EXACT
     pixel-identity gate; ``None`` for video/skip and on decode failure.
+    ``grey128`` is the 128×128 grey signature (16,384 bytes) for the same gate;
+    ``None`` exactly when ``rgb32`` is.
 
     All values are derived from one in-memory read — no extra file open.
     ``dhash`` is a second, independent perceptual hash (gradient/brightness
@@ -322,7 +339,7 @@ def compute_hashes(
     For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
     """
     if file_type in ("mp4", "mov", "gif", "skip"):
-        return compute_sha256(path), None, None, None, None, None, None, None, None, None
+        return compute_sha256(path), None, None, None, None, None, None, None, None, None, None
 
     # Single read: delegate all hash computation to _hashes_from_data.
     return _hashes_from_data(path, file_type, path.read_bytes())
@@ -390,7 +407,7 @@ def run_hash_for_record(
     try:
         (
             sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals,
-            phash_quality, rgb32,
+            phash_quality, rgb32, grey128,
         ) = compute_hashes(record.path, record.file_type)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # One bad file must never abort the whole scan — caller logs + skips.
@@ -416,6 +433,7 @@ def run_hash_for_record(
         inmemory_signals=inmemory_signals,
         phash_quality=phash_quality,
         rgb32=rgb32,
+        grey128=GreyBytes(grey128) if grey128 is not None else None,
     )
 
 
@@ -469,11 +487,11 @@ def compute_from_bytes(
             # video/gif/skip: stream SHA from path, no perceptual hashes.
             sha256 = compute_sha256(record.path)
             phash = dhash = mean_color = raw_date = px_w = px_h = inmemory_signals = None
-            phash_quality = rgb32 = None
+            phash_quality = rgb32 = grey128 = None
         else:
             (
                 sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals,
-                phash_quality, rgb32,
+                phash_quality, rgb32, grey128,
             ) = _hashes_from_data(record.path, record.file_type, data)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return idx, HashFailure(type(exc).__name__, str(exc))
@@ -496,6 +514,7 @@ def compute_from_bytes(
         inmemory_signals=inmemory_signals,
         phash_quality=phash_quality,
         rgb32=rgb32,
+        grey128=GreyBytes(grey128) if grey128 is not None else None,
     )
 
 

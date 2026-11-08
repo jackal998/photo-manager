@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from scanner.dedup import HashResult, _phash_quality_ok, classify
+from scanner.grey_store import GreyBytes
 from scanner.walker import FileRecord
 
 # The class-A degenerate pHash, and a dHash that agrees across all three.
@@ -54,6 +55,7 @@ def _hq(
         pixel_height=3000,
         phash_quality=quality,
         rgb32=bytes(3072),  # constant signature: format dups read as same pixels
+        grey128=GreyBytes(bytes(16384)),  # constant grey: the structure gate passes
     )
 
 
