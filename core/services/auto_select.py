@@ -33,7 +33,8 @@ from pathlib import Path
 from typing import Iterable
 
 from core.services.auto_select_rules import LEGACY_RULES, RuleToggles
-from scanner.media import RAW_EXTENSIONS
+from core.services.live_photo import content_identifier, live_photo_stills
+from scanner.media import RAW_EXTENSIONS, is_video
 
 # #824 — extensions the scanner types as ``raw``. This is
 # ``scanner.media.RAW_EXTENSIONS`` PLUS ``.tif`` / ``.tiff``, which
@@ -353,6 +354,82 @@ def _delete_blocker(
     return None
 
 
+def _keep_one_motion_clip(followers: set[str], base: set[str], rows: list) -> set[str]:
+    """PR-4b — drop followers until each capture keeps a non-deleted clip.
+
+    A capture is the set of videos sharing a group and a ContentIdentifier.
+    A follower stays only when another video of its capture is neither in
+    ``base`` nor a follower. Dropping a follower only adds a non-deleted
+    clip, so the loop ends in a state where every survivor has one beside it.
+    """
+    captures: dict[tuple[str, str], list[str]] = defaultdict(list)
+    capture_of: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        cid = content_identifier(row)
+        if row.group_id is None or cid is None or not is_video(row.source_path):
+            continue
+        key = (row.group_id, cid)
+        captures[key].append(row.source_path)
+        capture_of[row.source_path] = key
+    kept = set(followers)
+    changed = True
+    while changed:
+        changed = False
+        for video in sorted(kept):
+            clips = captures[capture_of[video]]
+            if not any(clip not in base and clip not in kept for clip in clips):
+                kept.discard(video)
+                changed = True
+    return kept
+
+
+def _live_video_followers(
+    rows: list, base: set[str], keepers: set[str], *, rules: RuleToggles
+) -> set[str]:
+    """PR-4b — the Live videos that follow their photo into aggressive delete.
+
+    A video follows when every qualifying still is in ``base``. It must not be
+    in ``base`` already, nor be a keeper. An EXACT video is left alone when B3
+    is off, the same as B3 leaves it. The motion guard then keeps one clip
+    per capture (:func:`_keep_one_motion_clip`).
+    """
+    by_path = {row.source_path: row for row in rows}
+    followers = {
+        video
+        for video, photos in live_photo_stills(rows).items()
+        if video not in base
+        and video not in keepers
+        and all(photo in base for photo in photos)
+        and (rules.b3 or getattr(by_path[video], "action", "") != "EXACT")
+    }
+    return _keep_one_motion_clip(followers, base, rows)
+
+
+def _aggressive_sets(
+    rows: list,
+    keepers: set[str],
+    *,
+    confirm_below: str,
+    rules: RuleToggles,
+) -> tuple[set[str], set[str]]:
+    """Return ``(base, followers)``: the chain's deletes and the B6 followers.
+
+    ``base`` is the rule chain of :func:`_delete_blocker` alone. ``followers``
+    is empty unless ``rules.b6`` is on, so with B6 off the delete set is v1's.
+    """
+    raw_protected = _raw_displaced_keepers(rows, keepers)
+    base = {
+        row.source_path for row in rows
+        if _delete_blocker(
+            row, keepers, raw_protected, confirm_below=confirm_below, rules=rules
+        ) is None
+    }
+    followers: set[str] = set()
+    if rules.b6:
+        followers = _live_video_followers(rows, base, keepers, rules=rules)
+    return base, followers
+
+
 def non_keepers_for_aggressive_delete(
     rows: Iterable,
     keepers: set[str],
@@ -393,11 +470,15 @@ def non_keepers_for_aggressive_delete(
     ``apply_best_copy`` path wrote ``decision='delete'`` onto a JPEG export
     that nothing had asked to delete before.
 
-    PR-4a — ``rules`` (see :mod:`core.services.auto_select_rules`) can only
-    narrow this set. B4 off drops the #824 protection above. B3 off spares
-    every EXACT row. B8 on keeps only EXACT rows, at either threshold. The
-    default :data:`LEGACY_RULES` gives the pre-PR-4a set, so existing callers
-    are unchanged. The chain lives in :func:`_delete_blocker`.
+    PR-4a — ``rules`` (see :mod:`core.services.auto_select_rules`) narrows
+    this set. B4 off drops the #824 protection above. B3 off spares every
+    EXACT row. B8 on keeps only EXACT rows, at either threshold. The default
+    :data:`LEGACY_RULES` gives the pre-PR-4a set, so existing callers are
+    unchanged. The chain lives in :func:`_delete_blocker`.
+
+    PR-4b — B6 is the one rule that adds to this set. With ``rules.b6`` on, a
+    Live video whose qualifying stills are all in the chain's set joins it
+    (:func:`_live_video_followers`). B6 off returns the chain's set alone.
 
     Args:
         rows: Iterable of ``ManifestRow``-shaped objects (``group_id``,
@@ -410,13 +491,10 @@ def non_keepers_for_aggressive_delete(
         Set of ``source_path`` strings eligible for aggressive auto-delete.
     """
     rows = list(rows)
-    raw_protected = _raw_displaced_keepers(rows, keepers)
-    return {
-        row.source_path for row in rows
-        if _delete_blocker(
-            row, keepers, raw_protected, confirm_below=confirm_below, rules=rules
-        ) is None
-    }
+    base, followers = _aggressive_sets(
+        rows, keepers, confirm_below=confirm_below, rules=rules
+    )
+    return base | followers
 
 
 def plan_auto_select(
@@ -478,8 +556,10 @@ def rule_trace(
     Values: ``"B1:keep"`` for a stamped keeper; and, only when ``aggressive``,
     ``"B3:delete"`` / ``"B1:delete"`` for a delete (EXACT vs. the rest) or
     ``"B3:spared"`` / ``"B4:spared"`` / ``"B8:spared"`` when a rule blocked a
-    row that would otherwise be deleted. Rows held back by the threshold or
-    the keeper pick have no entry, because no toggle is responsible for them.
+    row that would otherwise be deleted, and ``"B6:delete"`` for a Live video
+    that follows its photo (PR-4b; it overrides a blocker entry, since B6
+    decided it). Rows held back by the threshold or the keeper pick have no
+    entry, because no toggle is responsible for them.
     Pure: the trace is for the scan log and the decision log (PR-5).
     """
     rows = list(rows)
@@ -498,4 +578,9 @@ def rule_trace(
             )
         elif blocker in ("B3", "B4", "B8"):
             trace[row.source_path] = f"{blocker}:spared"
+    _, followers = _aggressive_sets(
+        rows, keepers, confirm_below=confirm_below, rules=rules
+    )
+    for path in followers:
+        trace[path] = "B6:delete"
     return trace

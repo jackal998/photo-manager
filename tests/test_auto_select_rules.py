@@ -16,17 +16,34 @@ from core.services.auto_select_rules import (
 
 
 def test_default_rules_match_prd():
-    assert DEFAULT_RULES.to_dict() == {"B3": True, "B4": True, "B5": True, "B7": True, "B8": True}
+    assert DEFAULT_RULES.to_dict() == {
+        "B3": True, "B4": True, "B5": True, "B6": True, "B7": True, "B8": True,
+    }
 
 
 def test_legacy_rules_match_master():
-    # Master behaviour: only B8 differs from the defaults.
-    assert LEGACY_RULES.to_dict() == {"B3": True, "B4": True, "B5": True, "B7": True, "B8": False}
+    # Master behaviour: B8 and B6 differ from the defaults; B6 adds deletes.
+    assert LEGACY_RULES.to_dict() == {
+        "B3": True, "B4": True, "B5": True, "B6": False, "B7": True, "B8": False,
+    }
 
 
 def test_rules_version_and_ids_are_pinned():
-    assert RULES_VERSION == "v1"
-    assert RULE_IDS == ("B3", "B4", "B5", "B7", "B8")
+    assert RULES_VERSION == "v2"
+    assert RULE_IDS == ("B3", "B4", "B5", "B6", "B7", "B8")
+
+
+def test_describe_rules_order():
+    from core.services.auto_select_rules import describe_rules
+
+    assert describe_rules(DEFAULT_RULES) == (
+        "Rules v2: B3 on, B4 on, B5 on, B6 on, B7 on, B8 on."
+    )
+
+
+def test_b6_defaults_off_when_omitted():
+    # A call that predates B6 keeps the legacy direction: no added delete.
+    assert RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True).b6 is False
 
 
 def test_resolve_merges_partial_over_defaults():

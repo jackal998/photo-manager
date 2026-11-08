@@ -1,15 +1,16 @@
-// PR-4a — the auto-select rule toggles as the dialog sees them. Mirrors the
+// PR-4a/4b — the auto-select rule toggles as the dialog sees them. Mirrors the
 // server defaults in core/services/auto_select_rules.py (DEFAULT_RULES): the
-// screenshot rule B7 stays ON, the same as today's behaviour.
+// screenshot rule B7 stays ON, and B6 (a Live video follows its photo) is ON.
 
 import type { RuleId, RuleToggles } from "../api/types";
 
-export const RULE_IDS: readonly RuleId[] = ["B3", "B4", "B5", "B7", "B8"];
+export const RULE_IDS: readonly RuleId[] = ["B3", "B4", "B5", "B6", "B7", "B8"];
 
 export const DEFAULT_RULES: RuleToggles = {
   B3: true,
   B4: true,
   B5: true,
+  B6: true,
   B7: true,
   B8: true,
 };

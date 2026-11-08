@@ -7,6 +7,7 @@ import {
   SCAN_RULE_B3,
   SCAN_RULE_B4,
   SCAN_RULE_B5,
+  SCAN_RULE_B6,
   SCAN_RULE_B7,
   SCAN_RULE_B8,
   SCAN_RULES,
@@ -16,7 +17,7 @@ import type { RuleId, RuleToggles } from "@/api/types";
 interface ScanRulesBlockProps {
   rules: RuleToggles;
   disabled: boolean;
-  /** True when aggressive auto-select is on. B3, B4 and B8 act only then. */
+  /** True when aggressive auto-select is on. B3, B4, B6 and B8 act only then. */
   aggressiveOn: boolean;
   onChange: (next: RuleToggles) => void;
 }
@@ -62,6 +63,16 @@ const RULE_SPECS: readonly RuleSpec[] = [
     helpDefault:
       "When off, burst frames are judged as near-duplicates. Takes effect at the next scan.",
     aggressiveOnly: false,
+  },
+  {
+    id: "B6",
+    testid: SCAN_RULE_B6,
+    label: "web.scan.rule_b6_label",
+    labelDefault: "Live Photos: the video follows its photo",
+    help: "web.scan.rule_b6_off",
+    helpDefault:
+      "When off, a Live Photo's video is kept even when its photo is marked for delete. Used by Also mark all other files for delete.",
+    aggressiveOnly: true,
   },
   {
     id: "B7",

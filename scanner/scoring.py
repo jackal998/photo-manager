@@ -422,7 +422,8 @@ def compute_score(
     Returns ``None`` when ``row`` is a Live Photo MOV/MP4 passenger
     (its stem matches a HEIC sibling in the same group). The MOV keeps
     its own action (it is not decided by its HEIC) and is not a standalone
-    ranking candidate.
+    ranking candidate. Under rule B6 its delete decision follows its photo
+    (``core/services/live_photo.py``).
 
     Pure function: no I/O, no globals. Same (row, group_rows, weights)
     always produces the same result.

@@ -42,6 +42,7 @@ import {
   SCAN_CONFIRM_BELOW,
   SCAN_CLOUD_ANALYSIS_OPT_IN,
   SCAN_RULE_B3,
+  SCAN_RULE_B6,
   SCAN_RULE_B8,
   SCAN_RULES,
   SCAN_CANCEL_BUTTON,
@@ -571,7 +572,7 @@ describe("ScanDialog", () => {
     renderDialog();
 
     await screen.findByTestId(SCAN_RULES);
-    for (const testid of [SCAN_RULE_B3, SCAN_RULE_B8]) {
+    for (const testid of [SCAN_RULE_B3, SCAN_RULE_B6, SCAN_RULE_B8]) {
       await waitFor(() =>
         expect(screen.getByTestId(testid)).toHaveAttribute("data-state", "checked")
       );
@@ -597,10 +598,12 @@ describe("ScanDialog", () => {
     await user.click(screen.getByTestId(SCAN_START_BUTTON));
 
     const [req] = startScanMock.mock.calls[0] as [{ auto_select_rules: Record<string, boolean> }];
-    expect(req.auto_select_rules).toEqual({ B3: true, B4: true, B5: true, B7: true, B8: false });
+    expect(req.auto_select_rules).toEqual({
+      B3: true, B4: true, B5: true, B6: true, B7: true, B8: false,
+    });
   });
 
-  it("a rule change is persisted with all five ids", async () => {
+  it("a rule change is persisted with all six ids", async () => {
     const user = userEvent.setup();
     mockGetSettings.mockResolvedValue({
       "sources.list": [],
@@ -612,7 +615,7 @@ describe("ScanDialog", () => {
     await user.click(b8);
 
     expect(mockPatchSettings).toHaveBeenCalledWith({
-      "scan.auto_select.rules": { B3: true, B4: true, B5: true, B7: true, B8: false },
+      "scan.auto_select.rules": { B3: true, B4: true, B5: true, B6: true, B7: true, B8: false },
     });
   });
 
