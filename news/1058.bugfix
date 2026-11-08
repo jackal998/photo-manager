@@ -1,0 +1,1 @@
+An EXACT format duplicate now needs pixel identity at full resolution; consecutive shots, shifted re-takes and edited screenshots are no longer auto-deletable as exact copies (#1058)
