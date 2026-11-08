@@ -78,7 +78,7 @@ const RULE_SPECS: readonly RuleSpec[] = [
     id: "B7",
     testid: SCAN_RULE_B7,
     label: "web.scan.rule_b7_label",
-    labelDefault: "Screenshots: treat two matching PNGs as uncertain",
+    labelDefault: "Screenshots: treat two matching PNGs as uncertain unless they are pixel-identical",
     help: "web.scan.rule_b7_off",
     helpDefault:
       "When off, two matching PNGs are judged like photos. Takes effect at the next scan.",

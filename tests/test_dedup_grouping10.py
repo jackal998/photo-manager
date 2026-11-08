@@ -236,12 +236,16 @@ class TestScreenshotRuleB7Contract:
             _hr("/s/two.png", "p2", PA, PA, T0, "src_b", ftype="png"),
         ]
 
-    def test_b7_on_is_a_hint_naming_both_screenshots(self):
+    def test_b7_on_pixel_identical_pngs_group_exact(self):
+        # GROUPING 12 flip: these two PNGs carry identical rgb32 and grey128
+        # (the fixture default), so they are pixel-identical copies. The screenshot
+        # rule keeps a non-identical PNG pair a hint (TestGrouping12PngPixels).
         rows = _rows(classify(self._pngs(), source_priority=PRIORITY))
-        assert _group_sizes(rows) == []
-        for path in ("/s/one.png", "/s/two.png"):
-            assert rows[path].group_id is None
-            assert "both screenshots" in rows[path].reason, rows[path].reason
+        assert _group_sizes(rows) == [2]
+        dup = rows["/s/two.png"]
+        assert dup.action == "EXACT"
+        assert dup.match_confidence == "high"
+        assert "png vs png" in dup.reason, dup.reason
 
     def test_b7_off_judges_them_like_photos_and_groups_exact(self):
         rows = _rows(classify(
@@ -440,3 +444,96 @@ class TestUndatedRowNeverLinksTwoMoments:
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
         assert _group_sizes(rows) == [3]
+
+
+# GROUPING 12: a pixel-identical PNG pair is EXACT even while B7 is on. A PNG
+# pHash match that is not pixel-identical stays a hint, and the shot-time rule
+# still wins over both.
+_GREY_PATCH_12 = GreyBytes(
+    bytes(60 if (i // 128 < 12 and i % 128 < 12) else 0 for i in range(16384))
+)
+
+
+def _png(path: str, sha: str, label: str, exif=T0, phash=PA, grey=None):
+    return _hr(path, sha, phash, PA, exif, label, "png",
+               grey128=grey if grey is not None else GreyBytes(bytes(16384)))
+
+
+class TestGrouping12PngPixels:
+    def test_b7_on_pixel_identical_pngs_are_exact_and_grouped(self):
+        rows = _rows(classify(
+            [_png("/s/one.png", "p1", "src_a"), _png("/t/two.png", "p2", "src_b")],
+            source_priority=PRIORITY,
+        ))
+        dup = rows["/t/two.png"]
+        assert dup.action == "EXACT"
+        assert dup.match_confidence == "high"
+        assert "png vs png" in dup.reason, dup.reason
+        assert _group_sizes(rows) == [2]
+
+    def test_b7_on_non_identical_pngs_stay_a_hint(self):
+        rows = _rows(classify(
+            [_png("/s/one.png", "p1", "src_a"),
+             _png("/t/two.png", "p2", "src_b", grey=_GREY_PATCH_12)],
+            source_priority=PRIORITY,
+        ))
+        assert _group_sizes(rows) == []
+        for path in ("/s/one.png", "/t/two.png"):
+            assert rows[path].group_id is None
+            assert "same pHash, both screenshots" in rows[path].reason, rows[path].reason
+
+    def test_b7_on_png_pixel_check_unavailable_stays_a_hint(self):
+        # One side has no grey signature, so identity is unknown, not proven:
+        # the pair keeps the screenshot hint and is not grouped.
+        unknown = _hr("/t/two.png", "p2", PA, PA, T0, "src_b", "png", grey128=None)
+        rows = _rows(classify(
+            [_png("/s/one.png", "p1", "src_a"), unknown],
+            source_priority=PRIORITY,
+        ))
+        assert _group_sizes(rows) == []
+        for path in ("/s/one.png", "/t/two.png"):
+            assert rows[path].group_id is None
+            assert "same pHash, both screenshots" in rows[path].reason, rows[path].reason
+
+    def test_b7_on_shot_time_disagreement_wins_over_identical_pixels(self):
+        # Seven minutes apart: not within the same-moment window, not a half-hour
+        # multiple, so the shot-time vote disagrees and names the gap.
+        rows = _rows(classify(
+            [_png("/s/one.png", "p1", "src_a"),
+             _png("/t/two.png", "p2", "src_b", exif=T0 + timedelta(minutes=7))],
+            source_priority=PRIORITY,
+        ))
+        assert _group_sizes(rows) == []
+        dup = rows["/t/two.png"]
+        assert dup.action == ""
+        assert "shot" in dup.reason and "both screenshots" not in dup.reason, dup.reason
+
+    def test_b7_on_near_duplicate_pngs_stay_a_hint(self):
+        # pHash hamming 4 (PNEAR): not the exact-hash path, so the pixel match
+        # cannot make it EXACT.
+        rows = _rows(classify(
+            [_png("/s/one.png", "p1", "src_a"),
+             _png("/t/two.png", "p2", "src_b", phash=PNEAR)],
+            source_priority=PRIORITY,
+        ))
+        assert _group_sizes(rows) == []
+        assert rows["/t/two.png"].action == ""
+        assert rows["/t/two.png"].group_id is None
+
+    def test_b7_off_pixel_identical_pngs_judged_as_photos(self):
+        rows = _rows(classify(
+            [_png("/s/one.png", "p1", "src_a"), _png("/t/two.png", "p2", "src_b")],
+            source_priority=PRIORITY, screenshot_demotion=False,
+        ))
+        assert rows["/t/two.png"].action == "EXACT"
+        assert _group_sizes(rows) == [2]
+
+    def test_b7_off_non_identical_pngs_judged_as_photos(self):
+        rows = _rows(classify(
+            [_png("/s/one.png", "p1", "src_a"),
+             _png("/t/two.png", "p2", "src_b", grey=_GREY_PATCH_12)],
+            source_priority=PRIORITY, screenshot_demotion=False,
+        ))
+        dup = rows["/t/two.png"]
+        assert dup.action == "REVIEW_DUPLICATE"
+        assert "pixels differ" in dup.reason, dup.reason

@@ -3,7 +3,8 @@
 Classification rules:
   SHA-256 match                          → EXACT (exact duplicate)
   pHash hamming == 0, both lossy         → EXACT lower priority (format duplicate)
-  pHash hamming == 0, both lossy, shot times disagree or both PNG
+  pHash hamming == 0, both lossy, shot times disagree, or both PNG and not
+  pixel-identical (GROUPING 12: a pixel-identical PNG pair is EXACT)
                                          → REVIEW_DUPLICATE, confidence low
                                             (dedup-core research 2026-11-05 class B)
   pHash hamming == 0, one RAW + lossy    → "" both (complementary, undecided,
@@ -818,17 +819,21 @@ def _format_verdict(
         return None
     vote = _dhash_vote(keeper, duplicate, dhash_threshold)
     # dedup-core research 2026-11-05 class B — a pHash-0 match is not a certain
-    # duplicate when the shot times disagree or both files are PNG screenshots.
-    if same_moment:
-        note = "both screenshots" if screenshot_demotion and _screenshot_pair(
-            keeper, duplicate) else None
-    else:
-        note = _demotion_note(keeper, duplicate, screenshot_demotion)
-    if note is not None:
-        return _hint(keeper, duplicate, f"same pHash, {note}")
+    # duplicate when the shot times disagree. Shot time is checked first and
+    # always wins; the same_moment branch already agrees on shot time.
+    time_note = None if same_moment else _demotion_note(
+        keeper, duplicate, screenshot_demotion=False)
+    if time_note is not None:
+        return _hint(keeper, duplicate, f"same pHash, {time_note}")
     # EXACT means pixel-identical, not just pHash 0: pHash is greyscale, so
     # a colour grade, a resize or the next frame of a burst also hashes 0.
     same_pixels = _pixels_identical(keeper, duplicate)
+    # GROUPING 12: a PNG pair is a screenshot demotion only when its pixels
+    # are not identical. A pixel-identical copy is identity evidence, so it
+    # falls through to EXACT even while the screenshot rule is on.
+    png_pair = screenshot_demotion and _screenshot_pair(keeper, duplicate)
+    if png_pair and same_pixels is not True:
+        return _hint(keeper, duplicate, "same pHash, both screenshots")
     if vote != "agree" and same_pixels is not True:
         detail = "same pHash, pixels differ" if same_pixels is False else (
             "same pHash, pixel check unavailable"
@@ -1039,8 +1044,8 @@ def _gates_pass(
 # identity). Low-confidence evidence never unions: a low match is a hint
 # (``_mark_hints``) that names its partner in the reason and never groups or
 # sets an action. Two signals make a pHash match high: dHash agreement, or
-# identical 32x32 pixels (G6). Two PNGs group only as byte copies while B7 is
-# on. Stem and pair edges are unchanged in this version (iteration 2).
+# identical 32x32 pixels (G6). Two PNGs group only as byte or pixel-identical
+# copies while B7 is on (GROUPING 12). Stem and pair edges are unchanged in this version (iteration 2).
 # Iteration 3: an undated row never links two shot moments through a content
 # edge either (``_assign_group_ids``); the refused edge is a hint.
 # "11": EXACT's pixel identity is decided on a 128x128 grey signature (grey128,
@@ -1048,7 +1053,9 @@ def _gates_pass(
 # GREY_BLOCK_MAX and at most GREY_TAIL_BUDGET pixels over GREY_TAIL_MAX. The 32x32
 # RGB mean-difference test is gone; the rgb32 channel-shift test stays. A moved
 # person, a shifted second shot or a changed text line is REVIEW, not EXACT.
-GROUPING_STRATEGY_VERSION = "11"
+# "12": a pixel-identical PNG pair is EXACT even while B7 is on; a PNG pHash match
+# that is not pixel-identical stays a hint (Principle C narrowed to non-identical pixels).
+GROUPING_STRATEGY_VERSION = "12"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.

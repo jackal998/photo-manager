@@ -378,3 +378,9 @@ The task-A code (grey128 = BOX 128 of the DRAFTED working image) reproduced the 
 - The pHash / dHash / mean-colour / rgb32 recipe (drafted RGB) is UNCHANGED, so hash values and grouping do not move; only the EXACT gate's input changes. `HASH_RECIPE_VERSION` "6" comment must say so ("per-file cost: one luma-only full decode for JPEG").
 - Thresholds unchanged: GREY_BLOCK_MAX 4.0, GREY_TAIL_MAX 8, GREY_TAIL_BUDGET 16. Confirmed on all 137 census pairs with this recipe: honest max 2.56 (tail 0), distinct min 6.62 (tail 39).
 - Tests to add: a hasher test that a detailed JPEG's grey128 equals BOX 128 of its full luma decode and differs from BOX 128 of its drafted decode; a RAW-preview test if a fixture exists (else document); the existing orientation twin stays.
+
+## GROUPING 12 (lead decision, 2026-11-08)
+
+A pixel-identical PNG pair is identity evidence, so it is EXACT even while the screenshot rule (B7) is on. A PNG pHash match that is not pixel-identical stays a hint, which names the screenshot rule. The shot-time demotion still wins over both. The near-duplicate (hamming above 0) PNG path is unchanged.
+
+Measured by the lead on the dev test set through the GROUPING 11 gate, with B7 off: the 38 PNG "format duplicate" pairs split into 36 pixel-identical copies of the same screenshot saved in three places, and 2 false pairs (two different bank receipts that the old 32x32 test confused). With B7 on, Principle C kept all of them as hints, so the 36 true copies never grouped. `GROUPING_STRATEGY_VERSION` goes "11" to "12".
