@@ -863,7 +863,44 @@ class TestLiveVideoRule:
             _live_row("/b/IMG_1(1).MOV", "g1", None, cid="C1"),
         ]
         deletes, _ = _live_plan(rows, DEFAULT_RULES)
-        assert len({"/b/IMG_1.MOV", "/b/IMG_1(1).MOV"} & deletes) == 1
+        # "(" sorts before ".", so "/b/IMG_1(1).MOV" is dropped first. That
+        # leaves "/b/IMG_1.MOV" as the follower, and "/b/IMG_1(1).MOV" survives.
+        assert {"/b/IMG_1.MOV", "/b/IMG_1(1).MOV"} & deletes == {"/b/IMG_1.MOV"}
+        assert "/b/IMG_1(1).MOV" not in deletes
+
+    def test_b6_overrides_b8_spared_trace(self):
+        """Catches: a B6 follower keeping its earlier B8:spared trace entry.
+        A scored REVIEW_DUPLICATE video is spared by B8 when B6 is off. With
+        B6 on, the same video follows its deleted photo, and the trace must
+        say so."""
+        from core.services.auto_select import plan_auto_select, rule_trace
+        from core.services.auto_select_rules import RuleToggles
+
+        rows = [
+            _live_row("/a/IMG_1.HEIC", "g1", 0.90, action="EXACT", cid="C1"),
+            _live_row("/b/IMG_1.HEIC", "g1", 0.60, action="EXACT", cid="C1"),
+            _live_row("/a/IMG_1.MOV", "g1", None, cid="C1"),
+            _live_row("/b/IMG_1(1).MOV", "g1", 0.50, action="REVIEW_DUPLICATE", cid="C1"),
+        ]
+        off = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True, b6=False)
+        stamped_off, _ = plan_auto_select(
+            rows, aggressive=True, confirm_below="medium", rules=off
+        )
+        trace_off = rule_trace(
+            rows, stamped_off, aggressive=True, confirm_below="medium", rules=off
+        )
+        assert trace_off["/b/IMG_1(1).MOV"] == "B8:spared"
+
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        stamped, deletes = plan_auto_select(
+            rows, aggressive=True, confirm_below="medium", rules=DEFAULT_RULES
+        )
+        trace = rule_trace(
+            rows, stamped, aggressive=True, confirm_below="medium", rules=DEFAULT_RULES
+        )
+        assert "/b/IMG_1(1).MOV" in deletes
+        assert trace["/b/IMG_1(1).MOV"] == "B6:delete"
 
     def test_decision3_video_spared_when_one_still_is_kept(self):
         """Decision 3: a video with two qualifying stills follows only when
