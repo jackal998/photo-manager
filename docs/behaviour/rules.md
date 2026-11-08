@@ -180,7 +180,7 @@ code decides it, and which test or scenario pins it.
 - **Pins:** `tests/test_dedup_rule_toggles.py::TestBurstRule::test_burst_off_keeps_classifier_verdicts`, `tests/test_dedup_rule_toggles.py::TestBurstRule::test_burst_off_leaves_group_ids_unchanged`
 - **Status:** pinned
 
-### R-SCAN-10 — With the screenshot rule off, a match between two PNGs is not capped at low confidence; a shot-time disagreement still is
+### R-SCAN-10 — With the screenshot rule off, a match between two PNGs is not capped at low confidence; shot time is never read
 
 - **Rule:** With the screenshot rule (B7, default on in v1) turned off, a match between two PNGs is judged like a photo. Shot time is not read (GROUPING 14: a grouping verdict is decided on content). With the rule on, a pair of PNGs whose pixels are not identical is capped at low too; a pixel-identical pair is `EXACT` (GROUPING 12). Takes effect at the next scan.
 - **Owning code:** `scanner/dedup.py::_demotion_note`
