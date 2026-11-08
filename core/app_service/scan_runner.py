@@ -1533,6 +1533,7 @@ def _run_pipeline(
             )
             bus.log(
                 f"Auto-select rules: B3 marked {trace['B3:delete']:,} delete;"
+                f" B6 marked {trace['B6:delete']:,} delete;"
                 f" spared B3 {trace['B3:spared']:,}, B4 {trace['B4:spared']:,},"
                 f" B8 {trace['B8:spared']:,}."
             )

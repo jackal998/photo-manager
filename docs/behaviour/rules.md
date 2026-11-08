@@ -161,7 +161,7 @@ code decides it, and which test or scenario pins it.
 
 ### R-SCAN-7 — With the people-and-pets rule on, aggressive auto-select marks only EXACT rows for delete, at either threshold
 
-- **Rule:** Default on. A rule can veto a delete the threshold admits; it never admits a row below the threshold.
+- **Rule:** Default on. A rule can veto a delete the threshold admits; it never admits a row below the threshold. The one exception is a Live-video follower added by B6 ([R-SCAN-12](#r-scan-12--with-the-live-photo-rule-on-aggressive-auto-select-marks-a-live-video-for-delete-when-its-photo-is-marked)): it is a non-EXACT video, and it joins the delete set after this rule's check.
 - **Owning code:** `core/services/auto_select.py::non_keepers_for_aggressive_delete`
 - **Pins:** `tests/test_auto_select.py::TestRuleToggles::test_b8_on_excludes_review_at_medium`, `tests/test_auto_select.py::TestRuleToggles::test_b8_on_changes_nothing_at_high`, `qa/web/scenarios/s81_rule_toggles.py`
 - **Status:** pinned
@@ -192,6 +192,13 @@ code decides it, and which test or scenario pins it.
 - **Rule:** `scan.auto_select.rules` resolves per rule id: an unreadable or non-boolean value takes that rule's default, and unknown ids are ignored. The settings PATCH and the scan POST refuse unknown ids and non-boolean values with 422, and nothing is written.
 - **Owning code:** `core/services/auto_select_rules.py::resolve_rule_toggles`, `app/web/routes/settings.py::patch_settings`, `app/web/models.py::WebScanRequest`
 - **Pins:** `tests/test_auto_select_rules.py::test_resolve_ignores_unknown_and_non_bool`, `tests/test_web_settings_routes.py::TestPatchSettings::test_auto_select_rules_patch_rejects_junk_and_writes_nothing`, `tests/test_web_scan_routes.py::TestRuleTogglesResolution::test_unknown_rule_id_is_422`
+- **Status:** pinned
+
+### R-SCAN-12 — With the Live-photo rule on, aggressive auto-select marks a Live video for delete when its photo is marked
+
+- **Rule:** Default on (B6). A Live video follows its photo when every qualifying still (same group, folder, clean stem and ContentIdentifier, not edited) is in the delete set. The video must not be a keeper, nor already in the set, and an EXACT video needs B3 on. A follower is withheld when it would leave its capture with no kept motion clip. With the rule off, the delete set is R-SCAN-5 to R-SCAN-11 alone.
+- **Owning code:** `core/services/live_photo.py::live_photo_stills`, `core/services/auto_select.py::_live_video_followers`, `core/services/auto_select.py::_keep_one_motion_clip`
+- **Pins:** `tests/test_auto_select.py::TestLiveVideoRule::test_b6_video_follows_deleted_photo`, `tests/test_auto_select.py::TestLiveVideoRule::test_decision3_video_spared_when_one_still_is_kept`, `tests/test_auto_select.py::TestLiveVideoRule::test_decision2_motion_guard_keeps_last_clip`, `tests/test_auto_select.py::TestLiveVideoRule::test_decision1_exact_video_spared_when_b3_off`, `tests/test_auto_select.py::TestLiveVideoRule::test_b6_never_deletes_a_keeper_video`, `tests/test_auto_select.py::TestLiveVideoRule::test_b6_off_is_today`
 - **Status:** pinned
 
 ## SORT

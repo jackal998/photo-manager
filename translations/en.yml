@@ -811,6 +811,8 @@ web:
     rule_b4_off: "When off, the JPEG a RAW keeper outranks can be marked for delete. Used by Also mark all other files for delete."
     rule_b5_label: "Burst: keep every frame"
     rule_b5_off: "When off, burst frames are judged as near-duplicates. Takes effect at the next scan."
+    rule_b6_label: "Live Photos: the video follows its photo"
+    rule_b6_off: "When off, a Live Photo's video is kept even when its photo is marked for delete. Used by Also mark all other files for delete."
     rule_b7_label: "Screenshots: treat two matching PNGs as uncertain"
     rule_b7_off: "When off, two matching PNGs are judged like photos. Takes effect at the next scan."
     rule_b8_label: "People and pets: delete only exact copies"
