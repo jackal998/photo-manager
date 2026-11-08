@@ -627,6 +627,16 @@ def _classify_phash(
         and str(hr.record.path) not in rows
     ]
 
+    # GROUPING 13: a row the three trust gates keep out of pHash grouping can
+    # still be a pixel-identical copy. Decide that on pixels alone, never on
+    # its pHash (``_rescue_identity``). Writes EXACT rows; no edges, no hints.
+    trusted = {id(hr) for hr in candidates}
+    _rescue_identity(
+        [hr for hr in records
+         if hr.phash and id(hr) not in trusted and str(hr.record.path) not in rows],
+        rows, source_priority, mean_color_threshold, dhash_threshold,
+    )
+
     # Build pHash → records map (exact matches first)
     by_phash: dict[str, list[HashResult]] = {}
     for hr in candidates:
@@ -726,6 +736,71 @@ def _pixels_identical(a: HashResult, b: HashResult) -> Optional[bool]:
         return _grey_identical(a.grey128.bytes(), b.grey128.bytes())
     except OSError:
         return None  # store read failed: counted by the store, logged by scan_runner
+
+
+def _rescue_identity(
+    gated: list[HashResult],
+    rows: dict[str, ManifestRow],
+    source_priority: dict[str, int],
+    mean_color_threshold: int,
+    dhash_threshold: int,
+) -> None:
+    """GROUPING 13 — pixel identity for the rows the pHash trust gates excluded.
+
+    A flat, tiny or low-contrast image has an untrustworthy pHash (#516
+    entropy, #523 dimension, recipe "5" quality), so it takes no part in pHash
+    grouping. A byte-different copy of such an image (a re-encoded screenshot,
+    a Takeout export of a near-white chat capture) is still a copy, and before
+    this pass only its SHA could say so. Identity is decided here by the
+    strongest evidence that does not lean on the pHash as a signal: the same
+    pHash AND the same pixel dimensions (or a 90° swap) narrow the bucket, both
+    sides are dated and sit in one shot moment (``_shot_moments``), the
+    mean-colour and dHash gates of every exact-bucket edge pass
+    (``_gates_pass``), and ``_pixels_identical`` is True. A pass writes EXACT
+    with ``duplicate_of`` the moment's keeper (``_keeper_key``). Anything less
+    writes nothing — not a
+    REVIEW row and not a hint — because the pHash carries no evidence for these
+    rows. Undated gated rows are left alone: without a shot time there is no
+    second signal. Only lossy rows (``LOSSY_TYPES``) take part: a RAW is never a
+    dedup decision (the complementary policy of ``_classify_format_group``), so
+    a gated RAW and its gated JPEG stay as they were. Buckets are small (same
+    pHash and dims among gated rows), so the pairwise pixel check is cheap.
+    """
+    buckets: dict[tuple, list[HashResult]] = {}
+    for hr in gated:
+        if hr.record.file_type not in LOSSY_TYPES:
+            continue
+        if hr.exif_date is None or hr.pixel_width is None or hr.pixel_height is None:
+            continue
+        dims = (min(hr.pixel_width, hr.pixel_height), max(hr.pixel_width, hr.pixel_height))
+        buckets.setdefault((hr.phash, dims), []).append(hr)
+    for bucket in buckets.values():
+        if len(bucket) < 2:
+            continue
+        moments = sorted(
+            (sorted(m, key=lambda h: _keeper_key(h, source_priority))
+             for m in _shot_moments(bucket)),
+            key=lambda ordered: _keeper_key(ordered[0], source_priority),
+        )
+        for ordered in moments:
+            keeper = ordered[0]
+            for duplicate in ordered[1:]:
+                key = str(duplicate.record.path)
+                if key in rows or not _gates_pass(
+                    keeper, duplicate, mean_color_threshold, dhash_threshold
+                ):
+                    continue
+                if _pixels_identical(keeper, duplicate) is not True:
+                    continue
+                rows[key] = _make_row(
+                    duplicate,
+                    "EXACT",
+                    duplicate_of=str(keeper.record.path),
+                    hamming=0,
+                    reason=f"pixel-identical copy of {keeper.record.path.name} "
+                           f"(low-contrast or flat image; pHash not trusted)",
+                    match_confidence="high",
+                )
 
 
 def _format_review_row(
@@ -1055,7 +1130,12 @@ def _gates_pass(
 # person, a shifted second shot or a changed text line is REVIEW, not EXACT.
 # "12": a pixel-identical PNG pair is EXACT even while B7 is on; a PNG pHash match
 # that is not pixel-identical stays a hint (Principle C narrowed to non-identical pixels).
-GROUPING_STRATEGY_VERSION = "12"
+# "13": a row excluded from pHash grouping by the entropy, dimension or quality gate
+# is still checked for pixel identity against gated rows with the same pHash, the same
+# dimensions and the same shot moment (``_rescue_identity``, lossy rows only); a pass is
+# EXACT, anything less writes nothing. Byte-different copies of flat or low-contrast images were only
+# ever found by SHA before.
+GROUPING_STRATEGY_VERSION = "13"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.

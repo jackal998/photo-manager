@@ -1,0 +1,1 @@
+Group a byte-different, pixel-identical copy of a flat or low-contrast image (a re-encoded screenshot) as `EXACT` even though its pHash is not trusted: same pHash, same dimensions, same shot moment, identical pixels (GROUPING 13) (#1061)
