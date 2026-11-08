@@ -95,16 +95,17 @@ class TestFormatDuplicateTimeGate:
         rows = _rows(classify([keeper, dup], source_priority=PRIORITY))
         assert rows["/b/torii_1024.jpg"].action == "EXACT"
 
-    def test_two_pngs_same_phash_demoted_to_review_low(self):
+    def test_two_pixel_identical_pngs_same_moment_are_exact(self):
+        # GROUPING 12 flip: the fixture's grey128 and rgb32 are identical, so the
+        # pair is a pixel-identical PNG copy. The screenshot rule no longer demotes
+        # it (TestGrouping12PngPixels covers the non-identical hint).
         keeper = _hr("/a/shot_1.png", "p1", exif_date=T1, source_label="src_a", file_type="png")
         dup = _hr("/b/shot_2.png", "p2", exif_date=T1, source_label="src_b", file_type="png")
         rows = _rows(classify([keeper, dup], source_priority=PRIORITY))
-        # GROUPING 10: a both-PNG pHash match is a hint, so no row is written.
         row = rows["/b/shot_2.png"]
-        assert row.action == "" and row.group_id is None
-        assert row.match_confidence == "low"
-        assert "both screenshots" in row.reason
-        assert all(r.action != "EXACT" for r in rows.values())
+        assert row.action == "EXACT" and row.group_id is not None
+        assert row.match_confidence == "high"
+        assert "png vs png" in row.reason
 
 
 class TestNearDuplicateTimeGate:
