@@ -191,7 +191,7 @@ Confidence is per row, in three levels: high, medium, low. It is the lower of tw
 
 1. **Grouping confidence.** This is today's `match_confidence`. A row grouped only by a weak edge cannot be
    decided with more certainty than its group. The screenshot-pair demotion counts here only while its
-   B7 toggle is on (§6); by default it is off, so screenshot pairs are not capped at low. [B7]
+   B7 toggle is on (§6); by default it is on (owner decision after the 2026-11-08 census, §6), so a two-PNG match is a low-confidence hint. [B7]
 2. **Decision confidence.** It comes from how the decision was reached:
    - A rule with a certain input is high, for example a byte copy under B3.
    - Independent judges that agree are high; two that disagree are low.
@@ -226,7 +226,7 @@ the next rule or judge decides. The rule set id and version go into every log en
 | B4 | RAW + JPEG | on | keep both (today's #824, made visible) | judged as near-dups |
 | B5 | Burst stack | on | keep all frames (today's #1042) | judged as near-dups |
 | B6 | Live Photo MOV | on | the MOV gets its photo's decision | MOV kept (today) |
-| B7 | Screenshot demotion | off | on: two-PNG pairs get low confidence (today) | judged like photos |
+| B7 | Screenshot demotion | on (2026-11-08) | on: two-PNG pairs get low confidence (today) | judged like photos |
 | B8 | People and pets | on | DELETE only for an EXACT copy; a near-dup is kept | no people rule |
 
 - **B1 factors** (owner's list): sharpness and focus, exposure, composition, expression and eyes,
@@ -236,8 +236,10 @@ the next rule or judge decides. The rule set id and version go into every log en
 - **B3 which copy stays.** B3 names folder priority and metadata completeness as considerations and asks
   for samples first. Our provisional default: the scan's source order, then metadata completeness.
   Validation reports how often the owner's kept copy matches it. [B3]
-- **B7 screenshots are ordinary photos** [B7]. Today's two-PNG demotion becomes a toggle, default off.
-  Its `duplicate_of` edge still groups the pair either way (§3).
+- **B7 screenshots stay demoted by default** [B7]. The draft default was off ("screenshots are ordinary photos").
+  A 2026-11-08 census found that B7 off produced two false merges of bank-app receipt screenshots in 2,043
+  files, so the default is on ([census STATE](dedup-core-research-2026-11-05/STATE.md)). Off, a matching PNG
+  pair is judged like a photo.
 - **Videos [G2].** A video has no pHash (`scanner/dedup.py:84`, `:627`), so it is never a pHash candidate.
   A byte-copy video follows B3, a Live Photo MOV follows its photo (B6), and any other video is REVIEW.
 - **B8 defaults to protect** [B8][B-sum]. Until a people and pet signal exists (YuNet is a gated install,
@@ -387,7 +389,7 @@ The test set holds 312 groups whose partition matched v6 under grouping 7 [measu
    persisted. [features.md, rules register, qa scenario]
 4. **PR-4, rule toggles v1 [B2–B8].** A settings key `scan.auto_select.rules` with our defaults, shown in
    Advanced settings. The rules are wired into `core/services/auto_select.py`. B6 and B2 are new behaviour;
-   B3, B4 and B5 make today's behaviour switchable; B7's demotion becomes a toggle, default off. B8 ships
+   B3, B4 and B5 make today's behaviour switchable; B7's demotion becomes a toggle, default on (2026-11-08 census, §6). B8 ships
    with its protect default. [features.md, qa scenario]
 5. **PR-5, traceability [D4].** Add the `decision_log` columns and the `engine_verdict` table. Reasons now
    name the rule. [`sqlite-migration-safety`]
