@@ -366,3 +366,15 @@ These are estimates, not measured. The PR should include a micro-probe over the 
 | Docs, PRD edits and news fragment | 1 |
 | Census re-run through the real code path, plus perf probe | 1.5 |
 | **Total** | **12.5** |
+
+## Lead addendum after the merge-gate census (2026-11-08 evening) — the signature comes from a full-resolution luma decode
+
+The task-A code (grey128 = BOX 128 of the DRAFTED working image) reproduced the census on same-route pairs only. Eight honest cross-route pairs (a JPEG drafted to ~504 px against a fully decoded HEIC or PNG; two differently encoded JPEGs) exceeded the gate (max 4x4 block up to 15.6, tail up to 945) while the subtlest different picture sits at 6.2 / 42. No statistic on drafted images separates them (block means, p99.9, per-block NCC, blur or Lanczos variants were all measured). Decoding fully restores the census: honest max 2.19, tail 0; distinct min 6.62, tail 39.
+
+**Rule:** `grey128` = BOX (128, 128) of the full-resolution LUMA of the EXIF-oriented picture:
+- JPEG (and anything PIL reports as format JPEG, including JPEG-container ".dng" files): a second, luma-only full decode of the same bytes — `im = Image.open(BytesIO(data)); im.draft("L", im.size); exif_transpose(im, in_place=True)`. Measured median cost on real 12-24 MP files: +19 ms per JPEG (drafted RGB 14 ms, full RGB 33 ms, full luma 19 ms).
+- RAW: the embedded preview JPEG bytes (the ones `_raw_preview_and_sizes` extracts) through the same luma-only full decode, with the preview's own EXIF orientation applied as the hasher does today. Plumb the preview bytes out of `_raw_preview_and_sizes` (or compute the signature inside it) rather than re-opening LibRaw.
+- Other formats (HEIC/HEIF, PNG, WebP, GIF, TIFF): `convert("L")` of the existing working image, which is already a full decode (pillow_heif 1.3.0 has no draft; HEIC costs ~193 ms either way).
+- The pHash / dHash / mean-colour / rgb32 recipe (drafted RGB) is UNCHANGED, so hash values and grouping do not move; only the EXACT gate's input changes. `HASH_RECIPE_VERSION` "6" comment must say so ("per-file cost: one luma-only full decode for JPEG").
+- Thresholds unchanged: GREY_BLOCK_MAX 4.0, GREY_TAIL_MAX 8, GREY_TAIL_BUDGET 16. Confirmed on all 137 census pairs with this recipe: honest max 2.56 (tail 0), distinct min 6.62 (tail 39).
+- Tests to add: a hasher test that a detailed JPEG's grey128 equals BOX 128 of its full luma decode and differs from BOX 128 of its drafted decode; a RAW-preview test if a fixture exists (else document); the existing orientation twin stays.

@@ -1266,6 +1266,18 @@ class TestRgb32PixelSignature:
         assert compute_hashes(untagged, "png")[9] != sig_up
 
 
+def _box_grey(img: Image.Image) -> bytes:
+    """Independent reference for grey128: BOX 128 of the luma of ``img``. It
+    shares no code with the hasher."""
+    return img.convert("L").resize((128, 128), Image.BOX).tobytes()
+
+
+def _write_detailed_jpeg(path: Path) -> None:
+    """2000x1500 of per-pixel noise at quality 90. A draft shrink averages the
+    noise away, so a drafted decode and a full decode give different BOX 128s."""
+    Image.effect_noise((2000, 1500), 60).convert("RGB").save(path, "JPEG", quality=90)
+
+
 class TestGrey128Signature:
     """GROUPING 11: the 128x128 grey signature (element 10) of the EXACT
     structure gate. Catches: the signature missing, mis-sized, or not
@@ -1303,4 +1315,99 @@ class TestGrey128Signature:
         grey_up = compute_hashes(upright, "png")[10]
         assert compute_hashes(tagged, "png")[10] == grey_up
         assert compute_hashes(untagged, "png")[10] != grey_up
+
+    def test_jpeg_grey_is_box_of_full_luma_not_of_drafted_decode(self, tmp_path):
+        """GROUPING 11 route proof. On a 2000x1500 detailed JPEG the signature
+        equals BOX 128 of a full decode and differs from BOX 128 of the drafted
+        (1/4 shrink) decode that the RGB hash path uses."""
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "detailed.jpg"
+        _write_detailed_jpeg(f)
+        with Image.open(f) as full:
+            full_luma = _box_grey(full)
+        with Image.open(f) as drafted:
+            drafted.draft("RGB", (256, 256))
+            drafted_grey = _box_grey(drafted.convert("RGB"))
+        assert drafted_grey != full_luma  # the decode route is observable here
+        assert compute_hashes(f, "jpeg")[10] == full_luma
+
+    def test_oriented_jpeg_grey_is_the_oriented_full_luma(self, tmp_path):
+        """Orientation=6 JPEG. Two JPEG encodes of the same pixels never match
+        byte for byte, so the twin is pinned to the oriented decode of the
+        tagged file, and the rotation must visibly change the signature."""
+        from PIL import ImageOps
+
+        from scanner.hasher import compute_hashes
+
+        base = Image.new("RGB", (40, 20), (0, 0, 255))
+        for x in range(20):
+            for y in range(20):
+                base.putpixel((x, y), (255, 0, 0))  # left half red
+        stored = base.transpose(Image.Transpose.ROTATE_90)  # 20x40 on disk
+        exif = Image.Exif()
+        exif[0x0112] = 6  # Orientation: rotate the stored pixels 90 deg CW to display
+        tagged = tmp_path / "tagged.jpg"
+        stored.save(tagged, "JPEG", exif=exif, quality=95)
+        # The reference is itself a luma decode (the JPEG's Y channel). An RGB
+        # decode converted to L differs from Y by several levels at a sharp
+        # red/blue edge, so comparing against RGB->L would not be like-for-like.
+        with Image.open(tagged) as im:
+            im.draft("L", im.size)
+            expected = _box_grey(ImageOps.exif_transpose(im))
+            untransposed = _box_grey(im)
+        assert expected != untransposed
+        assert compute_hashes(tagged, "jpeg")[10] == expected
+
+    def test_png_grey_is_box_of_the_luma_of_its_full_decode(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "detailed.png"
+        Image.effect_noise((600, 400), 60).convert("RGB").save(f, "PNG")
+        with Image.open(f) as im:
+            expected = _box_grey(im)
+        assert compute_hashes(f, "png")[10] == expected
+
+    def test_raw_preview_grey_is_box_of_the_full_luma_of_the_embedded_jpeg(
+        self, tmp_path, monkeypatch
+    ):
+        """No real RAW fixture exists (a ProRAW DNG is 124-129 MB), so the fake
+        rawpy from the one-open test stands in. The embedded JPEG is the preview;
+        its grey must come from the full luma decode, with one LibRaw open."""
+        from scanner import hasher
+
+        buf = io.BytesIO()
+        Image.effect_noise((2000, 1500), 60).convert("RGB").save(buf, "JPEG", quality=90)
+        thumb = buf.getvalue()
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(hasher, "rawpy", _fake_rawpy(thumb, 8064, 6048, opens))
+        f = tmp_path / "shot.dng"
+        f.write_bytes(b"\x00" * 64)
+
+        grey = hasher.compute_hashes(f, "raw")[10]
+
+        assert len(opens) == 1
+        assert len(grey) == 16384
+        with Image.open(io.BytesIO(thumb)) as preview:
+            assert grey == _box_grey(preview)
+
+    def test_raw_fallback_grey_is_box_of_the_full_postprocess(self, tmp_path, monkeypatch):
+        """No embedded JPEG: the grey comes from the full postprocess, before the
+        working-resolution reduce, so it is not the reduced picture's signature."""
+        from scanner import hasher
+
+        arr = _photo_array(2048, 1536)
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(
+            hasher, "rawpy", _fake_rawpy(None, 8064, 6048, opens, postprocess_array=arr)
+        )
+        f = tmp_path / "shot.dng"
+        f.write_bytes(b"\x00" * 64)
+
+        grey = hasher.compute_hashes(f, "raw")[10]
+
+        assert len(grey) == 16384
+        assert grey == _box_grey(Image.fromarray(arr, "RGB"))
 
