@@ -1556,17 +1556,19 @@ class TestIdentityRescue:
         assert rows["/j/shot.png"].group_id is None
         assert "hint" not in rows["/j/shot.png"].reason
 
-    def test_shot_times_apart_writes_nothing(self):
+    def test_shot_times_apart_still_exact(self):
+        # GROUPING 14: identity is content; the 10 min gap is not read.
         a, b = self._pair(exif_date=datetime(2024, 6, 1, 12, 10, 0))
         rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
-        assert rows["/j/shot.png"].action == ""
-        assert rows["/j/shot.png"].group_id is None
+        assert rows["/j/shot.png"].action == "EXACT"
+        assert rows["/j/shot.png"].group_id == rows["/d/shot.png"].group_id is not None
 
-    def test_undated_gated_row_is_left_alone(self):
+    def test_undated_gated_copy_is_exact(self):
+        # GROUPING 14: a missing shot time is not a reason to skip the pixel check.
         a, b = self._pair(exif_date=None)
         rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
-        assert rows["/j/shot.png"].action == "UNDATED"
-        assert rows["/j/shot.png"].group_id is None
+        assert rows["/j/shot.png"].action == "EXACT"
+        assert rows["/j/shot.png"].group_id is not None
 
     def test_other_dimensions_never_share_a_bucket(self):
         a, b = self._pair(pixel_width=1170, pixel_height=2532)
