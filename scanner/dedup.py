@@ -1457,6 +1457,19 @@ def _pair_pass(
 _UNDATED_BRIDGE_DETAIL = "shot time unknown; would link two moments"
 
 
+def _reset_refused_row(row: ManifestRow, dated: bool) -> None:
+    """GROUPING 10 iteration 3 (F1): a row whose own ``duplicate_of`` link was
+    refused takes back its Pass-3 verdict, so no verdict names a partner it does
+    not share a group with. The partner is not re-pointed: the hamming to it is
+    unknown here. A row that later joins a group through another edge stays a
+    plain member."""
+    row.action = "" if dated else "UNDATED"
+    row.reason = "unique" if dated else "no EXIF DateTimeOriginal"
+    row.duplicate_of = None
+    row.hamming_distance = None
+    row.match_confidence = None
+
+
 def _shot_times(rows: dict[str, ManifestRow]) -> dict[str, datetime]:
     """Each dated row's ``shot_date``, parsed once. A missing or unparseable
     value is undated: the row is absent from the map."""
@@ -1548,15 +1561,24 @@ def _assign_group_ids(
         if a in shot_times and b in shot_times:
             link(a, b)
     refused: list[Hint] = []
+    refused_pairs: set[tuple[str, str]] = set()
     for a, b, _ in ordered_content:
         if a in shot_times and b in shot_times:
             continue
-        if find(a) != find(b) and _would_link_two_moments(
+        if find(a) == find(b) or not _would_link_two_moments(
             dated.get(find(a), []), dated.get(find(b), [])
         ):
-            refused.append((a, b, _UNDATED_BRIDGE_DETAIL))
-        else:
             link(a, b)
+            continue
+        # Refused: one hint per unordered pair (a row edge and a pHash edge can
+        # name the same pair), and a row that owned this link resets its verdict.
+        pair_key = (min(a, b), max(a, b))
+        if pair_key not in refused_pairs:
+            refused_pairs.add(pair_key)
+            refused.append((a, b, _UNDATED_BRIDGE_DETAIL))
+        for flagged, partner in ((a, b), (b, a)):
+            if rows[flagged].duplicate_of == partner:
+                _reset_refused_row(rows[flagged], flagged in shot_times)
 
     pair_pairs = sorted(
         (min(a, b), max(a, b)) for a, b, confidence in (edges or []) if confidence == "pair"

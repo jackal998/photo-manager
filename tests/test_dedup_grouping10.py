@@ -328,6 +328,17 @@ class TestShotGapText:
             assert "shot 2 min apart" in keeper.reason, keeper.reason
 
 
+def _assert_partner_invariant(result: list) -> None:
+    """Every EXACT or REVIEW_DUPLICATE row names a partner that shares its group."""
+    by_path = {r.source_path: r for r in result}
+    for row in result:
+        if row.action in ("EXACT", "REVIEW_DUPLICATE"):
+            assert row.duplicate_of is not None, row.source_path
+            partner = by_path[row.duplicate_of]
+            assert row.group_id is not None and row.group_id == partner.group_id, (
+                row.source_path, row.reason)
+
+
 class TestUndatedRowNeverLinksTwoMoments:
     """GROUPING 10 iteration 3: an undated row has no shot time, so a content
     edge through it must not join two dated rows shot at different moments.
@@ -344,14 +355,46 @@ class TestUndatedRowNeverLinksTwoMoments:
             _hr("/m/b_jan.jpg", "jb", PNEAR, PA, self.T_JAN),
             _hr("/m/c_may.jpg", "kc", self.P_FAR, PA, self.T_MAY),
         ]
-        rows = _rows(classify(records, source_priority=PRIORITY))
+        result = classify(records, source_priority=PRIORITY)
+        rows = _rows(result)
         a, b, c = rows["/m/a_undated.jpg"], rows["/m/b_jan.jpg"], rows["/m/c_may.jpg"]
         assert a.group_id is not None and a.group_id == b.group_id
         assert c.group_id is None
         assert c.match_confidence == "low"
         assert HINT_ONLY_PREFIX in c.reason, c.reason
+        # F1: the refused row keeps no duplicate verdict naming an ungrouped partner.
+        assert c.action != "REVIEW_DUPLICATE", c.reason
+        assert c.duplicate_of is None
+        assert c.reason.startswith("unique; " + HINT_ONLY_PREFIX), c.reason
+        # F2: one hint per pair, so the undated row names its partner once.
+        assert "+1 more" not in a.reason, a.reason
         assert "a_undated.jpg" in c.reason, c.reason
         assert "hint:" in a.reason, a.reason
+        _assert_partner_invariant(result)
+
+    def test_refused_row_edge_resets_a_row_that_then_joins_another_group(self):
+        """Case (i): the undated row A is a near-duplicate of the May row X
+        (joins it, a high edge) and of the Jan row B (its own row link, refused).
+        A must not keep the verdict that names B."""
+        # The near-duplicate pass visits rows in path order. X (lower priority,
+        # sorted first) is flagged to A first; then B (sorted before A) is A's
+        # keeper and flags A, so A's own link is to B. Row edges sort X-A before
+        # A-B, so A joins X, and its link to B is refused.
+        records = [
+            _hr("/m/c_a_undated.jpg", "ua", PNEAR, PA, None, "src_a"),
+            _hr("/m/a_x_may.jpg", "xx", PA, PA, self.T_MAY, "src_b"),
+            _hr("/m/b_b_jan.jpg", "jb", "ff000000fffffff0", PA, self.T_JAN, "src_a"),
+        ]
+        result = classify(records, source_priority=PRIORITY)
+        rows = _rows(result)
+        x, a, b = rows["/m/a_x_may.jpg"], rows["/m/c_a_undated.jpg"], rows["/m/b_b_jan.jpg"]
+        assert a.group_id is not None and a.group_id == x.group_id
+        assert a.duplicate_of is None
+        assert a.action == "UNDATED", a.reason
+        assert "near-duplicate" not in a.reason, a.reason
+        assert b.group_id is None
+        assert HINT_ONLY_PREFIX in b.reason, b.reason
+        _assert_partner_invariant(result)
 
     def test_agreeing_moments_group_all_three(self):
         """The rule does not fire when the two dated moments agree (2 s apart,
