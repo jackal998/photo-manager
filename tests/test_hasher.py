@@ -1359,6 +1359,28 @@ class TestGrey128Signature:
         assert expected != untransposed
         assert compute_hashes(tagged, "jpeg")[10] == expected
 
+    def test_corrupt_exif_jpeg_still_yields_a_grey_signature(self, tmp_path):
+        """A decodable JPEG whose EXIF block cannot be parsed. The luma decode
+        opens a fresh image, so PIL has no cached EXIF parse, and
+        ``exif_transpose`` raises ``SyntaxError``. That must not escape: the
+        file would become a HashFailure and leave the scan. Same fixture as
+        ``tests/test_scan_runner.py::_write_malformed_exif_jpeg``."""
+        from scanner.hasher import _grey_from_jpeg_bytes
+
+        img = Image.new("RGB", (32, 32), (200, 30, 30))
+        exif = img.getexif()
+        exif.get_ifd(0x8769)[36867] = "2024:08:01 12:00:00"
+        payload = bytearray(exif.tobytes())
+        assert payload[:6] == b"Exif\x00\x00", payload[:6]
+        payload[6:8] = b"\x00\x00"  # destroy the TIFF byte-order mark
+        f = tmp_path / "damaged.jpg"
+        img.save(str(f), "JPEG", quality=90, exif=bytes(payload), dpi=(72, 72))
+
+        grey = _grey_from_jpeg_bytes(f.read_bytes())
+
+        assert grey is not None
+        assert len(grey) == 16384
+
     def test_png_grey_is_box_of_the_luma_of_its_full_decode(self, tmp_path):
         from scanner.hasher import compute_hashes
 

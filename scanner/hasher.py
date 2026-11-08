@@ -182,7 +182,8 @@ def _grey_signature(img: "Image.Image") -> bytes:
     the EXACT gate in ``scanner/dedup.py`` (``_grey_identical``). ``img`` must be
     EXIF-oriented and FULL resolution (RGB, or L from a luma decode). Scan-time
     only: spilled to a ``GreySigStore`` and never persisted to the manifest."""
-    return img.convert("L").resize((GREY_SIDE, GREY_SIDE), Image.BOX).tobytes()
+    luma = img if img.mode == "L" else img.convert("L")  # no copy of a full-size L image
+    return luma.resize((GREY_SIDE, GREY_SIDE), Image.BOX).tobytes()
 
 
 def _grey_from_jpeg_bytes(data: bytes) -> Optional[bytes]:
@@ -193,19 +194,24 @@ def _grey_from_jpeg_bytes(data: bytes) -> Optional[bytes]:
     or PNG pushed honest pairs over the block threshold (census 2026-11-08). A
     second decode of the same bytes, full size and luma only, separates them
     cleanly; measured ~19 ms median per 12-24 MP JPEG. EXIF orientation is
-    applied exactly as the RGB path applies it. ``None`` on decode failure."""
+    applied as the RGB path applies it. ``None`` on decode failure.
+
+    This helper opens a fresh image, so PIL has no cached EXIF parse from an
+    earlier open: a corrupt EXIF block makes ``exif_transpose`` raise
+    ``SyntaxError``, which the RGB path never sees. Both paths then hash the
+    file un-rotated, so the two signatures stay consistent."""
     try:
         with Image.open(io.BytesIO(data)) as im:
             im.draft("L", im.size)
             try:
                 ImageOps.exif_transpose(im, in_place=True)
-            except (OSError, ValueError, AttributeError):
-                # Same guard as the RGB path: a malformed Orientation tag costs
-                # the rotation, not the grey signature.
+            except (OSError, ValueError, AttributeError, SyntaxError):
+                # A malformed Orientation or EXIF block costs the rotation, not
+                # the file: the RGB path hashes it un-rotated too.
                 pass
             im.load()
             return _grey_signature(im)
-    except (OSError, ValueError):
+    except (OSError, ValueError, SyntaxError):
         return None
 
 
