@@ -116,6 +116,7 @@ class TestWriteManifest:
             ).fetchall())
         assert stored["/a/phash_only.jpg"] == "low"
         assert stored["/a/plain.jpg"] is None
+
     def test_phash_quality_written_to_new_manifest(self, tmp_path):
         """Recipe "5" — a fresh manifest carries ``phash_quality`` from its own
         DDL and ``write_manifest`` inserts the ManifestRow field. A row with no
@@ -133,6 +134,23 @@ class TestWriteManifest:
                 "ORDER BY source_path"
             ).fetchall()
         assert stored == [("/a/scored.jpg", 16.4), ("/a/video.mov", None)]
+
+    def test_content_identifier_round_trips_through_write(self, tmp_path):
+        """GROUPING 10 (G3) — the Apple ContentIdentifier is persisted verbatim
+        (upper-cased upstream). A row without one stores NULL, never ''."""
+        out = tmp_path / "manifest.sqlite"
+        live = _row("/a/IMG_1.HEIC", "")
+        live.content_identifier = "A1B2C3D4-0000-4000-8000-000000000001"
+        plain = _row("/a/plain.jpg", "")
+
+        write_manifest([live, plain], out)
+
+        with sqlite3.connect(out) as conn:
+            stored = dict(conn.execute(
+                "SELECT source_path, content_identifier FROM migration_manifest"
+            ).fetchall())
+        assert stored["/a/IMG_1.HEIC"] == "A1B2C3D4-0000-4000-8000-000000000001"
+        assert stored["/a/plain.jpg"] is None
 
     def test_overwrites_existing_file(self, tmp_path):
         import gc

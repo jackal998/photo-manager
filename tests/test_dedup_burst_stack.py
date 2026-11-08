@@ -140,8 +140,12 @@ def test_undated_bridge_is_not_a_burst():
     right = [_frame(f"r{i}.jpg", f"r{i}", ph, 10 + i)
              for i, ph in enumerate(["00000007fffffff8", "0000000ffffffff0", "0000001fffffffe0"])]
     rows = _rows(classify(left + [bridge] + right, source_priority=PRIORITY))
-    members = [f"/a/{n}" for n in ["l0.jpg", "l1.jpg", "l2.jpg", "r0.jpg", "r1.jpg", "r2.jpg"]]
-    assert len({rows[m].group_id for m in members}) == 1
+    # GROUPING 10 iteration 3: an undated row never links two shot moments, so
+    # the bridge may join only one moment and the other edge is refused. The two
+    # moments stay two groups, and no burst spans the gap.
+    left_ids = {rows[f"/a/l{i}.jpg"].group_id for i in range(3)}
+    right_ids = {rows[f"/a/r{i}.jpg"].group_id for i in range(3)}
+    assert len(left_ids) == 1 and len(right_ids) == 1 and left_ids != right_ids
     assert not any(BURST_PREFIX in r.reason for r in rows.values())
 
 
@@ -153,8 +157,10 @@ def test_hint_leaf_hours_away_untouched():
     records = _five_frames() + [_hr("/a/zz_leaf.jpg", "leaf", "00000000fffffffe",
                                     _at(5 * 3600 + 17 * 60), "src_a")]
     rows = _rows(classify(records, source_priority=PRIORITY))
+    # GROUPING 10: the leaf's link is a hint, so it is ungrouped and undecided.
     leaf = rows["/a/zz_leaf.jpg"]
-    assert leaf.action == "REVIEW_DUPLICATE"
+    assert leaf.action == ""
+    assert leaf.group_id is None
     assert leaf.match_confidence == "low"
     assert not leaf.reason.startswith(BURST_PREFIX)
     _assert_all_burst_frames(rows, ["f0.jpg", "f1.jpg", "f2.jpg", "f3.jpg", "f4.jpg"],

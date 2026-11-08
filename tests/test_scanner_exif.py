@@ -1663,6 +1663,84 @@ class TestSubsecExiftoolPath:
         )
 
 
+class TestContentIdentifierExtract:
+    """GROUPING 10 (G1) — the Apple ContentIdentifier read from a synthetic
+    exiftool record. No exiftool runs here: the pytest job has none, and the
+    value domain is the same whichever key carries it."""
+
+    _UUID = "a1b2c3d4-0000-4000-8000-00000000abcd"
+
+    @pytest.mark.parametrize("key", [
+        "QuickTime:ContentIdentifier",
+        "MakerNotes:ContentIdentifier",
+        "MakerNotes:MediaGroupUUID",
+    ])
+    def test_each_key_yields_upper_cased_value(self, key):
+        """All three keys are read, and the value is upper-cased so the still
+        and its video compare equal whatever case each file wrote."""
+        from scanner.exif import _record_to_extract
+
+        ex = _record_to_extract(Path("/fake/IMG_1.HEIC"), {key: self._UUID})
+        assert ex.content_identifier == self._UUID.upper()
+
+    def test_quicktime_key_wins_over_makernote_key(self):
+        from scanner.exif import _record_to_extract
+
+        rec = {
+            "QuickTime:ContentIdentifier": "QT-ID",
+            "MakerNotes:ContentIdentifier": "MN-ID",
+            "MakerNotes:MediaGroupUUID": "GROUP-ID",
+        }
+        ex = _record_to_extract(Path("/fake/IMG_1.MOV"), rec)
+        assert ex.content_identifier == "QT-ID"
+
+    def test_makernote_key_used_when_quicktime_absent(self):
+        from scanner.exif import _record_to_extract
+
+        rec = {"MakerNotes:ContentIdentifier": "MN-ID", "MakerNotes:MediaGroupUUID": "G"}
+        ex = _record_to_extract(Path("/fake/IMG_1.JPG"), rec)
+        assert ex.content_identifier == "MN-ID"
+
+    @pytest.mark.parametrize("rec", [
+        {},
+        {"QuickTime:ContentIdentifier": ""},
+        {"QuickTime:ContentIdentifier": "   "},
+        {"MakerNotes:ContentIdentifier": ""},
+    ])
+    def test_absent_or_empty_is_none(self, rec):
+        """A missing identity is no evidence, never a match: None, not ''."""
+        from scanner.exif import _record_to_extract
+
+        assert _record_to_extract(Path("/fake/x.MOV"), rec).content_identifier is None
+
+    def test_identifier_does_not_change_exif_tag_count(self):
+        """The three keys stay OUT of ``_CENSUS_TAGS``: adding one to the
+        census would move every composite score for files that carry it."""
+        from scanner.exif import _CENSUS_TAGS, _CONTENT_ID_KEYS, _record_to_extract
+
+        for key in _CONTENT_ID_KEYS:
+            assert key not in _CENSUS_TAGS
+        base = {"EXIF:Make": "Apple", "EXIF:Model": "iPhone 15"}
+        without = _record_to_extract(Path("/fake/a.HEIC"), dict(base))
+        with_id = _record_to_extract(
+            Path("/fake/a.HEIC"), {**base, "MakerNotes:ContentIdentifier": self._UUID},
+        )
+        assert without.exif_tag_count == with_id.exif_tag_count == 2
+
+    def test_args_request_both_identifier_families(self):
+        """Without the selectors the field is silently None for every file.
+        The group is left unqualified so both QuickTime and MakerNote keys
+        come back."""
+        from scanner.exif import batch_read_extracts
+
+        paths = [Path("/fake/live.MOV")]
+        et = _make_mock_et([(paths[0], None)])
+        batch_read_extracts(paths, et)
+        called_args = et.execute.call_args[0][0]
+        assert "-ContentIdentifier" in called_args
+        assert "-MediaGroupUUID" in called_args
+
+
 # ── HashResult.to_media_extract adapter (#187 — PR 2) ──────────────────────
 
 

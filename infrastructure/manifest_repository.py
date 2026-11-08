@@ -147,6 +147,10 @@ _MIGRATIONS = [
     # grouping gate. Nullable, no DEFAULT: pre-"5" rows read NULL, which the
     # gate treats as "unknown → passes", so legacy manifests group as before.
     ("phash_quality", "REAL"),
+    # GROUPING 10 (G3) — Apple ContentIdentifier, the Live Photo pairing key.
+    # Nullable, no DEFAULT: pre-G10 rows read NULL, which means "no identity
+    # recorded", the same as a non-Apple file. Nothing reads it at load time.
+    ("content_identifier", "TEXT"),
 ]
 
 # #433 — drop the legacy ``dest_path`` column and migrate ``action='MOVE'``
@@ -186,6 +190,9 @@ _POST_DROP_COLUMNS = (
     # Recipe "5" — same trap as #820: omitted here, the copy-table rebuild
     # would drop the ALTER-added column. Keep in step with _MIGRATIONS.
     "phash_quality",
+    # GROUPING 10 (G3) — same trap as #820: an ALTER-added column missing here
+    # is silently dropped by the copy-table rebuild. Keep in step with _MIGRATIONS.
+    "content_identifier",
 )
 
 _UPDATE_LOCK_SQL = """
@@ -335,6 +342,7 @@ def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
             offset_time_original TEXT,
             match_confidence TEXT,
             phash_quality   REAL,
+            content_identifier TEXT,
             is_locked        INTEGER NOT NULL DEFAULT 0,
             outcome          TEXT    NOT NULL DEFAULT ''
         );

@@ -58,7 +58,8 @@ class RuleToggles:
         return cls(**{key.lower(): value for key, value in values.items()})
 
 
-# PRD defaults for the owner's library. B7 stays ON here: today's behaviour.
+# PRD defaults for the owner's library. B7 stays ON here. With B7 on, two PNGs
+# group only as byte copies (GROUPING "10"); a PNG pHash match is a hint.
 DEFAULT_RULES = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True)
 
 # Master behaviour before PR-4a. ``apply_best_copy`` passes this explicitly.

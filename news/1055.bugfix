@@ -1,0 +1,1 @@
+Group photos only on content identity: low-confidence matches, filenames and undated rows no longer merge unrelated files; Live videos pair by Apple ContentIdentifier (#1055)

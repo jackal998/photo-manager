@@ -46,7 +46,6 @@ except ImportError:
     _IMAGEHASH_AVAILABLE = False
 
 from scanner.media import RAW_EXTENSIONS, is_video
-from scanner.phash_distance import hamming_distance
 from scanner.walker import FileRecord
 
 # ---------------------------------------------------------------------------
@@ -64,14 +63,17 @@ LOSSY_TYPES = {"jpeg", "heic", "png", "gif", "webp"}
 # constant, so the two cannot drift apart.
 BURST_MAX_GAP_S = 2
 
-# A union-find edge: (path_a, path_b, confidence), confidence "high", "low" or
-# "pair". "high" edges merge groups. "low" edges are hints: they may attach a
-# lone file to a group, but never merge two groups that already have two or
-# more members (see ``_assign_group_ids``). "pair" edges are a Live Photo
-# image<->video same-stem link: they join a group only when another edge already
-# grouped one of the pair's members, so a lone pair never forms a group (GROUPING
-# "9"; see ``_pair_pass``).
+# A union-find edge: (path_a, path_b, confidence), confidence "high" or "pair".
+# "high" edges merge groups. "pair" edges are a Live Photo image<->video
+# same-stem link: they join a group only when another edge already grouped one
+# of the pair's members, so a lone pair never forms a group (GROUPING "9"; see
+# ``_pair_pass``). Low-confidence evidence is never an edge: it is a ``Hint``
+# (GROUPING "10"), which is only ever shown as text (``_mark_hints``).
 Edge = tuple[str, str, str]
+
+# A low-confidence match, (path_a, path_b, detail). It never groups anything;
+# ``_mark_hints`` names it in the reason of both files.
+Hint = tuple[str, str, str]
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -105,6 +107,10 @@ class HashResult:
     # (``_pixels_identical``). None for video, hash failure, and any
     # HashResult rebuilt without it; a None on either side demotes EXACT.
     rgb32: Optional[bytes] = None
+    # GROUPING 10 (G3): Apple ContentIdentifier, upper-cased, backfilled from
+    # the exiftool extract in scan_runner. Persisted (``content_identifier``
+    # column). None for stills without an Apple MakerNote and for non-Apple files.
+    content_identifier: Optional[str] = None
 
     def to_media_extract(self) -> "MediaExtract":  # noqa: F821 — runtime import
         """Convert this HashResult into a MediaExtract (#187 — PR 2).
@@ -222,6 +228,9 @@ class ManifestRow:
     # the #517 gate: low-confidence rows are never auto-marked for deletion.
     # A UI badge is still a tracked follow-up (not exposed on the web API).
     match_confidence: Optional[str] = None
+    # GROUPING 10 (G3): Apple ContentIdentifier (upper-cased), persisted so the
+    # pairing evidence survives a rescan-free review. Nothing reads it at load.
+    content_identifier: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +288,18 @@ def _shot_time_vote(a: HashResult, b: HashResult, tolerance_s: int = BURST_MAX_G
       * ``"unknown"``  — either side has no EXIF date (RAW, scan, stripped
                          metadata): no evidence either way, nothing demoted.
     """
-    if a.exif_date is None or b.exif_date is None:
+    return _time_vote(a.exif_date, b.exif_date, tolerance_s)
+
+
+def _time_vote(
+    a_dt: datetime | None, b_dt: datetime | None, tolerance_s: int = BURST_MAX_GAP_S
+) -> str:
+    """``_shot_time_vote`` on two bare shot times: the same three answers and the
+    same tolerance. The union rule (``_would_link_two_moments``) needs it for
+    dated rows that are not HashResults."""
+    if a_dt is None or b_dt is None:
         return "unknown"
-    delta = abs((a.exif_date - b.exif_date).total_seconds())
+    delta = abs((a_dt - b_dt).total_seconds())
     if delta <= tolerance_s:
         return "agree"
     if delta <= 14 * 3600 + tolerance_s and abs(delta - round(delta / 1800) * 1800) <= tolerance_s:
@@ -299,18 +317,29 @@ def _screenshot_pair(a: HashResult, b: HashResult) -> bool:
     return a.record.file_type == "png" and b.record.file_type == "png"
 
 
+def _gap_text(seconds: float) -> str:
+    """A shot-time gap for a hint: seconds under a minute, minutes under an
+    hour, hours otherwise. A gap of seconds must not print as "0.0 h"."""
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f} min"
+    return f"{seconds / 3600:.1f} h"
+
+
 def _demotion_note(
     a: HashResult, b: HashResult, screenshot_demotion: bool = True
 ) -> Optional[str]:
     """Short reason a pHash match is capped at ``low`` confidence, or None.
 
+    A non-None note makes the match a hint, which never groups (GROUPING "10").
     Shot-time disagreement is named first (it carries the hour gap); a
     both-PNG pair is the fallback cause, and only while ``screenshot_demotion``
     (the PR-4a B7 rule) is on.
     """
     if _shot_time_vote(a, b) == "disagree":
-        hours = abs((a.exif_date - b.exif_date).total_seconds()) / 3600
-        return f"shot {hours:.1f} h apart"
+        gap = _gap_text(abs((a.exif_date - b.exif_date).total_seconds()))
+        return f"shot {gap} apart"
     if screenshot_demotion and _screenshot_pair(a, b):
         return "both screenshots"
     return None
@@ -352,8 +381,9 @@ def classify(
             ALSO agrees within this distance (``match_confidence="high"``);
             if both dHashes are present but disagree, the pair is a pHash false
             positive and is NOT grouped. When dHash is unavailable (no
-            imagehash / decode failure) the pair falls back to pHash-only and
-            groups with ``match_confidence="low"``.
+            imagehash / decode failure) the pair is a low-confidence hint:
+            it never groups (GROUPING "10"), and both files name it in their
+            reason.
         min_phash_dimension: dimension gate. An image whose smaller side is
             below this many pixels is too low-detail for a 64-bit pHash to
             discriminate — tiny UI icons / thumbnails flatten to a handful of
@@ -376,7 +406,7 @@ def classify(
             frames) and 15.36 (a 2023 photo of two lights in the dark), so
             16.0 removes all three from pHash grouping, plus ~1 % of real
             photos (~5 % of PNG screenshots). Such files still get exact-SHA
-            dedup and the same-stem pair edge. A file below this is excluded
+            dedup and the Live Photo pair edge. A file below this is excluded
             from pHash near-dup grouping; ``None`` quality (video / legacy
             manifest / failure) passes. ``0`` disables the gate.
     """
@@ -401,7 +431,7 @@ def classify(
     # union-find edges (#538 — a true transitive closure, decoupled from
     # classification so a genuine near-dup is never orphaned; #824 — plus the
     # complementary edges for exact buckets that get no dedup decision).
-    phash_edges = _classify_phash(
+    phash_edges, phash_hints = _classify_phash(
         records, rows, threshold, source_priority, mean_color_threshold,
         min_phash_entropy_bits, dhash_threshold, min_phash_dimension,
         bktree_min_candidates, min_phash_quality,
@@ -419,23 +449,23 @@ def classify(
             rows[key] = _make_row(hr, "", reason="unique")
 
     # Pass 4 (was: action propagation, removed in #88): collect Live Photo
-    # pair edges. A pair shares a group_id only when its still is grouped for
-    # another reason (GROUPING "9"); each row keeps its own action /
-    # user_decision — the image's classification no longer dictates the video's.
-    pair_edges = _collect_pair_edges(records, rows, threshold)
+    # pair edges. Each row keeps its own action / user_decision — the image's
+    # classification no longer dictates the video's. GROUPING "10": only a
+    # Live video whose ContentIdentifier equals its still's yields an edge.
+    pair_edges = _collect_pair_edges(records, rows)
 
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
-    # pHash transitive edges (#538 near-dup, #824 complementary).
-    # Image<->video pair edges are "pair" (conditional); image<->image pair
-    # edges (RAW+JPG, HEIC+JPG) stay "high"; pHash edges carry their own.
-    taken, skipped = _assign_group_ids(
-        rows,
-        [(a, b, _pair_kind(a, b)) for a, b in pair_edges] + phash_edges,
-    )
-    _mark_isolated_hints(rows, skipped)
-    _mark_taken_hints(rows, taken)
+    # pHash transitive edges (#538 near-dup, #824 complementary). A pair
+    # cluster that would bridge two groups is skipped and says so in its reason.
+    # A content edge that would link two shot moments through an undated row
+    # comes back as a hint (GROUPING 10, iteration 3).
+    skipped_pairs, undated_hints = _assign_group_ids(rows, pair_edges + phash_edges)
+    for path in skipped_pairs:
+        rows[path].reason += _PAIR_SKIPPED_SUFFIX
     if burst_stacks:
-        _mark_burst_stacks(rows, {lone for lone, _ in taken})
+        _mark_burst_stacks(rows)
+    # GROUPING 10: hints run last, so a burst reason stays first in the text.
+    _mark_hints(rows, [*phash_hints, *undated_hints])
 
     return list(rows.values())
 
@@ -565,10 +595,11 @@ def _classify_phash(
     bktree_min_candidates: int | None = None,
     min_phash_quality: float = 16.0,
     screenshot_demotion: bool = True,
-) -> list[Edge]:
+) -> tuple[list[Edge], list[Hint]]:
     """Group by pHash; classify FORMAT_DUPLICATE and REVIEW_DUPLICATE, and
     return the pHash union-find edges — near-duplicate (#538) plus
-    complementary exact-bucket (#824).
+    complementary exact-bucket (#824) — and the low-confidence hints (GROUPING
+    "10") that did not earn an edge.
 
     Records are excluded from BOTH the exact-pHash format-group path and the
     near-duplicate scan when their pHash is degenerate (flat image — see
@@ -599,22 +630,26 @@ def _classify_phash(
     # RAW+lossy. Complementary buckets take no dedup decision but still return
     # their union-find edges (#824).
     exact_edges: list[Edge] = []
+    hints: list[Hint] = []
     for group in by_phash.values():
         if len(group) < 2:
             continue
-        exact_edges.extend(_classify_format_group(
+        group_edges, group_hints = _classify_format_group(
             group, rows, source_priority, mean_color_threshold, dhash_threshold,
             screenshot_demotion=screenshot_demotion,
-        ))
+        )
+        exact_edges.extend(group_edges)
+        hints.extend(group_hints)
 
     # Near-duplicate scan: compare all pairs with hamming distance ≤ threshold.
     # Returns the union-find edges (#538 — a true transitive closure, decoupled
     # from classification).
-    return exact_edges + _classify_near_duplicates(
+    near_edges, near_hints = _classify_near_duplicates(
         candidates, rows, threshold, source_priority, mean_color_threshold,
         dhash_threshold, bktree_min_candidates,
         screenshot_demotion=screenshot_demotion,
     )
+    return exact_edges + near_edges, hints + near_hints
 
 
 # Pixel-identity gate for an EXACT format duplicate (pHash 0, different bytes).
@@ -661,19 +696,129 @@ def _pixels_identical(a: HashResult, b: HashResult) -> Optional[bool]:
 
 
 def _format_review_row(
-    duplicate: HashResult, keeper: HashResult, reason: str, match_confidence: str
+    duplicate: HashResult, keeper: HashResult, reason: str
 ) -> ManifestRow:
     """A format duplicate that the pixel gate will not call EXACT: same group
-    (``duplicate_of`` the keeper), REVIEW_DUPLICATE. Confidence mirrors the
-    EXACT row it replaces: ``high`` on a dHash agreement, ``low`` when the
-    dHash vote is unknown (a low edge stays a hint, #524 / ``_row_edges``)."""
+    (``duplicate_of`` the keeper), REVIEW_DUPLICATE, ``high`` confidence. It is
+    only reached when the dHash agrees, or the pixels are known to be equal."""
     return _make_row(
         duplicate,
         "REVIEW_DUPLICATE",
         duplicate_of=str(keeper.record.path),
         hamming=0,
         reason=reason,
-        match_confidence=match_confidence,
+        match_confidence="high",
+    )
+
+
+def _hint(a: HashResult, b: HashResult, detail: str) -> Hint:
+    """A low-confidence format or shot-time match, as a hint (GROUPING "10")."""
+    return (str(a.record.path), str(b.record.path), detail)
+
+
+def _keeper_key(h: HashResult, source_priority: dict[str, int]) -> tuple:
+    """The keeper rule of an all-lossy bucket: highest format, then highest
+    source priority, then lexicographically smallest path (#792)."""
+    return (
+        FORMAT_PRIORITY.get(h.record.file_type, 99),
+        _priority(h.record.source_label, source_priority),
+        str(h.record.path),
+    )
+
+
+def _shot_moments(lossy: list[HashResult]) -> list[list[HashResult]]:
+    """GROUPING "10" — split an all-lossy pHash-0 bucket into shot moments.
+
+    Dated members link when their shot times agree (``_shot_time_vote``),
+    transitively: the same chaining the same-moment burst rule uses, so a burst
+    of frames two seconds apart is one moment. Undated members follow
+    ``_complementary_edges``: after the dated members, each joins the first
+    moment it agrees with (an unknown time agrees with anything), so an undated
+    file never links two moments.
+    """
+    moments: list[list[HashResult]] = []
+    dated = sorted(
+        (h for h in lossy if h.exif_date is not None), key=lambda h: str(h.record.path)
+    )
+    for member in dated:
+        merged = [member]
+        rest: list[list[HashResult]] = []
+        for moment in moments:
+            if any(_shot_time_vote(member, other) != "disagree" for other in moment):
+                merged.extend(moment)
+            else:
+                rest.append(moment)
+        moments = rest + [merged]
+    undated = sorted(
+        (h for h in lossy if h.exif_date is None), key=lambda h: str(h.record.path)
+    )
+    for member in undated:
+        for moment in moments:
+            if any(_shot_time_vote(member, other) != "disagree" for other in moment):
+                moment.append(member)
+                break
+        else:
+            moments.append([member])
+    return moments
+
+
+def _format_verdict(
+    keeper: HashResult,
+    duplicate: HashResult,
+    mean_color_threshold: int,
+    dhash_threshold: int,
+    screenshot_demotion: bool,
+    same_moment: bool = False,
+) -> ManifestRow | Hint | None:
+    """The verdict for one lossy duplicate of a pHash-0 keeper: a row when the
+    match is certain enough to group, a ``Hint`` when it is not, or ``None``
+    when a gate says the pair is not a duplicate at all.
+
+    Two independent signals make a match ``high`` (GROUPING "10", Principle A):
+    the dHash vote agrees, or the 32×32 pixel signatures are identical. A
+    demotion note (shot time disagrees, or a PNG pair) and an unknown second
+    signal are hints. EXACT still means pixel-identical (GROUPING "8").
+
+    ``same_moment``: the duplicate was clustered into the keeper's shot moment
+    (``_shot_moments``), which already is the shot-time agreement, so only the
+    PNG rule can demote the pair."""
+    if not _gates_pass(keeper, duplicate, mean_color_threshold, dhash_threshold):
+        return None
+    vote = _dhash_vote(keeper, duplicate, dhash_threshold)
+    # dedup-core research 2026-11-05 class B — a pHash-0 match is not a certain
+    # duplicate when the shot times disagree or both files are PNG screenshots.
+    if same_moment:
+        note = "both screenshots" if screenshot_demotion and _screenshot_pair(
+            keeper, duplicate) else None
+    else:
+        note = _demotion_note(keeper, duplicate, screenshot_demotion)
+    if note is not None:
+        return _hint(keeper, duplicate, f"same pHash, {note}")
+    # EXACT means pixel-identical, not just pHash 0: pHash is greyscale, so
+    # a colour grade, a resize or the next frame of a burst also hashes 0.
+    same_pixels = _pixels_identical(keeper, duplicate)
+    if vote != "agree" and same_pixels is not True:
+        detail = "same pHash, pixels differ" if same_pixels is False else (
+            "same pHash, pixel check unavailable"
+        )
+        return _hint(keeper, duplicate, detail + ", dHash unavailable")
+    if same_pixels is False:
+        return _format_review_row(
+            duplicate, keeper,
+            "same pHash, pixels differ (edited, resized or another shot)",
+        )
+    if same_pixels is None:
+        return _format_review_row(
+            duplicate, keeper, "same pHash, pixel check unavailable",
+        )
+    return _make_row(
+        duplicate,
+        "EXACT",
+        duplicate_of=str(keeper.record.path),
+        hamming=0,
+        reason=f"format duplicate of {keeper.record.path.name} "
+               f"({duplicate.record.file_type} vs {keeper.record.file_type})",
+        match_confidence="high",
     )
 
 
@@ -684,14 +829,15 @@ def _classify_format_group(
     mean_color_threshold: int = 30,
     dhash_threshold: int = 10,
     screenshot_demotion: bool = True,
-) -> list[Edge]:
+) -> tuple[list[Edge], list[Hint]]:
     """Within a pHash==0 group, apply RAW+lossy exception and format priority.
 
-    Returns the union-find edges the bucket contributes. The all-lossy path
-    returns none — its ``duplicate_of`` links already carry the component.
-    The two branches that take NO dedup decision return complementary edges
-    instead (#824): the bucket is one shot, so it is one group, even though
-    nothing in it is a duplicate to be discarded.
+    Returns ``(edges, hints)`` the bucket contributes. The all-lossy path
+    returns no edges — its ``duplicate_of`` links already carry the component —
+    but a low-confidence duplicate becomes a hint (GROUPING "10"). The two
+    branches that take NO dedup decision return complementary edges instead
+    (#824): the bucket is one shot, so it is one group, even though nothing in
+    it is a duplicate to be discarded.
     """
     has_raw = any(hr.record.file_type == "raw" for hr in group)
     lossy = [hr for hr in group if hr.record.file_type in LOSSY_TYPES]
@@ -719,77 +865,39 @@ def _classify_format_group(
             group, mean_color_threshold, dhash_threshold, screenshot_demotion
         )
 
-    # All lossy FORMAT_DUPLICATE: keep highest-format × highest-source-priority
-    lossy.sort(key=lambda h: (
-        FORMAT_PRIORITY.get(h.record.file_type, 99),
-        _priority(h.record.source_label, source_priority),
-        str(h.record.path),  # deterministic tiebreak on same format+priority (#792)
-    ))
-    keeper = lossy[0]
-    for duplicate in lossy[1:]:
-        key = str(duplicate.record.path)
-        if key in rows:
-            continue
-        # #462 — mean-color gate on the exact-pHash path. Catches the
-        # catalogued domain pattern where flat images (solid color or
-        # near-empty composition) all collide on pHash 8000000000000000
-        # — without this guard, an arbitrary set of black / white / blank
-        # PNGs would be silently marked as EXACT duplicates of each other.
-        # Mirrors the gate already in _classify_near_duplicates (line 319);
-        # skipped when either side lacks mean_color (RAW thumbnail, hash
-        # failure) — matches the near-duplicate path's None-handling.
-        if mean_color_threshold > 0 and keeper.mean_color and duplicate.mean_color:
-            if _mean_color_distance(keeper.mean_color, duplicate.mean_color) > mean_color_threshold:
+    # All lossy FORMAT_DUPLICATE. GROUPING "10": one keeper per shot moment, so
+    # a second moment's genuine pair is compared to its own keeper, not lost.
+    # Moments are ordered by their keeper, so the result is deterministic.
+    moments = sorted(
+        (sorted(m, key=lambda h: _keeper_key(h, source_priority))
+         for m in _shot_moments(lossy)),
+        key=lambda ordered: _keeper_key(ordered[0], source_priority),
+    )
+    hints: list[Hint] = []
+    for ordered in moments:
+        keeper = ordered[0]
+        for duplicate in ordered[1:]:
+            key = str(duplicate.record.path)
+            if key in rows:
                 continue
-        # #524 — dHash grouping gate: an independent second hash must agree
-        # (or be unavailable) for the format-dup to stand. "disagree" → skip.
-        vote = _dhash_vote(keeper, duplicate, dhash_threshold)
-        if vote == "disagree":
-            continue
-        # dedup-core research 2026-11-05 class B — a pHash-0 match is not a
-        # certain duplicate when the shot times disagree (three captures of one
-        # gate hashed identically) or when both files are PNG screenshots. The
-        # duplicate_of edge still groups them; only the label and confidence
-        # move to the review tier, so the aggressive auto-select skips the row.
-        note = _demotion_note(keeper, duplicate, screenshot_demotion)
+            verdict = _format_verdict(
+                keeper, duplicate, mean_color_threshold, dhash_threshold,
+                screenshot_demotion, same_moment=True,
+            )
+            if isinstance(verdict, ManifestRow):
+                rows[key] = verdict
+            elif verdict is not None:
+                hints.append(verdict)
+    # Cross-moment links: each later moment's keeper hints at the first keeper.
+    # Moments disagree pairwise on shot time, so the note is set; an unknown
+    # time (undated keeper) yields no note and no link.
+    first = moments[0][0]
+    for ordered in moments[1:]:
+        note = _demotion_note(first, ordered[0], screenshot_demotion)
         if note is not None:
-            rows[key] = _make_row(
-                duplicate,
-                "REVIEW_DUPLICATE",
-                duplicate_of=str(keeper.record.path),
-                hamming=0,
-                reason=f"same pHash as {keeper.record.path.name} but {note}",
-                match_confidence="low",
-            )
-            continue
-        # EXACT means pixel-identical, not just pHash 0: pHash is greyscale, so
-        # a colour grade, a resize or the next frame of a burst also hashes 0.
-        # Last gate before EXACT; byte copies never reach this loop.
-        same_pixels = _pixels_identical(keeper, duplicate)
-        confidence = "high" if vote == "agree" else "low"
-        if same_pixels is False:
-            rows[key] = _format_review_row(
-                duplicate, keeper,
-                "same pHash, pixels differ (edited, resized or another shot)",
-                confidence,
-            )
-            continue
-        if same_pixels is None:
-            rows[key] = _format_review_row(
-                duplicate, keeper, "same pHash, pixel check unavailable", confidence,
-            )
-            continue
-        rows[key] = _make_row(
-            duplicate,
-            "EXACT",
-            duplicate_of=str(keeper.record.path),
-            hamming=0,
-            reason=f"format duplicate of {keeper.record.path.name} "
-                   f"({duplicate.record.file_type} vs {keeper.record.file_type})",
-            match_confidence=confidence,
-        )
+            hints.append(_hint(first, ordered[0], f"same pHash, {note}"))
     # The component is already carried by the duplicate_of links written above.
-    return []
+    return [], hints
 
 
 def _complementary_edges(
@@ -797,7 +905,7 @@ def _complementary_edges(
     mean_color_threshold: int,
     dhash_threshold: int,
     screenshot_demotion: bool = True,
-) -> list[Edge]:
+) -> tuple[list[Edge], list[Hint]]:
     """#824 — union-find edges for an exact-pHash bucket that takes no dedup
     decision (RAW+lossy complementary, or all-RAW). The bucket is split by shot
     time, the same way the all-lossy and near-dup paths decide a pair.
@@ -806,8 +914,8 @@ def _complementary_edges(
     whose anchor it agrees with on shot time (``_demotion_note`` is None; an
     unknown time counts as agree, as before), else it starts a new cluster.
     A member is tied to its cluster anchor by a ``high`` edge. Between clusters
-    a ``low`` edge runs from each later anchor to the first anchor, so
-    disagreeing captures are only a hint, never a certain group.
+    a later anchor is hinted to the first anchor (GROUPING "10"): disagreeing
+    captures are only a hint, never a certain group.
 
     Both gates decide each edge, because an edge asserts "same shot": #462's
     mean-colour check (skipped when either side lacks a mean colour) and #524's
@@ -820,6 +928,7 @@ def _complementary_edges(
     ordered = sorted(group, key=lambda h: (h.exif_date is None, str(h.record.path)))
     anchors: list[HashResult] = []
     edges: list[Edge] = []
+    hints: list[Hint] = []
     for member in ordered:
         anchor = next(
             (
@@ -832,10 +941,13 @@ def _complementary_edges(
             anchors.append(member)
         elif _gates_pass(anchor, member, mean_color_threshold, dhash_threshold):
             edges.append((str(anchor.record.path), str(member.record.path), "high"))
+    # Every anchor after the first disagrees with the first on shot time or
+    # PNG-pair status, so its note is never None here.
     for other in anchors[1:]:
+        note = _demotion_note(anchors[0], other, screenshot_demotion)
         if _gates_pass(anchors[0], other, mean_color_threshold, dhash_threshold):
-            edges.append((str(anchors[0].record.path), str(other.record.path), "low"))
-    return edges
+            hints.append(_hint(anchors[0], other, f"same pHash, {note}"))
+    return edges, hints
 
 
 def _gates_pass(
@@ -890,7 +1002,15 @@ def _gates_pass(
 # "9": an image<->video same-stem pair is a "pair" edge (``_pair_pass``). It
 # shares a group_id only when its still is grouped for another reason; a lone
 # Live Photo pair gets group_id None. Image<->image pairs are unchanged.
-GROUPING_STRATEGY_VERSION = "9"
+# "10": content-gated identity, step 1 (dedup-core research 2026-11-05, tiered
+# identity). Low-confidence evidence never unions: a low match is a hint
+# (``_mark_hints``) that names its partner in the reason and never groups or
+# sets an action. Two signals make a pHash match high: dHash agreement, or
+# identical 32x32 pixels (G6). Two PNGs group only as byte copies while B7 is
+# on. Stem and pair edges are unchanged in this version (iteration 2).
+# Iteration 3: an undated row never links two shot moments through a content
+# edge either (``_assign_group_ids``); the refused edge is a hint.
+GROUPING_STRATEGY_VERSION = "10"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -1019,21 +1139,24 @@ def _classify_near_duplicates(
     dhash_threshold: int = 10,
     bktree_min_candidates: int | None = None,
     screenshot_demotion: bool = True,
-) -> list[Edge]:
+) -> tuple[list[Edge], list[Hint]]:
     """Flag pHash pairs with hamming distance 1–threshold as REVIEW_DUPLICATE,
-    and return their ``(path_a, path_b, confidence)`` union-find edges.
+    and return their ``(edges, hints)``.
 
     #538 — edge collection is DECOUPLED from classification. Every pair that
-    passes the distance + mean-color (#462) + dHash (#524) gates yields a
-    union-find edge, even when one endpoint is already classified via another
-    bridge. Previously the ``if hr_b … in rows: continue`` guard dropped such an
-    edge, so a genuine near-dup whose only bridge was already classified fell to
-    ``group_id=None`` (an order-dependent spanning *forest*, not a true
-    transitive closure). Classification (which row becomes REVIEW_DUPLICATE, and
-    its ``match_confidence``) is unchanged — only the returned edge set is new.
+    passes the distance + mean-color (#462) + dHash (#524) gates and is
+    ``high`` yields a union-find edge, even when one endpoint is already
+    classified via another bridge. Previously the ``if hr_b … in rows: continue``
+    guard dropped such an edge, so a genuine near-dup whose only bridge was
+    already classified fell to ``group_id=None`` (an order-dependent spanning
+    *forest*, not a true transitive closure).
+
+    GROUPING "10" — a ``low`` pair is a hint: it writes no row and no edge
+    (Principle A). Only ``high`` pairs classify, so a hint never claims a row
+    that a later high pair could have flagged.
     """
     if not _IMAGEHASH_AVAILABLE:
-        return []
+        return [], []
 
     # GROUPING 6: iterate in path order, so the first pair that flags a row (and
     # therefore its duplicate_of / reason) does not depend on record order.
@@ -1053,6 +1176,7 @@ def _classify_near_duplicates(
     neighbors = _near_dup_neighbors(int_hashes, threshold, bktree_min_candidates)
 
     edges: list[Edge] = []
+    hints: list[Hint] = []
     for i, (hr_a, hash_a) in enumerate(hashes):
         # hr_a may already be classified — it still serves as a comparator so
         # transitively-similar files connect into one component.
@@ -1074,16 +1198,20 @@ def _classify_near_duplicates(
             vote = _dhash_vote(hr_a, hr_b, dhash_threshold)
             if vote == "disagree":
                 continue
-            # #538 — record the union-find edge for EVERY surviving pair,
-            # decoupled from the in-rows classification guard below. This is the
-            # only behavioural change: the edge stands even when hr_b is already
-            # classified (exactly the case the old top-of-loop guard dropped →
-            # orphan). Redundant edges are union-find no-ops.
             # dedup-core research 2026-11-05 class B — shot-time or PNG-pair
-            # demotion caps confidence at "low" whatever the dHash said. The
-            # edge and the row share this one verdict.
+            # demotion caps confidence at "low" whatever the dHash said.
             note = _demotion_note(hr_a, hr_b, screenshot_demotion)
             confidence = _edge_confidence(vote, note)
+            if confidence == "low":
+                detail = f"hamming={distance}"
+                detail += f", {note}" if note is not None else ", dHash unavailable"
+                hints.append((str(hr_a.record.path), str(hr_b.record.path), detail))
+                continue
+            # #538 — record the union-find edge for EVERY surviving high pair,
+            # decoupled from the in-rows classification guard below. The edge
+            # stands even when hr_b is already classified (exactly the case the
+            # old top-of-loop guard dropped → orphan). Redundant edges are
+            # union-find no-ops.
             edges.append((str(hr_a.record.path), str(hr_b.record.path), confidence))
             # Classification (unchanged from pre-#538): flag the lower-priority
             # side, but only when hr_b is still unclassified — so the
@@ -1100,17 +1228,16 @@ def _classify_near_duplicates(
             flagged = ordered[1]
             flagged_key = str(flagged.record.path)
             if flagged_key not in rows:
-                suffix = f"; {note}" if note is not None else ""
                 rows[flagged_key] = _make_row(
                     flagged,
                     "REVIEW_DUPLICATE",
                     duplicate_of=str(ordered[0].record.path),
                     hamming=distance,
                     reason=f"near-duplicate (hamming={distance}) of "
-                           f"{ordered[0].record.path.name}{suffix}",
+                           f"{ordered[0].record.path.name}",
                     match_confidence=confidence,
                 )
-    return edges
+    return edges, hints
 
 
 def _edge_confidence(vote: str, note: Optional[str]) -> str:
@@ -1119,65 +1246,26 @@ def _edge_confidence(vote: str, note: Optional[str]) -> str:
     return "high" if vote == "agree" and note is None else "low"
 
 
-def _pair_kind(a: str, b: str) -> str:
-    """Edge kind for a same-stem pair edge. An image<->video pair is "pair"
-    (GROUPING "9": it groups only with a still that is grouped anyway). An
-    image<->image pair (RAW+JPG, HEIC+JPG) stays "high", as in GROUPING "8"."""
-    return "pair" if is_video(a) != is_video(b) else "high"
-
-
 def _collect_pair_edges(
-    records: list[HashResult], rows: dict[str, ManifestRow], threshold: int = 10
-) -> list[tuple[str, str]]:
-    """Return ``(own_path, peer_path)`` edges for every Live Photo cluster
-    member that survived classification.
+    records: list[HashResult], rows: dict[str, ManifestRow]
+) -> list[Edge]:
+    """Return the Live Photo "pair" edges between same-stem cluster members.
 
-    #539 — same-capture gate. The cluster comes from the walker keyed on
-    filename only (``(clean_stem, number)`` + directory); it assumes
-    "same stem ⇒ same capture", which is false when unrelated files collide
-    on a name (merged folders, multi-camera, Takeout). To stop a name
-    collision from unioning genuinely-different photos, an edge is dropped
-    when BOTH members carry a pHash AND their Hamming distance exceeds
-    ``threshold`` — positive evidence they are different images. The gate is
-    deliberately conservative: it fires only on disconfirming content
-    evidence, so any pair where a side lacks a pHash (a Live Photo's MOV/MP4)
-    or whose pHashes agree (a RAW+JPG / HEIC+JPG of one shot) is preserved
-    exactly as before. A pHash gate is used rather than a shot-date gate
-    because a Live Photo's HEIC (``DateTimeOriginal``, camera-local) and its
-    MOV (QuickTime date, frequently UTC) legitimately differ by a whole
-    timezone offset — a date gate would split real pairs.
+    GROUPING "10" (G4, owner decision 2026-11-07): a filename never creates an
+    edge. The walker's ``pair_cluster`` is keyed on the name alone, so it
+    proves nothing about capture. Two rules replace the stem edge:
 
-    Per photo-manager#88: files with the same exact stem (clean_stem AND
-    ``(N)`` dupe-marker number) in the same directory are linked. GROUPING
-    "9": an image<->video link is a "pair" edge, which shares a ``group_id``
-    only when the still is grouped for another reason; a lone pair gets none
-    (``_pair_pass``). An image<->image link is still "high" and always groups.
-    Action / ``user_decision`` / ``reason`` are NOT propagated — each row keeps
-    its independent classification. The image's destruction is no longer
-    automatically the video's; the user makes those decisions per-row in the UI.
+    * still <-> still: no edge. Stills group only through the pHash tiers,
+      which compare every candidate pair with content evidence anyway.
+    * any pair with a video side: a ``"pair"`` edge only when both files carry
+      the same non-None Apple ContentIdentifier. A video whose identity is
+      missing or different is not its still's passenger.
 
-    A "cluster" is computed by the walker's ``pair_cluster`` field and
-    typically holds one peer (the simple HEIC+MP4 case observed across
-    most production data). Larger clusters surface for:
-
-    * HEIC + MOV + MP4 (Google transcoded one Live Photo into both
-      video formats — same exact stem, no ``(N)``).
-    * HEIC + JPG + MP4 (a Live Photo with an extra image variant).
-
-    Cluster members share one group_id only when one of them is grouped for
-    another reason (see ``_pair_pass``).
-
-    Implementation: emit edges as a list (not in-place mutation of
-    ``duplicate_of``) so ``_assign_group_ids`` can transitively close
-    every component via union-find — handles the asymmetric case where
-    each cluster member sits in its own SHA-group, plus the cluster
-    edges union them all.
-
-    The walker computes the cluster symmetrically (every member sees
-    every other member as a peer), so duplicate edges flow in both
-    directions. Union-find dedupes them implicitly.
+    Action, ``user_decision`` and ``reason`` are never propagated. Each row keeps
+    its own classification. A pair edge only links rows into a group, and
+    ``_pair_pass`` decides whether that link may join a group at all.
     """
-    edges: list[tuple[str, str]] = []
+    edges: list[Edge] = []
     by_path: dict[str, HashResult] = {str(hr.record.path): hr for hr in records}
     for hr in records:
         own_key = str(hr.record.path)
@@ -1185,95 +1273,71 @@ def _collect_pair_edges(
             continue
         for peer_path in hr.record.pair_cluster:
             peer_key = str(peer_path)
-            if peer_key not in rows:
-                continue
-            # #539 — drop the edge only on positive evidence the two
-            # same-stem files are different images. ``hamming_distance``
-            # returns None when either pHash is missing (a video peer) or
-            # imagehash is unavailable; None means "no evidence" → keep the
-            # edge, preserving Live Photo and same-shot RAW+JPG pairings.
             peer_hr = by_path.get(peer_key)
-            if peer_hr is not None:
-                d = hamming_distance(hr.phash, peer_hr.phash)
-                if d is not None and d > threshold:
-                    continue
-            edges.append((own_key, peer_key))
+            if peer_key not in rows or peer_hr is None:
+                continue
+            if not (is_video(own_key) or is_video(peer_key)):
+                continue  # still <-> still: content tiers only (G4)
+            cid = hr.content_identifier
+            if cid is None or peer_hr.content_identifier != cid:
+                continue  # no device-written identity shared: not a pair
+            edges.append((own_key, peer_key, "pair"))
     return edges
 
 
 def _row_edges(rows: dict[str, ManifestRow]) -> list[Edge]:
-    """``duplicate_of`` links as edges. A link's confidence is its row's
-    ``match_confidence``: a ``low`` link is a hint, everything else is high."""
+    """``duplicate_of`` links as high edges. Every link is high: a low match
+    never writes a ``duplicate_of`` (GROUPING "10"; it is a ``Hint``)."""
     return [
-        (row.source_path, row.duplicate_of,
-         "low" if row.match_confidence == "low" else "high")
+        (row.source_path, row.duplicate_of, "high")
         for row in rows.values() if row.duplicate_of
     ]
 
 
 HINT_ONLY_PREFIX = "hint only (not grouped): "
 BURST_PREFIX = "burst stack (keep all): "
+# GROUPING 10 (G7) — appended to an unjoined pair member whose cluster would
+# have bridged two groups that content kept apart.
+_PAIR_SKIPPED_SUFFIX = "; pair link skipped: its stills are in different groups"
 
 
-def _mark_isolated_hints(
-    rows: dict[str, ManifestRow], skipped: list[tuple[str, str]]
-) -> None:
-    """GROUPING 6 — a row left out of every group by a skipped low hint must
-    not carry a dedup action: the review UI groups rows by ``group_id``, and a
-    REVIEW row with no group would be a duplicate of nobody. A flagged row goes
-    back to undecided (UNDATED when it has no shot date, as in Pass 3) and keeps
-    its ``duplicate_of``. A row that was never flagged (its hint was the
-    partner's link) gets the partner as ``duplicate_of`` and ``low`` confidence,
-    so no lone file is silently orphaned. Every such reason carries the marker.
-    A row still in a group through another edge is untouched."""
-    partner_of: dict[str, str] = {}
-    for a, b in skipped:
-        partner_of.setdefault(a, b)
-        partner_of.setdefault(b, a)
-    for row in rows.values():
-        if row.group_id is not None:
+def _mark_hints(rows: dict[str, ManifestRow], hints: list[Hint]) -> None:
+    """GROUPING "10" — a low-confidence match never groups, so it is shown as
+    text only, on both of its files (``low-confidence match with <partner>``).
+
+    A hint whose two ends already share a group is redundant and is dropped.
+    Each remaining end names its first partner by sorted path; the rest are
+    counted. An ungrouped row carries the ``HINT_ONLY_PREFIX`` marker, is
+    ``low``, and keeps the action it had (undecided, or UNDATED from Pass 3). A
+    grouped row only gains a ``hint:`` clause: its action and confidence do not
+    move, so a hint cannot change what auto-select does with it."""
+    partners: dict[str, list[tuple[str, str]]] = {}
+    for a, b, detail in hints:
+        if rows[a].group_id is not None and rows[a].group_id == rows[b].group_id:
             continue
-        if row.duplicate_of:
-            row.action = "" if row.shot_date is not None else "UNDATED"
-            row.reason = HINT_ONLY_PREFIX + row.reason
-        elif row.source_path in partner_of:
-            partner = partner_of[row.source_path]
-            row.duplicate_of = partner
+        partners.setdefault(a, []).append((b, detail))
+        partners.setdefault(b, []).append((a, detail))
+    for path in sorted(partners):
+        row = rows[path]
+        ordered = sorted(partners[path])
+        partner, detail = ordered[0]
+        more = f", +{len(ordered) - 1} more" if len(ordered) > 1 else ""
+        text = f"low-confidence match with {Path(partner).name} ({detail}{more})"
+        if row.group_id is None:
             row.match_confidence = "low"
-            # Keep the row's own reason (e.g. "no EXIF DateTimeOriginal") and
-            # append the marker, so an UNDATED reason is not overwritten.
-            hint = HINT_ONLY_PREFIX + f"low-confidence match with {Path(partner).name}"
-            row.reason = f"{row.reason}; {hint}" if row.reason else hint
+            row.reason = (
+                f"{row.reason}; {HINT_ONLY_PREFIX}{text}" if row.reason
+                else HINT_ONLY_PREFIX + text
+            )
+        else:
+            row.reason = f"{row.reason}; hint: {text}"
 
 
-def _mark_taken_hints(
-    rows: dict[str, ManifestRow], taken: list[tuple[str, str]]
-) -> None:
-    """A lone row joined by a taken low edge, that carries no dedup decision
-    (undecided, or UNDATED), is marked low and names its partner. Without this
-    it would read as "unique" with no sign it was grouped on a hint."""
-    partner_of: dict[str, str] = {}
-    for lone, partner in taken:
-        partner_of.setdefault(lone, partner)
-    for row in rows.values():
-        partner = partner_of.get(row.source_path)
-        if partner is None or row.duplicate_of or row.action not in ("", "UNDATED"):
-            continue
-        row.match_confidence = "low"
-        row.reason = f"{row.reason}; hint: low-confidence match with {Path(partner).name}"
-
-
-def _burst_frames(
-    group_rows: list[ManifestRow], hint_leaves: set[str]
-) -> list[ManifestRow]:
+def _burst_frames(group_rows: list[ManifestRow]) -> list[ManifestRow]:
     """The rows of one group that can be burst frames, in (shot time, path)
     order. A frame is pHash-bearing and dated: a Live-Photo video peer has no
-    pHash and a UTC date that would open a fake gap. A hint leaf is never a
-    frame; it keeps its REVIEW/low verdict and reason."""
-    frames = [
-        r for r in group_rows
-        if r.phash and r.shot_date and r.source_path not in hint_leaves
-    ]
+    pHash and a UTC date that would open a fake gap."""
+    frames = [r for r in group_rows if r.phash and r.shot_date]
     return sorted(
         frames, key=lambda r: (datetime.fromisoformat(r.shot_date), r.source_path)
     )
@@ -1313,9 +1377,7 @@ def _relabel_burst(frames: list[ManifestRow], rows: dict[str, ManifestRow]) -> N
             row.reason += f"; {old}"
 
 
-def _mark_burst_stacks(
-    rows: dict[str, ManifestRow], hint_leaves: set[str]
-) -> None:
+def _mark_burst_stacks(rows: dict[str, ManifestRow]) -> None:
     """GROUPING 7 — a same-moment burst inside an already-formed group becomes
     a keep-all stack. Groups are visited in sorted group_id order. Only the
     verdicts of the burst's frames change; no edge is added or merged."""
@@ -1324,69 +1386,39 @@ def _mark_burst_stacks(
         if row.group_id is not None:
             by_group.setdefault(row.group_id, []).append(row)
     for group_id in sorted(by_group):
-        frames = _burst_frames(by_group[group_id], hint_leaves)
+        frames = _burst_frames(by_group[group_id])
         if _is_burst([datetime.fromisoformat(r.shot_date) for r in frames]):
             _relabel_burst(frames, rows)
 
 
-def _hint_may_join(
-    a: str,
-    b: str,
-    joined: set[str],
-    high_members: set[str],
-) -> bool:
-    """Whether a low hint ``a``-``b`` may union. Two lone files pair up. A lone
-    file attaches only to a high member (a node a high edge touched), so a leaf
-    attached by a low edge can never anchor the next one: hints do not chain.
-    Anything else is skipped, so a hint never merges two multi-member groups."""
-    a_lone, b_lone = a not in joined, b not in joined
-    if a_lone and b_lone:
-        return True
-    if a_lone:
-        return b in high_members
-    if b_lone:
-        return a in high_members
-    return False
-
-
-def _hint_pass(
-    low_pairs: list[tuple[str, str]],
+def _pair_pass(
+    pair_pairs: list[tuple[str, str]],
     find: Callable[[str], str],
     union: Callable[[str, str], None],
     joined: set[str],
-    high_members: set[str],
-) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Apply the sorted low pairs after the high pass.
-
-    Returns ``(taken, skipped)``. ``taken`` holds ``(lone, partner)`` for every
-    lone endpoint a taken edge joined, so the caller can mark rows that were
-    only ever hinted at. ``skipped`` holds the pairs that were not taken."""
-    taken: list[tuple[str, str]] = []
-    skipped: list[tuple[str, str]] = []
-    for a, b in low_pairs:
-        if find(a) == find(b):
-            continue
-        if _hint_may_join(a, b, joined, high_members):
-            taken.extend((x, y) for x, y in ((a, b), (b, a)) if x not in joined)
-            union(a, b)
-            joined.update((a, b))
-        else:
-            skipped.append((a, b))
-    return taken, skipped
-
-
-def _pair_pass(
-    pair_pairs: list[tuple[str, str]],
-    union: Callable[[str, str], None],
-    joined: set[str],
-) -> None:
-    """GROUPING "9" — apply the image<->video "pair" edges after the hints.
+    has_still: dict[str, bool],
+) -> list[str]:
+    """GROUPING "10" (G7) — apply the "pair" edges after the high edges.
 
     The pairs form clusters of their own (a separate union-find, so the
-    clusters never depend on edge order). A cluster attaches whole when any of
-    its members is already ``joined`` (grouped by a high or a taken low edge):
-    every edge of the cluster is unioned. Otherwise no member joins, so a lone
-    Live Photo still and its video stay ``group_id=None``."""
+    clusters never depend on edge order). ``has_still`` maps each component
+    root to whether that component holds any still (non-video) file. Per
+    cluster, by the roots of its already-``joined`` members:
+
+    * no joined member: nothing joins. A lone Live Photo stays ungrouped.
+    * at most one root holds a still: the whole cluster joins, so one capture's
+      still and its video-only copies become one group.
+    * two or more roots hold a still: content kept those stills apart, so the
+      cluster would bridge them. Nothing is unioned, and its unjoined members
+      are returned for the caller's reason text.
+
+    After a union the merged component's ``has_still`` is updated, so later
+    clusters read current facts. Clusters run in sorted root order, so the
+    result is deterministic for a given set of records. Two clusters can share
+    one video-only component (byte-identical videos under stills in different
+    groups). The first cluster in sorted order takes it, and the second is
+    refused with the skip text. No unrelated file ever joins a group.
+    """
     parent: dict[str, str] = {}
 
     def root(x: str) -> str:
@@ -1401,47 +1433,100 @@ def _pair_pass(
     clusters: dict[str, list[tuple[str, str]]] = {}
     for a, b in pair_pairs:
         clusters.setdefault(root(a), []).append((a, b))
-    for cluster_edges in clusters.values():
+    skipped: list[str] = []
+    for key in sorted(clusters):
+        cluster_edges = clusters[key]
         members = {node for edge in cluster_edges for node in edge}
-        if members & joined:
-            for a, b in cluster_edges:
-                union(a, b)
-            joined.update(members)
+        roots = {find(m) for m in members if m in joined}
+        if not roots:
+            continue
+        if sum(1 for r in roots if has_still.get(r, False)) > 1:
+            skipped.extend(sorted(members - joined))
+            continue
+        touched = {find(m) for m in members}
+        merged_still = any(has_still.get(r, False) for r in touched)
+        for a, b in cluster_edges:
+            union(a, b)
+        joined.update(members)
+        has_still[find(next(iter(members)))] = merged_still
+    return skipped
+
+
+# GROUPING 10 iteration 3: the hint text for a content edge refused because an
+# undated row would have linked two shot moments.
+_UNDATED_BRIDGE_DETAIL = "shot time unknown; would link two moments"
+
+
+def _reset_refused_row(row: ManifestRow, dated: bool) -> None:
+    """GROUPING 10 iteration 3 (F1): a row whose own ``duplicate_of`` link was
+    refused takes back its Pass-3 verdict, so no verdict names a partner it does
+    not share a group with. The partner is not re-pointed: the hamming to it is
+    unknown here. A row that later joins a group through another edge stays a
+    plain member."""
+    row.action = "" if dated else "UNDATED"
+    row.reason = "unique" if dated else "no EXIF DateTimeOriginal"
+    row.duplicate_of = None
+    row.hamming_distance = None
+    row.match_confidence = None
+
+
+def _shot_times(rows: dict[str, ManifestRow]) -> dict[str, datetime]:
+    """Each dated row's ``shot_date``, parsed once. A missing or unparseable
+    value is undated: the row is absent from the map."""
+    times: dict[str, datetime] = {}
+    for path, row in rows.items():
+        if not row.shot_date:
+            continue
+        try:
+            times[path] = datetime.fromisoformat(row.shot_date)
+        except ValueError:
+            continue
+    return times
+
+
+def _would_link_two_moments(dated_a: list[datetime], dated_b: list[datetime]) -> bool:
+    """True when both components hold a dated row and no dated row of one agrees
+    (``_time_vote``) with a dated row of the other. An undated row has no time to
+    disagree with, so only the components' dated rows are compared."""
+    if not dated_a or not dated_b:
+        return False
+    return not any(_time_vote(x, y) == "agree" for x in dated_a for y in dated_b)
 
 
 def _assign_group_ids(
     rows: dict[str, ManifestRow],
     edges: list[Edge] | None = None,
-) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+) -> tuple[list[str], list[Hint]]:
     """Assign group_id via union-find over duplicate_of edges + ``edges``.
-    Returns ``(taken, skipped)`` hint endpoints; see ``_hint_pass``.
 
     Files transitively connected by ``high`` edges (A→B, B→C) all receive the
     same group_id — the lexicographically smallest source_path in the
     component. Isolated files (no edge at all) receive group_id = None.
 
-    ``edges`` carries the non-``duplicate_of`` union edges: Live Photo
-    image<->video pairs (photo-manager#88; "pair" since GROUPING "9"), image
-    <-> image same-stem pairs (always high) and the pHash near-duplicate and
-    complementary edges (#538 / #824), each with its own confidence.
+    ``edges`` carries the non-``duplicate_of`` union edges: the Live Photo
+    "pair" edges (content-gated, GROUPING "10") and the pHash near-duplicate
+    and complementary edges (#538 / #824). Only ``high`` and ``pair`` edges
+    exist: low-confidence evidence is a ``Hint`` and never unions.
 
-    Low-confidence edges (``GROUPING_STRATEGY_VERSION`` "6") are hints. They
-    are processed after every high edge, in sorted order (deterministic, so
-    the result never depends on record order): a low edge whose endpoints are
-    already in the same component is a no-op; two lone files pair up; a lone
-    file attaches only to a high member (a node a high edge touched), so a leaf
-    attached by a low edge never anchors the next one; everything else is
-    skipped. A file whose only edges were skipped stays ``group_id=None``, and
-    the hint is still visible in its ``reason`` and ``duplicate_of``.
+    Content edges are unioned in four phases (GROUPING "10", iteration 3):
+    identity (a ``duplicate_of`` to an EXACT row, dates ignored); dated-dated
+    content; content with an undated end, refused when it would link two shot
+    moments (``_would_link_two_moments``) and returned as a hint; then the
+    "pair" edges (``_pair_pass``). A cluster joins only through a member that
+    is already grouped, and never bridges two components that each hold a
+    still.
 
-    Then the "pair" edges (``_pair_pass``): a Live Photo cluster joins a group
-    only when one of its members is already grouped. A lone pair stays
-    ungrouped.
+    Returns the unjoined members of every refused pair cluster, for the
+    caller's reason text, and the refused undated hints, for ``_mark_hints``.
 
     Which lone file pairs with which follows path spelling (the lex-min rule);
     that is deliberate, so a rescore reproduces the same groups.
     """
     parent: dict[str, str] = {}
+    shot_times = _shot_times(rows)
+    # Component root -> the dated shot times of its rows. A root absent here
+    # holds no dated row. Merged on every union.
+    dated: dict[str, list[datetime]] = {path: [t] for path, t in shot_times.items()}
 
     def find(x: str) -> str:
         while x in parent:
@@ -1450,40 +1535,67 @@ def _assign_group_ids(
 
     def union(a: str, b: str) -> None:
         ra, rb = find(a), find(b)
-        if ra != rb:
-            if ra < rb:
-                parent[rb] = ra
-            else:
-                parent[ra] = rb
+        if ra == rb:
+            return
+        lo, hi = (ra, rb) if ra < rb else (rb, ra)
+        parent[hi] = lo
+        dated[lo] = dated.get(lo, []) + dated.pop(hi, [])
 
-    all_edges = _row_edges(rows) + list(edges or [])
-    # ``joined``: nodes in a component of two or more members (every node a
-    # union touches is one). ``high_members``: nodes a high edge touched. Only a
-    # high member can anchor a lone file, so hints cannot chain.
+    # ``joined``: nodes a high edge touched. A pair cluster joins only through
+    # one of these.
     joined: set[str] = set()
-    high_members: set[str] = set()
-    for a, b, confidence in all_edges:
-        if confidence == "high":
-            union(a, b)
-            joined.update((a, b))
-            high_members.update((a, b))
 
-    # Normalise orientation and sort: the hint pass must not depend on which
-    # side of a pair the classifier happened to write first.
-    low_pairs = sorted(
-        (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "low"
-    )
-    taken, skipped = _hint_pass(low_pairs, find, union, joined, high_members)
+    def link(a: str, b: str) -> None:
+        union(a, b)
+        joined.update((a, b))
+
+    row_edges = _row_edges(rows)
+    identity = sorted(e for e in row_edges if rows[e[0]].action == "EXACT")
+    row_content = sorted(e for e in row_edges if rows[e[0]].action != "EXACT")
+    high_content = sorted(e for e in (edges or []) if e[2] == "high")
+    ordered_content = [*row_content, *high_content]
+
+    for a, b, _ in identity:
+        link(a, b)
+    for a, b, _ in ordered_content:
+        if a in shot_times and b in shot_times:
+            link(a, b)
+    refused: list[Hint] = []
+    refused_pairs: set[tuple[str, str]] = set()
+    for a, b, _ in ordered_content:
+        if a in shot_times and b in shot_times:
+            continue
+        if find(a) == find(b) or not _would_link_two_moments(
+            dated.get(find(a), []), dated.get(find(b), [])
+        ):
+            link(a, b)
+            continue
+        # Refused: one hint per unordered pair (a row edge and a pHash edge can
+        # name the same pair), and a row that owned this link resets its verdict.
+        pair_key = (min(a, b), max(a, b))
+        if pair_key not in refused_pairs:
+            refused_pairs.add(pair_key)
+            refused.append((a, b, _UNDATED_BRIDGE_DETAIL))
+        for flagged, partner in ((a, b), (b, a)):
+            if rows[flagged].duplicate_of == partner:
+                _reset_refused_row(rows[flagged], flagged in shot_times)
+
     pair_pairs = sorted(
-        (min(a, b), max(a, b)) for a, b, confidence in all_edges if confidence == "pair"
+        (min(a, b), max(a, b)) for a, b, confidence in (edges or []) if confidence == "pair"
     )
-    _pair_pass(pair_pairs, union, joined)
+    # Component root -> does the component hold any still? Built from every row
+    # (a still with no group is its own component), after the high unions.
+    has_still: dict[str, bool] = {}
+    for path in rows:
+        r = find(path)
+        has_still[r] = has_still.get(r, False) or not is_video(path)
+    skipped = _pair_pass(pair_pairs, find, union, joined, has_still)
 
     for row in rows.values():
         if row.source_path in joined:
             row.group_id = find(row.source_path)
-        # else: stays None (isolated file, or a hint that was not taken)
-    return taken, skipped
+        # else: stays None (isolated file, or a hint, which never groups)
+    return skipped, refused
 
 
 # ---------------------------------------------------------------------------
@@ -1532,4 +1644,5 @@ def _make_row(
         pixel_height=hr.pixel_height,
         phash_quality=hr.phash_quality,
         match_confidence=match_confidence,
+        content_identifier=hr.content_identifier,
     )

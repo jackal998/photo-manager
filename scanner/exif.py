@@ -614,6 +614,34 @@ def _subsec_text(raw) -> Optional[str]:
     return text or None
 
 
+# GROUPING 10 (G1) — Apple's device-written capture identity. A Live Photo
+# still and its video carry the same UUID; nothing else in the file does.
+# Under ``-G`` the QuickTime Keys atom surfaces as ``QuickTime:ContentIdentifier``
+# (MOV/MP4) and the Apple MakerNote as ``MakerNotes:ContentIdentifier``
+# (HEIC and JPEG stills). ``MakerNotes:MediaGroupUUID`` is the older exiftool
+# name for the same MakerNote tag and is the third fallback. Deliberately NOT
+# in ``_CENSUS_TAGS``, for the same reason as ``_SUBSEC_TAG`` above.
+_CONTENT_ID_KEYS: tuple[str, ...] = (
+    "QuickTime:ContentIdentifier",
+    "MakerNotes:ContentIdentifier",
+    "MakerNotes:MediaGroupUUID",
+)
+
+
+def _content_id_text(raw) -> Optional[str]:
+    """Normalise a ContentIdentifier value to the upper-cased TEXT form.
+
+    Upper-cased because Apple writes the UUID in one case on the still and may
+    write it in the other on the video; equality is the pairing test, so the
+    case must not decide it. Empty and missing both give None: a missing
+    identity is no evidence, never a match.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip().upper()
+    return text or None
+
+
 # ── In-memory JPEG extraction (#786) ───────────────────────────────────────
 #
 # Ports the scoring signals above to an already-open PIL Image (the
@@ -938,6 +966,9 @@ def _read_extract_chunk(
         "-QuickTime:ImageWidth", "-QuickTime:ImageHeight",
         "-QuickTime:AudioChannels", "-QuickTime:AudioSampleRate",
         "-QuickTime:CompressorName",
+        # GROUPING 10 (G1) — Live Photo pairing identity; see _CONTENT_ID_KEYS.
+        # Group left unqualified so the QuickTime and MakerNote keys both return.
+        "-ContentIdentifier", "-MediaGroupUUID",
         # NB: NO -fast here.
     ]
     records = _execute_in_batches(et, args, paths)
@@ -1010,6 +1041,13 @@ def _record_to_extract(path: Path, rec: dict) -> "MediaExtract":
     # baseline per file_type.
     exif_tag_count = sum(1 for tag in _CENSUS_TAGS if rec.get(tag) is not None)
 
+    # GROUPING 10 (G1) — first present key wins; QuickTime precedes MakerNotes.
+    content_identifier: Optional[str] = None
+    for key in _CONTENT_ID_KEYS:
+        content_identifier = _content_id_text(rec.get(key))
+        if content_identifier is not None:
+            break
+
     return MediaExtract(
         path=path,
         exif_date=exif_date,
@@ -1023,6 +1061,7 @@ def _record_to_extract(path: Path, rec: dict) -> "MediaExtract":
         # a burst combine the two columns.
         subsec_time_original=_subsec_text(rec.get(_SUBSEC_TAG)),
         offset_time_original=_subsec_text(rec.get(_OFFSET_TAG)),
+        content_identifier=content_identifier,
         extracted_by={"exiftool"},
     )
 

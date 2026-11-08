@@ -48,6 +48,49 @@ _GROUP_FLOOR_MAX = 256
 _RATE_KEYS = ("thread_per_file", "process_per_file", "spawn")
 
 
+def _backfill_content_identifier(results, extracts) -> None:
+    """GROUPING 10 (G3): copy each extract's Apple ContentIdentifier onto its
+    result. An existing value is kept, and a result with no extract is skipped.
+    A missing identity stays None, so no ``""`` ever pairs two files."""
+    for r in results:
+        extract = extracts.get(r.record.path)
+        if extract is None or r.content_identifier is not None:
+            continue
+        r.content_identifier = extract.content_identifier
+
+
+def _fill_inmemory_extracts(results, extracts) -> None:
+    """Give every in-memory-signal result an extract when exiftool left none.
+
+    A JPEG with a video in its cluster is routed to exiftool (GROUPING 10 G2).
+    If exiftool is missing, or the batch failed, the routed JPEG has no extract,
+    or only a partial one whose ``extraction_errors`` says so. The in-memory
+    signals are then the only scoring evidence the file has, so they fill the
+    gap. A successful exiftool extract is kept as it is.
+    """
+    for r in results:
+        if getattr(r, "inmemory_signals", None) is None:
+            continue
+        existing = extracts.get(r.record.path)
+        if existing is None or existing.extraction_errors:
+            extracts[r.record.path] = r.to_media_extract()
+
+
+def _inmemory_extract_ok(record, outcome) -> bool:
+    """True when a hash outcome's in-memory extract may skip exiftool.
+
+    GROUPING 10 (G2): PIL does not parse Apple MakerNotes, so a JPEG Live
+    still never yields a ContentIdentifier in memory. A still with a video
+    in its same-stem cluster therefore takes the exiftool queue, where the
+    identity is read. Every other in-memory format keeps the free route.
+    """
+    from scanner.media import is_video  # local import — keeps module load light
+
+    if getattr(outcome, "inmemory_signals", None) is None:
+        return False
+    return not any(is_video(str(peer)) for peer in record.pair_cluster)
+
+
 # ---------------------------------------------------------------------------
 # Hash-pool calibration helpers — single source of truth (scan_worker.py
 # re-exports these for backward-compat with scan_dialog and test imports).
@@ -712,7 +755,9 @@ def run_pipeline(
         #786 — formats with in-memory scoring signals (``HashResult.
         inmemory_signals`` set, currently JPEG only) skip the exiftool
         queue entirely: their MediaExtract is written straight into
-        ``extracts`` here instead. This runs in the single thread that
+        ``extracts`` here instead, except a still with a video in its
+        same-stem cluster (GROUPING 10 G2, ``_inmemory_extract_ok``), which
+        goes to exiftool to read its ContentIdentifier. This runs in the single thread that
         drains ``out_q`` (same as the ``skipped.append`` above), so the
         plain dict write needs no lock — mirrors ``_flush_exif_batch``'s
         writes to the same dict from the exif consumer thread(s); the two
@@ -724,7 +769,7 @@ def run_pipeline(
         if outcome is None:
             return None
         if record.file_type != "skip":
-            if getattr(outcome, "inmemory_signals", None) is not None:
+            if _inmemory_extract_ok(record, outcome):
                 extracts[record.path] = outcome.to_media_extract()
                 return outcome
             # #564 — cooperative bounded put.
@@ -1302,9 +1347,12 @@ def run_pipeline(
     if exiftool_missing[0]:
         bus.log(
             "WARNING: exiftool not found on PATH — EXIF dates for HEIC/RAW/video"
-            " and scoring signals (GPS, EXIF census, XMP provenance) unavailable"
-            " for those formats. (JPEG scoring signals are extracted in-memory"
-            " and are unaffected — #786.)\n"
+            " and scoring signals (GPS, EXIF census, XMP provenance) and Live Photo"
+            " pairing (ContentIdentifier) unavailable"
+            " for those formats. JPEG scoring signals read in memory are kept"
+            " (#786), including for a JPEG with a video in its pair cluster;"
+            " only the exiftool-only tags and the ContentIdentifier are missing"
+            " for that JPEG.\n"
             "Install from https://exiftool.org/ and add to PATH."
         )
     elif et_records:
@@ -1324,11 +1372,12 @@ def run_pipeline(
     # mode while apply_scoring_to_rows scores it WITH that date — an internally
     # inconsistent row (#793). For formats that DO need exiftool (HEIC/RAW/video)
     # there is no extract in exiftool-missing mode, so those are untouched.
+    _fill_inmemory_extracts(hash_results, extracts)
     for r in et_records:
-        if r.exif_date is None:
-            extract = extracts.get(r.record.path)
-            if extract is not None:
-                r.exif_date = extract.exif_date
+        extract = extracts.get(r.record.path)
+        if extract is not None and r.exif_date is None:
+            r.exif_date = extract.exif_date
+    _backfill_content_identifier(et_records, extracts)
 
     # --- 4. Classify ---
     if cancel_token():

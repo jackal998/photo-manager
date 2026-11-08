@@ -4,15 +4,14 @@ Ported from the desktop s11_video_live driver (desktop + SQLite, #88).
 
 Qt intent:
   - Scan qa/sandbox/live-photo (IMG_0001.HEIC + IMG_0001.MOV).
-  - Assert BOTH halves appear in the manifest (pre-#88 the MOV was
-    silently dropped by the walker before hashing; only HEIC survived).
-  - Assert the pair shares the SAME group_id (scanner/dedup._collect_pair_edges
-    unions them via union-find, even when the HEIC has no SHA/pHash match).
-  - Assert user_decision is '' (undecided) for both rows pre-execute.
+  - Assert the still is in the manifest and the pair is NOT joined by a stem.
+  - Assert user_decision is '' (undecided) for the still pre-execute.
 
-GROUPING "9" (scanner/dedup.py ``_pair_pass``): a lone Live Photo pair has NO
-group, so the scenario adds a byte copy of IMG_0001.HEIC in a second subfolder.
-The copy makes the still a grouped member, and the MOV joins that group.
+GROUPING "10" (scanner/dedup.py ``_collect_pair_edges``): a filename never
+creates a pair edge. A MOV joins its still only when both carry the same Apple
+ContentIdentifier. The fixture pair carries none, so the MOV stays ungrouped.
+The scenario adds a byte copy of IMG_0001.HEIC in a second subfolder, so the
+still is a grouped member through content.
 
 Web slice:
   1. Copy IMG_0001.HEIC and IMG_0001.MOV from qa/sandbox/live-photo into
@@ -27,15 +26,13 @@ Web slice:
   4. GET /api/manifest?path=<db_path> → parse groups.
   5. Assert:
      A. IMG_0001.HEIC present among manifest basenames (#88 bug guard: HEIC).
-     B. IMG_0001.MOV present among manifest basenames (#88 bug guard: MOV
-        was the half silently dropped by the pre-#88 walker).
-     C. Both share the same group_number (pair edge joins the MOV to its
-        still's group, scanner/dedup._pair_pass).
-     D. user_decision == '' for the root HEIC and the MOV (undecided at scan
-        time). The root HEIC now has an EXACT twin, but the scan sets its
-        action, not its user_decision (post-scan auto-select is off by default
-        and s11 never enables it), so D still holds for it.
+     B. IMG_0001.MOV NOT among the grouped manifest rows: no ContentIdentifier
+        on either file, so no content pair (GROUPING 10). Replaces the old
+        "MOV present and same group" assertions, which the stem edge made true.
+     D. user_decision == '' for the root HEIC (undecided at scan time).
      E. The byte copy in ``dupe/`` is in the same group_number as the still.
+     The positive ContentIdentifier case is layer-1 only
+     (tests/test_dedup_live_pair.py, synthetic content_identifier values).
   6. finally: shutil.rmtree(tmpdir, ignore_errors=True) — Windows .db lock.
 
 Qt divergences:
@@ -61,9 +58,11 @@ Qt divergences:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import urllib.parse
 import urllib.request
@@ -151,6 +150,28 @@ def run(*, base_url: str) -> None:
             # ── Fetch manifest JSON via GET /api/manifest ────────────────────
             manifest = _get_manifest(base_url, db_path)
 
+            # ── Read-only SQLite check on the MOV row ────────────────────────
+            # "Ungrouped" must be told apart from "never scanned": the API lists
+            # grouped rows only, so the MOV's absence alone proves nothing. The
+            # row must exist with group_id NULL, and this fixture carries no
+            # ContentIdentifier, so content_identifier is NULL too.
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
+                mov_rows = conn.execute(
+                    "SELECT group_id, content_identifier FROM migration_manifest "
+                    "WHERE source_path LIKE ?",
+                    (f"%{_MOV_NAME}",),
+                ).fetchall()
+            assert len(mov_rows) == 1, (
+                f"expected exactly one manifest row for {_MOV_NAME}, got {mov_rows!r}"
+            )
+            mov_group_id, mov_cid = mov_rows[0]
+            assert mov_group_id is None, (
+                f"{_MOV_NAME} has group_id={mov_group_id!r}; expected NULL (ungrouped)"
+            )
+            assert mov_cid is None, (
+                f"{_MOV_NAME} has content_identifier={mov_cid!r}; the fixture carries none"
+            )
+
             # Build a lookup: basename -> (group_number, user_decision)
             # so we can assert HEIC and MOV both appear and share a group.
             # The byte copy in the dupe folder shares the still's basename, so
@@ -176,36 +197,24 @@ def run(*, base_url: str) -> None:
                 f"HEIC half of a Live Photo pair."
             )
 
-            # ── Assertion B: MOV present (#88 regression guard) ──────────────
-            assert _MOV_NAME in found, (
-                f"IMG_0001.MOV missing from manifest (basenames found: "
-                f"{sorted(found)}). Pre-#88, the walker added the MOV path "
-                f"to a 'paired' set when processing the HEIC, then skipped "
-                f"emitting a FileRecord for it on the next loop iteration — "
-                f"the MOV never reached hashing or the manifest. "
-                f"This assert guards against that regression."
+            # ── Assertion B: MOV is NOT grouped with the still (GROUPING 10) ──
+            # The fixture pair carries no Apple ContentIdentifier (read-only
+            # exiftool check, 2026-11-08: neither file has the tag), so a stem
+            # alone never pairs them. An ungrouped row is not in the review
+            # manifest (manifest_repository loads grouped rows only), so the MOV
+            # must be absent from the groups.
+            assert _MOV_NAME not in found, (
+                f"IMG_0001.MOV is in the manifest groups (basenames found: "
+                f"{sorted(found)}), but the fixture pair has no matching "
+                f"ContentIdentifier. GROUPING 10: a filename never creates a "
+                f"pair edge, so the MOV must stay ungrouped."
             )
 
-            # ── Assertion C: same group_number ──────────────────────────────
+            # ── Assertion D: the still is undecided at scan time ─────────────
             heic_group = found[_HEIC_NAME]["group_number"]
-            mov_group = found[_MOV_NAME]["group_number"]
-            assert heic_group == mov_group, (
-                f"Live Photo pair NOT in the same group: "
-                f"HEIC group_number={heic_group!r}, "
-                f"MOV group_number={mov_group!r}. "
-                f"scanner/dedup._collect_pair_edges should union HEIC+MOV "
-                f"via union-find regardless of SHA/pHash dedup status (#88)."
-            )
-
-            # ── Assertion D: both undecided at scan time ─────────────────────
             heic_decision = found[_HEIC_NAME]["user_decision"]
             assert heic_decision == "", (
                 f"IMG_0001.HEIC has unexpected user_decision={heic_decision!r} "
-                f"immediately after scan (expected '' = undecided)."
-            )
-            mov_decision = found[_MOV_NAME]["user_decision"]
-            assert mov_decision == "", (
-                f"IMG_0001.MOV has unexpected user_decision={mov_decision!r} "
                 f"immediately after scan (expected '' = undecided)."
             )
 

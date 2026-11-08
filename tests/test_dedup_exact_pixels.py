@@ -225,13 +225,14 @@ class TestPixelGate:
             verdicts.add((dup.action, dup.match_confidence, dup.reason))
         assert verdicts == {("REVIEW_DUPLICATE", "high", PIXELS_DIFFER)}
 
-    def test_i_dhash_unknown_keeps_review_low(self):
-        # master: an EXACT row at low confidence (dHash unknown) that makes a
-        # hint edge. Now: the pixel-differ REVIEW row keeps that low confidence,
-        # so it is still a hint and not a certain high edge.
+    def test_i_dhash_unknown_is_a_hint_not_a_group(self):
+        # GROUPING "10": a pixel-differ format duplicate with no dHash is low
+        # confidence, so it is a hint. It writes no REVIEW row and groups nothing.
         keep = _hr("/a/a_keep.jpg", "k", dhash=None)
         dup = _hr("/a/b_dup.jpg", "d", dhash=None, rgb32=SIG_SHIFT_ONE_CHANNEL_20)
-        row = _rows(classify([keep, dup], source_priority=PRIORITY))["/a/b_dup.jpg"]
-        assert row.action == "REVIEW_DUPLICATE"
+        rows = _rows(classify([keep, dup], source_priority=PRIORITY))
+        row = rows["/a/b_dup.jpg"]
+        assert row.action == ""
+        assert row.group_id is None and rows["/a/a_keep.jpg"].group_id is None
         assert row.match_confidence == "low"
-        assert row.reason == PIXELS_DIFFER
+        assert "dHash unavailable" in row.reason, row.reason
