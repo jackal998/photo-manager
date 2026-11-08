@@ -63,6 +63,9 @@ def _hr(
     # GROUPING 10 (G4): the Apple ContentIdentifier that pairs a Live still
     # with its video. None = no identity read (the default for every fixture).
     content_identifier: str | None = None,
+    # Recipe "5": 32x32 grey std-dev. None passes the quality gate (the default
+    # for every fixture); a value under 16 keeps the row out of pHash grouping.
+    phash_quality: float | None = None,
 ) -> HashResult:
     return HashResult(
         record=_record(
@@ -79,6 +82,7 @@ def _hr(
         rgb32=rgb32,
         grey128=grey128,
         content_identifier=content_identifier,
+        phash_quality=phash_quality,
     )
 
 
@@ -1066,16 +1070,19 @@ class TestPhashEntropyGuard:
         # GROUPING "10": each icon gains an agreeing dHash (production always
         # has one). The icons are JPEG, not PNG: two PNGs are a both-screenshots
         # hint under B7, which would hide the guard this test isolates.
+        # GROUPING 13: three DISTINCT pictures, so each carries its own grey128;
+        # the fixture default (one constant signature for every row) would read
+        # as three pixel-identical copies, which the identity rescue groups.
         return [
             _hr("/a/icon1.jpg", sha256="f1", phash="0000000000000000",
                 mean_color="250,250,250", file_type="jpeg", exif_date=_dt(),
-                dhash="0" * 16),
+                dhash="0" * 16, grey128=GreyBytes(bytes([1]) * 16384)),
             _hr("/a/icon2.jpg", sha256="f2", phash="0000000000000000",
                 mean_color="250,250,250", file_type="jpeg", exif_date=_dt(),
-                dhash="0" * 16),
+                dhash="0" * 16, grey128=GreyBytes(bytes([120]) * 16384)),
             _hr("/a/icon3.jpg", sha256="f3", phash="0000000000000000",
                 mean_color="250,250,250", file_type="jpeg", exif_date=_dt(),
-                dhash="0" * 16),
+                dhash="0" * 16, grey128=GreyBytes(bytes([240]) * 16384)),
         ]
 
     def test_flat_images_falsely_grouped_without_guard(self):
@@ -1509,3 +1516,72 @@ class TestBKTreeParity:
                       source_label="jdrive", exif_date=_dt())
         brute, bk = self._both_paths(recs)
         assert brute == bk
+
+
+# ---------------------------------------------------------------------------
+# GROUPING 13 — pixel identity for rows the pHash trust gates excluded
+# ---------------------------------------------------------------------------
+
+class TestIdentityRescue:
+    """A low-contrast image (phash_quality under 16) is kept out of pHash
+    grouping, so before GROUPING 13 a byte-different copy of it was never found.
+    Pixel identity still groups it; nothing weaker does."""
+
+    _T = datetime(2024, 6, 1, 12, 0, 0)
+
+    def _pair(self, **b_over):
+        # A textured pHash: the entropy gate passes, so only the quality gate
+        # (14.1 < 16) keeps the pair out of pHash grouping.
+        a = _hr("/d/shot.png", sha256="a", file_type="png", phash_quality=14.1,
+                phash="a5c3f0e1b2d49687", exif_date=self._T,
+                pixel_width=1179, pixel_height=2556)
+        b_kw = {"sha256": "b", "file_type": "png", "phash_quality": 14.1,
+                "phash": "a5c3f0e1b2d49687", "exif_date": self._T,
+                "pixel_width": 1179, "pixel_height": 2556}
+        b_kw.update(b_over)
+        return a, _hr("/j/shot.png", **b_kw)
+
+    def test_pixel_identical_low_contrast_copy_is_exact(self):
+        a, b = self._pair()
+        rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
+        assert rows["/j/shot.png"].action == "EXACT"
+        assert rows["/j/shot.png"].match_confidence == "high"
+        assert "pHash not trusted" in rows["/j/shot.png"].reason
+        assert rows["/d/shot.png"].group_id == rows["/j/shot.png"].group_id is not None
+
+    def test_pixels_differ_writes_nothing(self):
+        a, b = self._pair(grey128=GreyBytes(bytes([7]) * 16384))
+        rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
+        assert rows["/j/shot.png"].action == ""
+        assert rows["/j/shot.png"].group_id is None
+        assert "hint" not in rows["/j/shot.png"].reason
+
+    def test_shot_times_apart_writes_nothing(self):
+        a, b = self._pair(exif_date=datetime(2024, 6, 1, 12, 10, 0))
+        rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
+        assert rows["/j/shot.png"].action == ""
+        assert rows["/j/shot.png"].group_id is None
+
+    def test_undated_gated_row_is_left_alone(self):
+        a, b = self._pair(exif_date=None)
+        rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
+        assert rows["/j/shot.png"].action == "UNDATED"
+        assert rows["/j/shot.png"].group_id is None
+
+    def test_other_dimensions_never_share_a_bucket(self):
+        a, b = self._pair(pixel_width=1170, pixel_height=2532)
+        rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
+        assert rows["/j/shot.png"].group_id is None
+
+    def test_rotation_swapped_dimensions_share_a_bucket(self):
+        a, b = self._pair(pixel_width=2556, pixel_height=1179)
+        rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
+        assert rows["/j/shot.png"].action == "EXACT"
+
+    def test_trusted_rows_do_not_enter_the_rescue(self):
+        # A trusted pHash goes through the ordinary format path unchanged.
+        a, b = self._pair()
+        a.phash_quality = b.phash_quality = 40.0
+        rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
+        assert rows["/j/shot.png"].action == "EXACT"
+        assert "format duplicate" in rows["/j/shot.png"].reason
