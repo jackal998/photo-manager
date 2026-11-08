@@ -391,6 +391,9 @@ SCAN_RULE_B4 = "scan-rule-b4"
 SCAN_RULE_B5 = "scan-rule-b5"
 """PR-4a rule toggle: burst keep every frame (B5)."""
 
+SCAN_RULE_B6 = "scan-rule-b6"
+"""PR-4b rule toggle: a Live Photo video follows its photo (B6)."""
+
 SCAN_RULE_B7 = "scan-rule-b7"
 """PR-4a rule toggle: screenshots (B7)."""
 

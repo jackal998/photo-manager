@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import pytest
+
 from core.services.auto_select import top_score_path_per_group
 
 
@@ -28,6 +30,8 @@ class _Row:
     # are eligible for aggressive auto-delete. Tests that model a deletable
     # duplicate set this explicitly.
     action: str = ""
+    # PR-4b — the Apple ContentIdentifier that pairs a Live still with its video.
+    content_identifier: str | None = None
 
 
 class TestTopScorePathPerGroup:
@@ -649,3 +653,229 @@ class TestRuleToggles:
             rows, stamped, aggressive=False, confirm_below="medium", rules=DEFAULT_RULES
         )
         assert set(trace.values()) == {"B1:keep"}
+
+
+def _live_row(path, group, score, *, action="", cid=None, confidence="high"):
+    return _Row(
+        path, group, score,
+        match_confidence=confidence, action=action, content_identifier=cid,
+    )
+
+
+def _live_scene(*, video_cid="C1", still_cid="C1", keep_motion=True):
+    """A capture: keeper still + deleted EXACT copy, each with a MOV beside it.
+
+    ``/a`` holds the keeper, ``/b`` the copy. ``keep_motion=False`` drops the
+    keeper's MOV, so the copy's MOV is the capture's only motion clip.
+    """
+    rows = [
+        _live_row("/a/IMG_1.HEIC", "g1", 0.90, action="EXACT", cid="C1"),
+        _live_row("/b/IMG_1.HEIC", "g1", 0.60, action="EXACT", cid=still_cid),
+        _live_row("/b/IMG_1.MOV", "g1", None, cid=video_cid),
+    ]
+    if keep_motion:
+        rows.append(_live_row("/a/IMG_1.MOV", "g1", None, cid="C1"))
+    return rows
+
+
+def _live_plan(rows, rules, *, aggressive=True):
+    """Return ``(deletes, trace)`` for the aggressive pass at the high threshold."""
+    from core.services.auto_select import (
+        plan_auto_select,
+        rule_trace,
+    )
+
+    stamped, deletes = plan_auto_select(
+        rows, aggressive=aggressive, confirm_below="high", rules=rules
+    )
+    trace = rule_trace(
+        rows, stamped, aggressive=aggressive, confirm_below="high", rules=rules
+    )
+    return deletes, trace
+
+
+class TestLiveVideoRule:
+    """PR-4b rule B6: a Live video follows its photo into aggressive delete.
+
+    Each decision of the design (follower filter, motion guard, several
+    stills) has its own test here, besides the cases the design lists.
+    """
+
+    def test_b6_video_follows_deleted_photo(self):
+        """Catches: B6 leaving the copy's MOV as an orphan passenger in
+        the copy folder, the case the rule exists to fix."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        deletes, trace = _live_plan(_live_scene(), DEFAULT_RULES)
+        assert deletes == {"/b/IMG_1.HEIC", "/b/IMG_1.MOV"}
+        assert trace["/b/IMG_1.MOV"] == "B6:delete"
+
+    def test_b6_video_of_keeper_photo_stays(self):
+        """Catches: B6 deleting the video of the photo that is kept."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        deletes, trace = _live_plan(_live_scene(), DEFAULT_RULES)
+        assert "/a/IMG_1.MOV" not in deletes
+        assert trace.get("/a/IMG_1.MOV") != "B6:delete"
+
+    @pytest.mark.parametrize(
+        ("video_cid", "still_cid"),
+        [("C2", "C1"), (None, "C1"), ("C1", None)],
+        ids=["cid-mismatch", "video-cid-missing", "still-cid-missing"],
+    )
+    def test_b6_cid_mismatch_or_missing_not_paired(self, video_cid, still_cid):
+        """Catches: pairing by stem alone, which would delete a clip that
+        belongs to a different capture."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = _live_scene(video_cid=video_cid, still_cid=still_cid)
+        deletes, _ = _live_plan(rows, DEFAULT_RULES)
+        assert "/b/IMG_1.MOV" not in deletes
+
+    def test_b6_off_is_today(self):
+        """Catches: B6 changing the delete set when its toggle is off. RuleToggles
+        built without b6 must equal the v1 set, so the copy's MOV stays."""
+        from core.services.auto_select_rules import RuleToggles
+
+        rules = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True)
+        deletes, trace = _live_plan(_live_scene(), rules)
+        assert deletes == {"/b/IMG_1.HEIC"}
+        assert "B6:delete" not in trace.values()
+
+    def test_b6_not_aggressive_no_change(self):
+        """Catches: B6 adding deletes outside aggressive mode."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        deletes, trace = _live_plan(_live_scene(), DEFAULT_RULES, aggressive=False)
+        assert deletes == set()
+        assert "B6:delete" not in trace.values()
+
+    def test_b6_video_without_same_stem_still_not_paired(self):
+        """Catches: pairing a clip with a still of a different name in the same
+        folder, which the rule does not allow."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = _live_scene()
+        rows[2] = _live_row("/b/clip.MOV", "g1", None, cid="C1")
+        deletes, _ = _live_plan(rows, DEFAULT_RULES)
+        assert "/b/clip.MOV" not in deletes
+
+    def test_b6_video_in_other_folder_not_paired(self):
+        """Catches: pairing across folders. A copy's still must not pull in a
+        clip that sits in a different directory."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = _live_scene()
+        rows[2] = _live_row("/c/IMG_1.MOV", "g1", None, cid="C1")
+        deletes, _ = _live_plan(rows, DEFAULT_RULES)
+        assert "/c/IMG_1.MOV" not in deletes
+
+    def test_b6_never_deletes_a_keeper_video(self):
+        """Catches: B6 deleting a video that is itself the group keeper, even
+        when its still is deleted. The keeper is scored, so it is never a
+        follower."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = [
+            _live_row("/b/IMG_1(1).MOV", "g1", 0.95, cid="C1"),
+            _live_row("/b/IMG_1.HEIC", "g1", 0.60, action="EXACT", cid="C1"),
+        ]
+        deletes, _ = _live_plan(rows, DEFAULT_RULES)
+        assert "/b/IMG_1(1).MOV" not in deletes
+
+    def test_b6_photo_spared_by_threshold_keeps_video(self):
+        """Catches: B6 following a photo the threshold already spared. A video
+        follows only a photo that is itself in the delete set."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = _live_scene()
+        rows[1] = _live_row(
+            "/b/IMG_1.HEIC", "g1", 0.60, action="REVIEW_DUPLICATE", cid="C1"
+        )
+        deletes, _ = _live_plan(rows, DEFAULT_RULES)
+        assert "/b/IMG_1.HEIC" not in deletes
+        assert "/b/IMG_1.MOV" not in deletes
+
+    def test_decision1_exact_video_follows_when_b3_on(self):
+        """Decision 1: an EXACT byte-copy video follows its deleted photo while
+        B3 is on, so a copy folder keeps no orphan clip."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = _live_scene()
+        rows[2] = _live_row("/b/IMG_1.MOV", "g1", None, action="EXACT", cid="C1")
+        deletes, trace = _live_plan(rows, DEFAULT_RULES)
+        assert "/b/IMG_1.MOV" in deletes
+        assert trace["/b/IMG_1.MOV"] == "B6:delete"
+
+    def test_decision1_exact_video_spared_when_b3_off(self):
+        """Decision 1: with B3 off an EXACT video is left alone. Its photo is
+        deleted here (a REVIEW_DUPLICATE with B8 off, at the medium threshold),
+        so only the EXACT-video clause keeps the MOV."""
+        from core.services.auto_select import plan_auto_select
+        from core.services.auto_select_rules import RuleToggles
+
+        rules = RuleToggles(b3=False, b4=True, b5=True, b7=True, b8=False, b6=True)
+        rows = [
+            _live_row("/a/IMG_1.HEIC", "g1", 0.90, action="REVIEW_DUPLICATE", cid="C1"),
+            _live_row("/b/IMG_1.HEIC", "g1", 0.60, action="REVIEW_DUPLICATE", cid="C1"),
+            _live_row("/a/IMG_1.MOV", "g1", None, cid="C1"),
+            _live_row("/b/IMG_1.MOV", "g1", None, action="EXACT", cid="C1"),
+        ]
+        _, deletes = plan_auto_select(
+            rows, aggressive=True, confirm_below="medium", rules=rules
+        )
+        assert "/b/IMG_1.HEIC" in deletes
+        assert "/b/IMG_1.MOV" not in deletes
+
+    def test_decision3_video_follows_when_every_still_is_deleted(self):
+        """Decision 3: two qualifying stills, both in the delete set, so the
+        video follows. Requiring only one still to be deleted would miss this."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = _live_scene()
+        rows.append(
+            _live_row("/b/IMG_1.JPG", "g1", 0.55, action="EXACT", cid="C1")
+        )
+        deletes, trace = _live_plan(rows, DEFAULT_RULES)
+        assert {"/b/IMG_1.HEIC", "/b/IMG_1.JPG", "/b/IMG_1.MOV"} <= deletes
+        assert trace["/b/IMG_1.MOV"] == "B6:delete"
+
+    def test_decision2_motion_guard_keeps_last_clip(self):
+        """Decision 2: B6 never deletes a capture's last motion clip. With no
+        other MOV in the capture, the copy's MOV stays."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        deletes, trace = _live_plan(
+            _live_scene(keep_motion=False), DEFAULT_RULES
+        )
+        assert deletes == {"/b/IMG_1.HEIC"}
+        assert "B6:delete" not in trace.values()
+
+    def test_decision2_guard_keeps_one_of_two_candidate_clips(self):
+        """Decision 2: two candidate MOVs of one capture, neither with a kept
+        clip beside it. Exactly one follows and one survives as the clip."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = [
+            _live_row("/a/IMG_1.HEIC", "g1", 0.90, action="EXACT", cid="C1"),
+            _live_row("/b/IMG_1.HEIC", "g1", 0.60, action="EXACT", cid="C1"),
+            _live_row("/b/IMG_1.MOV", "g1", None, cid="C1"),
+            _live_row("/b/IMG_1(1).MOV", "g1", None, cid="C1"),
+        ]
+        deletes, _ = _live_plan(rows, DEFAULT_RULES)
+        assert len({"/b/IMG_1.MOV", "/b/IMG_1(1).MOV"} & deletes) == 1
+
+    def test_decision3_video_spared_when_one_still_is_kept(self):
+        """Decision 3: a video with two qualifying stills follows only when
+        EVERY still is in the delete set. A kept JPG beside the deleted HEIC
+        keeps the video."""
+        from core.services.auto_select_rules import DEFAULT_RULES
+
+        rows = _live_scene()
+        rows.append(
+            _live_row("/b/IMG_1.JPG", "g1", 0.55, action="REVIEW_DUPLICATE", cid="C1")
+        )
+        deletes, _ = _live_plan(rows, DEFAULT_RULES)
+        assert "/b/IMG_1.HEIC" in deletes
+        assert "/b/IMG_1.JPG" not in deletes
+        assert "/b/IMG_1.MOV" not in deletes

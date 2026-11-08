@@ -29,7 +29,12 @@ Phase 2 — a second scan into a new manifest, B3 and B8 off:
      This is the #517 set that B8 off restores. Soft when no medium row exists.
 
 Phase 3 — reopen the dialog:
-  9. B3 and B8 read unchecked (persisted); B4, B5 and B7 read checked.
+  9. B3 and B8 read unchecked (persisted); B4, B5, B6 and B7 read checked.
+
+B6 (a Live video follows its photo) has no positive path here: no sandbox
+fixture carries an Apple ContentIdentifier (see s11_video_live.py), so the
+B6 pairing is pinned at layer 1 (tests/test_auto_select.py TestLiveVideoRule)
+only. Its checkbox is covered by the default and reopen checks above.
 
 Cleanup restores the rule defaults and the "high" threshold, then removes the
 temp folder.
@@ -64,6 +69,7 @@ from qa.web.testid_constants import (
     SCAN_RULE_B3,
     SCAN_RULE_B4,
     SCAN_RULE_B5,
+    SCAN_RULE_B6,
     SCAN_RULE_B7,
     SCAN_RULE_B8,
 )
@@ -72,7 +78,7 @@ _REPO = Path(__file__).resolve().parents[3]
 _NEAR_DUPS_DIR = str(_REPO / "qa" / "sandbox" / "near-duplicates")
 _UNIQUE_JPEG = _REPO / "qa" / "sandbox" / "unique" / "unique_00.jpg"
 _COPY_NAMES = ("copy_a.jpg", "copy_b.jpg")
-_DEFAULT_RULES = {"B3": True, "B4": True, "B5": True, "B7": True, "B8": True}
+_DEFAULT_RULES = {"B3": True, "B4": True, "B5": True, "B6": True, "B7": True, "B8": True}
 
 
 def _get_manifest(base_url: str, db_path: str) -> dict:
@@ -181,7 +187,9 @@ def run(*, base_url: str) -> None:
             # Phase 1 — defaults, aggressive, medium.
             open_scan_dialog(page)
             page.get_by_test_id(SCAN_ADVANCED).click()
-            for testid in (SCAN_RULE_B3, SCAN_RULE_B4, SCAN_RULE_B5, SCAN_RULE_B7, SCAN_RULE_B8):
+            for testid in (
+                SCAN_RULE_B3, SCAN_RULE_B4, SCAN_RULE_B5, SCAN_RULE_B6, SCAN_RULE_B7, SCAN_RULE_B8,
+            ):
                 expect(page.get_by_test_id(testid)).to_have_attribute("data-state", "checked")
             page.get_by_test_id(SCAN_AUTO_SELECT).click()
             page.get_by_test_id(SCAN_AGGRESSIVE_DELETE).click()
@@ -213,6 +221,7 @@ def run(*, base_url: str) -> None:
             expect(page.get_by_test_id(SCAN_RULE_B8)).to_have_attribute("data-state", "unchecked")
             expect(page.get_by_test_id(SCAN_RULE_B4)).to_have_attribute("data-state", "checked")
             expect(page.get_by_test_id(SCAN_RULE_B5)).to_have_attribute("data-state", "checked")
+            expect(page.get_by_test_id(SCAN_RULE_B6)).to_have_attribute("data-state", "checked")
             expect(page.get_by_test_id(SCAN_RULE_B7)).to_have_attribute("data-state", "checked")
     finally:
         try:

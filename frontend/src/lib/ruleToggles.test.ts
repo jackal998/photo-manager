@@ -20,6 +20,6 @@ describe("rulesFromSettings", () => {
 
 describe("DEFAULT_RULES", () => {
   it("has every rule on, B7 included (today's behaviour)", () => {
-    expect(DEFAULT_RULES).toEqual({ B3: true, B4: true, B5: true, B7: true, B8: true });
+    expect(DEFAULT_RULES).toEqual({ B3: true, B4: true, B5: true, B6: true, B7: true, B8: true });
   });
 });

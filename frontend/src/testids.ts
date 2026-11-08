@@ -85,6 +85,7 @@ export const SCAN_RULES = "scan-rules";
 export const SCAN_RULE_B3 = "scan-rule-b3";
 export const SCAN_RULE_B4 = "scan-rule-b4";
 export const SCAN_RULE_B5 = "scan-rule-b5";
+export const SCAN_RULE_B6 = "scan-rule-b6";
 export const SCAN_RULE_B7 = "scan-rule-b7";
 export const SCAN_RULE_B8 = "scan-rule-b8";
 export const SCAN_PHASH_THRESHOLD = "scan-phash-threshold";

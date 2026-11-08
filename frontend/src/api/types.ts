@@ -69,7 +69,7 @@ export interface FileRow {
 export type ConfirmBelow = "high" | "medium";
 
 /** PR-4a — the auto-select rule ids, and one on/off flag per id. */
-export type RuleId = "B3" | "B4" | "B5" | "B7" | "B8";
+export type RuleId = "B3" | "B4" | "B5" | "B6" | "B7" | "B8";
 export type RuleToggles = Record<RuleId, boolean>;
 
 export interface Group {
