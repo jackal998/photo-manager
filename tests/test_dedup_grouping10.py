@@ -482,6 +482,19 @@ class TestGrouping12PngPixels:
             assert rows[path].group_id is None
             assert "same pHash, both screenshots" in rows[path].reason, rows[path].reason
 
+    def test_b7_on_png_pixel_check_unavailable_stays_a_hint(self):
+        # One side has no grey signature, so identity is unknown, not proven:
+        # the pair keeps the screenshot hint and is not grouped.
+        unknown = _hr("/t/two.png", "p2", PA, PA, T0, "src_b", "png", grey128=None)
+        rows = _rows(classify(
+            [_png("/s/one.png", "p1", "src_a"), unknown],
+            source_priority=PRIORITY,
+        ))
+        assert _group_sizes(rows) == []
+        for path in ("/s/one.png", "/t/two.png"):
+            assert rows[path].group_id is None
+            assert "same pHash, both screenshots" in rows[path].reason, rows[path].reason
+
     def test_b7_on_shot_time_disagreement_wins_over_identical_pixels(self):
         # Seven minutes apart: not within the same-moment window, not a half-hour
         # multiple, so the shot-time vote disagrees and names the gap.
