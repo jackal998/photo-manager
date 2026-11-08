@@ -196,10 +196,10 @@ class TestPatchSettings:
     def test_auto_select_rules_round_trip(self, client, tmp_settings: Path):
         """PR-4a — scan.auto_select.rules reads the default object when unset,
         round-trips a PATCH, and lands under scan.auto_select.rules on disk."""
-        defaults = {"B3": True, "B4": True, "B5": True, "B7": True, "B8": True}
+        defaults = {"B3": True, "B4": True, "B5": True, "B6": True, "B7": True, "B8": True}
         assert client.get("/api/settings").json()["scan.auto_select.rules"] == defaults
 
-        patched = {"B3": True, "B4": True, "B5": True, "B7": False, "B8": False}
+        patched = {"B3": True, "B4": True, "B5": True, "B6": True, "B7": False, "B8": False}
         resp = client.patch("/api/settings", json={
             "updates": {"scan.auto_select.rules": patched}
         })

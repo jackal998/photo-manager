@@ -288,7 +288,7 @@ class WebScanRequest(BaseModel):
     # PR-4a. None = resolve from settings.json (scan.auto_select.rules); a
     # partial object is merged over the defaults. Unknown ids and non-bool
     # values are refused with 422 by the Literal keys and StrictBool values.
-    auto_select_rules: dict[Literal["B3", "B4", "B5", "B7", "B8"], StrictBool] | None = None
+    auto_select_rules: dict[Literal["B3", "B4", "B5", "B6", "B7", "B8"], StrictBool] | None = None
     autotune_read_knee: bool = False
     autotune_knees: dict = {}
 

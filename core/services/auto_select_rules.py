@@ -8,7 +8,9 @@ the owner's library. This module is pure data: it imports nothing from
 Scope of the toggles (see ``docs/audits/auto-select-prd-2026-11/pr4-design.md``):
 
 * B5 (burst) and B7 (screenshot) act at classify time in every mode.
-* B3, B4 and B8 only narrow the aggressive delete set. No toggle adds a delete.
+* B3, B4 and B8 only narrow the aggressive delete set.
+* B6 is the one rule that adds a delete: a Live video follows its photo
+  (see :mod:`core.services.live_photo`). With B6 off the set is v1's.
 
 ``RULES_VERSION`` is written to the scan log so a later reader can tell
 which rule set produced a scan.
@@ -19,19 +21,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-RULES_VERSION = "v1"
-RULE_IDS: tuple[str, ...] = ("B3", "B4", "B5", "B7", "B8")
+RULES_VERSION = "v2"
+RULE_IDS: tuple[str, ...] = ("B3", "B4", "B5", "B6", "B7", "B8")
 
 
 @dataclass(frozen=True)
 class RuleToggles:
-    """One on/off flag per rule id."""
+    """One on/off flag per rule id.
+
+    ``b6`` is last and defaults to False, so a call that predates B6 keeps
+    the legacy behaviour: an omitted flag can never add a delete.
+    """
 
     b3: bool
     b4: bool
     b5: bool
     b7: bool
     b8: bool
+    b6: bool = False
 
     def to_dict(self) -> dict[str, bool]:
         """Return the uppercase-id mapping the API and settings file use."""
@@ -39,6 +46,7 @@ class RuleToggles:
             "B3": self.b3,
             "B4": self.b4,
             "B5": self.b5,
+            "B6": self.b6,
             "B7": self.b7,
             "B8": self.b8,
         }
@@ -61,10 +69,10 @@ class RuleToggles:
 # PRD defaults for the owner's library. B7 stays ON here. With B7 on, two PNGs
 # group only as byte-identical or pixel-identical copies (GROUPING "12"); a PNG
 # pHash match that is not pixel-identical is a hint.
-DEFAULT_RULES = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True)
+DEFAULT_RULES = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True, b6=True)
 
 # Master behaviour before PR-4a. ``apply_best_copy`` passes this explicitly.
-LEGACY_RULES = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=False)
+LEGACY_RULES = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=False, b6=False)
 
 
 def resolve_rule_toggles(value: object) -> RuleToggles:
