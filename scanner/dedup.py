@@ -45,6 +45,7 @@ try:
 except ImportError:
     _IMAGEHASH_AVAILABLE = False
 
+from scanner.grey_store import GREY_SIDE, GREY_SIG_BYTES, GreySig
 from scanner.media import RAW_EXTENSIONS, is_video
 from scanner.walker import FileRecord
 
@@ -107,6 +108,10 @@ class HashResult:
     # (``_pixels_identical``). None for video, hash failure, and any
     # HashResult rebuilt without it; a None on either side demotes EXACT.
     rgb32: Optional[bytes] = None
+    # GROUPING 11 — the 128x128 grey signature of the EXACT gate
+    # (``_grey_identical``), behind a reference: in memory (GreyBytes) or in the
+    # scan-local GreySigStore (StoredGreySig). Never persisted. None demotes EXACT.
+    grey128: Optional[GreySig] = None
     # GROUPING 10 (G3): Apple ContentIdentifier, upper-cased, backfilled from
     # the exiftool extract in scan_runner. Persisted (``content_identifier``
     # column). None for stills without an Apple MakerNote and for non-Apple files.
@@ -653,17 +658,22 @@ def _classify_phash(
 
 
 # Pixel-identity gate for an EXACT format duplicate (pHash 0, different bytes).
-# Two conditions on the 32×32 RGB signatures, both required:
-#  1. mean absolute difference per byte (0-255) <= FORMAT_DUP_MAX_RGB_DIFF.
-#  2. max per-channel mean shift (|mean R/G/B of a - of b|, over the 1,024
-#     pixels) <= FORMAT_DUP_MAX_CHANNEL_SHIFT. Condition 1 alone admits a
-#     single-channel edit (+10 on R is a mean diff of 3.3); condition 2 rejects it.
-# Calibrated on the dev test set (docs/audits/testset-2026-11/probe_exact_colour.py,
-# 85 pairs): condition 1 alone passes IMG_0405/0406 (a true edit), whose max
-# channel shift is 5.72, so condition 2 demotes it; no honest re-encode exceeds
-# a channel shift of 2.07.
-FORMAT_DUP_MAX_RGB_DIFF = 6.0
+# Two signatures, both required (GROUPING 11; census of 2026-11-08, 137 pairs):
+#  1. Structure, on the 128x128 grey signatures (``_grey_identical``): no 4x4-pixel
+#     block differs by more than GREY_BLOCK_MAX on average, and at most
+#     GREY_TAIL_BUDGET pixels differ by more than GREY_TAIL_MAX. The 126 honest
+#     re-encodes have a block maximum <= 2.2 and a p99.9 <= 4; the 11 different
+#     pictures (a moved person, a shifted second shot, a changed line of text) have
+#     a block maximum >= 6.6 and a p99.9 >= 12.
+#  2. Colour, on the 32x32 RGB signatures: max per-channel mean shift (|mean
+#     R/G/B of a - of b|, over the 1,024 pixels) <= FORMAT_DUP_MAX_CHANNEL_SHIFT.
+#     A single-channel edit at equal luminance passes structure; this rejects it.
+# No honest re-encode exceeds a channel shift of 2.07 on the dev test set.
 FORMAT_DUP_MAX_CHANNEL_SHIFT = 4.0
+GREY_BLOCK = 4             # 4x4-pixel blocks -> a 32x32 grid
+GREY_BLOCK_MAX = 4.0       # max block-mean |diff|
+GREY_TAIL_MAX = 8          # per-pixel |diff| ceiling for the 99.9th percentile
+GREY_TAIL_BUDGET = GREY_SIG_BYTES // 1000   # 16 pixels may exceed GREY_TAIL_MAX
 
 
 def _channel_means(sig: bytes) -> tuple[float, float, float]:
@@ -672,27 +682,49 @@ def _channel_means(sig: bytes) -> tuple[float, float, float]:
     return tuple(sum(sig[c::3]) / n for c in range(3))
 
 
+def _grey_identical(a: bytes, b: bytes) -> bool:
+    """Structure gate on two 128x128 grey signatures (``GREY_SIDE`` squared
+    bytes each): the tail test first (cheaper), then the block-mean test.
+
+    The tail test counts pixels with |diff| > GREY_TAIL_MAX and needs at most
+    GREY_TAIL_BUDGET of them. The block test averages each GREY_BLOCK square of
+    |diff| and needs every block mean <= GREY_BLOCK_MAX. Integer sums divided by
+    a power of two keep the block means exact in float32."""
+    from PIL import Image, ImageChops  # lazy: dedup stays importable without PIL
+
+    size = (GREY_SIDE, GREY_SIDE)
+    d = ImageChops.difference(
+        Image.frombytes("L", size, a), Image.frombytes("L", size, b)
+    )
+    if sum(d.histogram()[GREY_TAIL_MAX + 1:]) > GREY_TAIL_BUDGET:
+        return False
+    return d.convert("F").reduce(GREY_BLOCK).getextrema()[1] <= GREY_BLOCK_MAX
+
+
 def _pixels_identical(a: HashResult, b: HashResult) -> Optional[bool]:
     """Pixel-identity verdict for two pHash-0 members: ``None`` when either
-    signature is missing (cannot verify). ``False`` when the pixel dimensions
-    differ, unless they are a 90° swap: ``pixel_width/height`` are read BEFORE
-    EXIF orientation is applied while the signature is taken AFTER it, so an
-    Orientation=6 original and its rotation-baked export differ by a swap. The
-    signature itself still rejects a genuinely different image. Else both
-    gates: the mean absolute byte difference and the channel-shift gate."""
-    if a.rgb32 is None or b.rgb32 is None:
+    signature is missing or its grey signature cannot be read (cannot verify).
+    ``False`` when the pixel dimensions differ, unless they are a 90° swap:
+    ``pixel_width/height`` are read BEFORE EXIF orientation is applied while
+    the signatures are taken AFTER it, so an Orientation=6 original and its
+    rotation-baked export differ by a swap. The signatures still reject a
+    genuinely different image. Else both gates: the channel-shift gate on the
+    RGB signatures, then the grey structure gate (``_grey_identical``)."""
+    if a.rgb32 is None or b.rgb32 is None or a.grey128 is None or b.grey128 is None:
         return None
     dims_a = (a.pixel_width, a.pixel_height)
     dims_b = (b.pixel_width, b.pixel_height)
     if dims_a != dims_b and dims_a != (dims_b[1], dims_b[0]):
         return False
-    diff = sum(abs(x - y) for x, y in zip(a.rgb32, b.rgb32)) / len(a.rgb32)
-    if diff > FORMAT_DUP_MAX_RGB_DIFF:
-        return False
     shift = max(
         abs(x - y) for x, y in zip(_channel_means(a.rgb32), _channel_means(b.rgb32))
     )
-    return shift <= FORMAT_DUP_MAX_CHANNEL_SHIFT
+    if shift > FORMAT_DUP_MAX_CHANNEL_SHIFT:
+        return False
+    try:
+        return _grey_identical(a.grey128.bytes(), b.grey128.bytes())
+    except OSError:
+        return None  # store read failed: counted by the store, logged by scan_runner
 
 
 def _format_review_row(
@@ -998,7 +1030,8 @@ def _gates_pass(
 # RGB mean difference <= FORMAT_DUP_MAX_RGB_DIFF, max channel shift <=
 # FORMAT_DUP_MAX_CHANNEL_SHIFT). Otherwise the row is REVIEW_DUPLICATE, at the
 # confidence of the dHash vote. Edges are unchanged except that a dHash-unknown
-# format duplicate keeps its low edge.
+# format duplicate keeps its low edge. (GROUPING 11 superseded the mean-difference
+# condition with the grey block and tail test.)
 # "9": an image<->video same-stem pair is a "pair" edge (``_pair_pass``). It
 # shares a group_id only when its still is grouped for another reason; a lone
 # Live Photo pair gets group_id None. Image<->image pairs are unchanged.
@@ -1010,7 +1043,12 @@ def _gates_pass(
 # on. Stem and pair edges are unchanged in this version (iteration 2).
 # Iteration 3: an undated row never links two shot moments through a content
 # edge either (``_assign_group_ids``); the refused edge is a hint.
-GROUPING_STRATEGY_VERSION = "10"
+# "11": EXACT's pixel identity is decided on a 128x128 grey signature (grey128,
+# spilled to a scan-local GreySigStore): max 4x4 block-mean |diff| <=
+# GREY_BLOCK_MAX and at most GREY_TAIL_BUDGET pixels over GREY_TAIL_MAX. The 32x32
+# RGB mean-difference test is gone; the rgb32 channel-shift test stays. A moved
+# person, a shifted second shot or a changed text line is REVIEW, not EXACT.
+GROUPING_STRATEGY_VERSION = "11"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.

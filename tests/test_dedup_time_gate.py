@@ -14,6 +14,7 @@ from pathlib import Path
 
 from core.services.auto_select import non_keepers_for_aggressive_delete
 from scanner.dedup import HashResult, _screenshot_pair, _shot_time_vote, classify
+from scanner.grey_store import GreyBytes
 from scanner.walker import FileRecord
 
 # Non-degenerate pHash values (32 set bits, well inside the #516 entropy guard).
@@ -45,6 +46,7 @@ def _hr(
         pixel_width=4000,
         pixel_height=3000,
         rgb32=bytes(3072),  # constant signature: format dups read as same pixels
+        grey128=GreyBytes(bytes(16384)),  # constant grey: the structure gate passes
     )
 
 

@@ -9,6 +9,7 @@ import pytest
 from PIL import Image
 
 from scanner.dedup import HashResult, ManifestRow, classify
+from scanner.grey_store import GreyBytes, GreySig
 from scanner.walker import FileRecord
 
 
@@ -57,6 +58,8 @@ def _hr(
     # Constant signature: every row reads as the same pixels, so a pHash-0
     # format duplicate keeps EXACT (the pixel gate, GROUPING "8", passes).
     rgb32: bytes | None = bytes(3072),
+    # GROUPING 11: the same constant picture, in grey128 (the structure gate).
+    grey128: GreySig | None = GreyBytes(bytes(16384)),
     # GROUPING 10 (G4): the Apple ContentIdentifier that pairs a Live still
     # with its video. None = no identity read (the default for every fixture).
     content_identifier: str | None = None,
@@ -74,6 +77,7 @@ def _hr(
         pixel_width=pixel_width,
         pixel_height=pixel_height,
         rgb32=rgb32,
+        grey128=grey128,
         content_identifier=content_identifier,
     )
 

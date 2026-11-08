@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from scanner.dedup import HashResult
 from scanner.exif import extract_pil_scoring_signals, parse_exif_date
+from scanner.grey_store import GREY_SIDE, GreyBytes
 
 if TYPE_CHECKING:
     from scanner.walker import FileRecord
@@ -121,6 +122,10 @@ except ImportError:
 # (a contrast scalar the grouping gate reads, see scanner/dedup.py
 # ``_phash_quality_ok``). Hash VALUES are unchanged (the parity test still
 # pins recipe-"3" values); per-file cost is one extra LANCZOS resize.
+# "6" — an eleventh element, the 128x128 grey signature grey128 (GROUPING 11),
+# taken from the FULL-resolution luma. Hash VALUES unchanged (pHash, dHash, mean
+# colour and rgb32 still come from the drafted RGB image); per-file cost: one
+# luma-only full decode for JPEG (+19 ms measured on 12-24 MP).
 #
 # What the bump does and does NOT do: this token is consumed by exactly one
 # code path — ``scan_runner.hash_pool_fingerprint`` (core/app_service/
@@ -129,7 +134,7 @@ except ImportError:
 # manifest keeps its recipe-"3" hashes with no staleness signal, so its rotated
 # pairs stay ungrouped until the user re-scans that library; the two changes are
 # folded into ONE bump so that re-scan is needed once, not twice.
-HASH_RECIPE_VERSION = "5"
+HASH_RECIPE_VERSION = "6"
 
 # Shrink-on-load target shared by every pixel path, so RAW and JPEG hash at the
 # same working resolution (#569 chose it; #826 pointed the RAW path at it).
@@ -172,10 +177,63 @@ def _pixel_signature(img: "Image.Image") -> bytes:
     return img.resize((32, 32), Image.BOX).tobytes()
 
 
+def _grey_signature(img: "Image.Image") -> bytes:
+    """128x128 grey BOX thumbnail as 16,384 raw bytes: the structure half of
+    the EXACT gate in ``scanner/dedup.py`` (``_grey_identical``). ``img`` must be
+    EXIF-oriented and FULL resolution (RGB, or L from a luma decode). Scan-time
+    only: spilled to a ``GreySigStore`` and never persisted to the manifest."""
+    luma = img if img.mode == "L" else img.convert("L")  # no copy of a full-size L image
+    return luma.resize((GREY_SIDE, GREY_SIDE), Image.BOX).tobytes()
+
+
+def _grey_from_jpeg_bytes(data: bytes) -> Optional[bytes]:
+    """GROUPING 11: the grey signature of a JPEG from a luma-only FULL decode.
+
+    The drafted RGB working image (libjpeg shrink to ~1/4 or 1/8) is not
+    comparable across decode routes: a drafted JPEG against a fully decoded HEIC
+    or PNG pushed honest pairs over the block threshold (census 2026-11-08). A
+    second decode of the same bytes, full size and luma only, separates them
+    cleanly; measured ~19 ms median per 12-24 MP JPEG. EXIF orientation is
+    applied as the RGB path applies it. ``None`` on decode failure.
+
+    This helper opens a fresh image, so PIL has no cached EXIF parse from an
+    earlier open: a corrupt EXIF block makes ``exif_transpose`` raise
+    ``SyntaxError``, which the RGB path never sees. Both paths then hash the
+    file un-rotated, so the two signatures stay consistent."""
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.draft("L", im.size)
+            try:
+                ImageOps.exif_transpose(im, in_place=True)
+            except (OSError, ValueError, AttributeError, SyntaxError):
+                # A malformed Orientation or EXIF block costs the rotation, not
+                # the file: the RGB path hashes it un-rotated too.
+                pass
+            im.load()
+            return _grey_signature(im)
+    except (OSError, ValueError, SyntaxError):
+        return None
+
+
+def _grey_for_route(
+    file_type: str, is_jpeg: bool, img: "Image.Image", data: bytes, raw_grey: Optional[bytes]
+) -> Optional[bytes]:
+    """Pick the grey signature's decode route (GROUPING 11): RAW takes the luma
+    of its embedded preview, or of the full postprocess, computed inside
+    ``_raw_preview_and_sizes``; a JPEG takes a luma-only full decode of
+    ``data``; every other format takes the working image, which is already a
+    full decode for those formats (draft is a no-op)."""
+    if file_type == "raw":
+        return raw_grey
+    if is_jpeg:
+        return _grey_from_jpeg_bytes(data)
+    return _grey_signature(img)
+
+
 def _hashes_from_data(
     path: Path, file_type: str, data: bytes
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes]]:
-    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality, rgb32)``
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes]]:
+    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality, rgb32, grey128)``
     from bytes that have already been read off disk.
 
     ``phash_quality`` (recipe "5") is :func:`_phash_quality` of the working
@@ -184,6 +242,9 @@ def _hashes_from_data(
     ``rgb32`` is :func:`_pixel_signature` of the working image (3,072 bytes);
     ``None`` for video and whenever the image did not decode. Scan-time only,
     never persisted to the manifest.
+
+    ``grey128`` (recipe "6") is the 16,384-byte full-resolution grey signature
+    routed by :func:`_grey_for_route`; ``None`` exactly when ``rgb32`` is ``None``.
 
     This is the single implementation used by both :func:`compute_hashes`
     (which reads the bytes) and :func:`compute_from_bytes` (which receives
@@ -198,13 +259,15 @@ def _hashes_from_data(
     sha = hashlib.sha256(data).hexdigest()
 
     if not _HASH_AVAILABLE:
-        return sha, None, None, None, None, None, None, None, None, None
+        return sha, None, None, None, None, None, None, None, None, None, None
 
     img: Optional[Image.Image] = None
     raw_date: Optional[str] = None
     px_w: Optional[int] = None
     px_h: Optional[int] = None
     inmemory_signals: Optional[dict] = None
+    raw_grey: Optional[bytes] = None  # RAW only: set by _raw_preview_and_sizes
+    is_jpeg = False  # set by the non-RAW branch from PIL's format
 
     if file_type == "raw":
         # #826 — ONE LibRaw open yields both the embedded preview and the true
@@ -215,12 +278,12 @@ def _hashes_from_data(
         # #591 — the in-memory source is a fresh io.BytesIO over the bytes we
         # already read (rawpy 0.26.1 has no module-level open_buffer); no disk
         # re-read.
-        img, px_w, px_h = _raw_preview_and_sizes(io.BytesIO(data))
+        img, px_w, px_h, raw_grey = _raw_preview_and_sizes(io.BytesIO(data))
         if img is None:
             # In-memory decode failed (genuine LibRaw error / non-camera TIFF
             # routed to 'raw', #75) — retry from the path so the file still
             # skips cleanly. Same recipe on both routes.
-            img, fallback_w, fallback_h = _raw_preview_and_sizes(str(path))
+            img, fallback_w, fallback_h, raw_grey = _raw_preview_and_sizes(str(path))
             if px_w is None:
                 px_w, px_h = fallback_w, fallback_h
         # True sensor dimensions come from rawpy metadata, never from the
@@ -230,6 +293,10 @@ def _hashes_from_data(
     else:
         try:
             with Image.open(io.BytesIO(data)) as pil_img:
+                # GROUPING 11: the scanner types any FF D8 file as "jpeg", and
+                # an MPO (multi-picture JPEG) is drafted the same way, so both
+                # take the luma-only full decode for the grey signature.
+                is_jpeg = pil_img.format in ("JPEG", "MPO")
                 # Extract date BEFORE convert() — that creates a new image without EXIF.
                 raw_date = _raw_exif_date(pil_img)
                 # #786 — same constraint: the fuller scoring-signal pass
@@ -274,7 +341,7 @@ def _hashes_from_data(
             img = None
 
     if img is None:
-        return sha, None, None, None, raw_date, None, None, inmemory_signals, None, None
+        return sha, None, None, None, raw_date, None, None, inmemory_signals, None, None, None
     try:
         tiny = img.resize((1, 1), Image.LANCZOS)
         mc = tiny.getpixel((0, 0))[:3]
@@ -290,22 +357,25 @@ def _hashes_from_data(
             inmemory_signals,
             _phash_quality(img),
             _pixel_signature(img),
+            _grey_for_route(file_type, is_jpeg, img, data, raw_grey),
         )
     except (ValueError, TypeError):
         # #470 — preserve px_w / px_h measured before the phash compute attempt.
         # Wiping them to None would force scoring._score_resolution to 0.0 even
         # though the dimensions are known and valid; phash failure shouldn't
         # cascade into a fake resolution-zero penalty.
-        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals, None, None
+        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals, None, None, None
 
 
 def compute_hashes(
     path: Path, file_type: str
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes]]:
-    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals, phash_quality, rgb32)``.
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes]]:
+    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals, phash_quality, rgb32, grey128)``.
 
     ``rgb32`` is the 32×32 RGB pixel signature (3,072 bytes) for the EXACT
     pixel-identity gate; ``None`` for video/skip and on decode failure.
+    ``grey128`` is the 128×128 grey signature (16,384 bytes) for the same gate;
+    ``None`` exactly when ``rgb32`` is.
 
     All values are derived from one in-memory read — no extra file open.
     ``dhash`` is a second, independent perceptual hash (gradient/brightness
@@ -322,7 +392,7 @@ def compute_hashes(
     For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
     """
     if file_type in ("mp4", "mov", "gif", "skip"):
-        return compute_sha256(path), None, None, None, None, None, None, None, None, None
+        return compute_sha256(path), None, None, None, None, None, None, None, None, None, None
 
     # Single read: delegate all hash computation to _hashes_from_data.
     return _hashes_from_data(path, file_type, path.read_bytes())
@@ -390,7 +460,7 @@ def run_hash_for_record(
     try:
         (
             sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals,
-            phash_quality, rgb32,
+            phash_quality, rgb32, grey128,
         ) = compute_hashes(record.path, record.file_type)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # One bad file must never abort the whole scan — caller logs + skips.
@@ -416,6 +486,7 @@ def run_hash_for_record(
         inmemory_signals=inmemory_signals,
         phash_quality=phash_quality,
         rgb32=rgb32,
+        grey128=GreyBytes(grey128) if grey128 is not None else None,
     )
 
 
@@ -469,11 +540,11 @@ def compute_from_bytes(
             # video/gif/skip: stream SHA from path, no perceptual hashes.
             sha256 = compute_sha256(record.path)
             phash = dhash = mean_color = raw_date = px_w = px_h = inmemory_signals = None
-            phash_quality = rgb32 = None
+            phash_quality = rgb32 = grey128 = None
         else:
             (
                 sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals,
-                phash_quality, rgb32,
+                phash_quality, rgb32, grey128,
             ) = _hashes_from_data(record.path, record.file_type, data)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return idx, HashFailure(type(exc).__name__, str(exc))
@@ -496,6 +567,7 @@ def compute_from_bytes(
         inmemory_signals=inmemory_signals,
         phash_quality=phash_quality,
         rgb32=rgb32,
+        grey128=GreyBytes(grey128) if grey128 is not None else None,
     )
 
 
@@ -628,8 +700,14 @@ def _raw_preview_from_jpeg_bytes(thumb_data: bytes) -> Optional[Image.Image]:
 
 def _raw_preview_and_sizes(
     source: "io.BytesIO | str",
-) -> "tuple[Optional[Image.Image], Optional[int], Optional[int]]":
-    """ONE LibRaw open → ``(hash-ready preview, sensor width, sensor height)``.
+) -> "tuple[Optional[Image.Image], Optional[int], Optional[int], Optional[bytes]]":
+    """ONE LibRaw open → ``(hash-ready preview, sensor width, sensor height,
+    grey signature)``.
+
+    GROUPING 11 — the fourth value is the 128x128 grey signature of the same
+    picture at FULL resolution, taken before the working-resolution reduce: the
+    luma of the embedded preview's full decode, or of the full postprocess on
+    the fallback. It is computed here so LibRaw is still opened only once.
 
     #826 — replaces the old pair of opens (``_load_raw_preview_from_bytes`` for
     the preview, then a second ``rawpy.imread`` purely for ``raw.sizes``). The
@@ -653,7 +731,7 @@ def _raw_preview_and_sizes(
     returns a portrait 8064×6048 array from an 8064×6048 landscape sensor).
     """
     if not _RAWPY_AVAILABLE:
-        return None, None, None
+        return None, None, None, None
     try:
         with rawpy.imread(source) as raw:
             px_w, px_h = raw.sizes.width, raw.sizes.height
@@ -662,18 +740,20 @@ def _raw_preview_and_sizes(
                 if thumb.format == rawpy.ThumbFormat.JPEG:
                     img = _raw_preview_from_jpeg_bytes(thumb.data)
                     if img is not None:
-                        return img, px_w, px_h
+                        return img, px_w, px_h, _grey_from_jpeg_bytes(thumb.data)
             except rawpy.LibRawNoThumbnailError:
                 pass
             # Full decode fallback — slower but always works.
             rgb = raw.postprocess(use_auto_wb=True, output_bps=8)
-            img = Image.fromarray(rgb).convert("RGB")
+            full = Image.fromarray(rgb).convert("RGB")
+            grey = _grey_signature(full)  # full resolution, before the reduce below
             # Reduce to the SAME working resolution the preview route yields.
             # Without this a RAW with no embedded preview hashes at full sensor
             # resolution while its sibling with a preview hashes at ~1008 px —
             # one recipe with two answers, and the #826 A/B measured those two
             # resolutions up to 38 phash bits apart.
-            factor = _draft_equivalent_scale(img.size)
-            return (img.reduce(factor) if factor > 1 else img), px_w, px_h
+            factor = _draft_equivalent_scale(full.size)
+            img = full.reduce(factor) if factor > 1 else full
+            return img, px_w, px_h, grey
     except (OSError, ValueError, AttributeError, rawpy.LibRawError):
-        return None, None, None
+        return None, None, None, None
