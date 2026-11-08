@@ -730,6 +730,124 @@ class TestHashPoolSetting:
         assert out.exists(), "default thread scan should write its manifest"
 
 
+def _metadata_only_copy_pair(tmp_path: Path) -> None:
+    """Two JPEGs with identical pixels and the same DateTimeOriginal, whose
+    EXIF bytes differ by one Make tag. Classify only groups dated files whose
+    pictures clear the pHash gates: at least 128 px, and contrast at the 32x32
+    scale (`phash_quality`, floor 16). Per-pixel noise averages out there, so
+    the picture is a seeded grid of 16-px colour blocks."""
+    import random
+    from PIL import ImageDraw
+
+    rng = random.Random(7)  # seeded: the pair must be identical run to run
+    image = Image.new("RGB", (256, 192))
+    draw = ImageDraw.Draw(image)
+    for y in range(0, 192, 16):
+        for x in range(0, 256, 16):
+            colour = tuple(rng.randrange(256) for _ in range(3))
+            draw.rectangle([x, y, x + 15, y + 15], fill=colour)
+    exif = Image.Exif()
+    exif.get_ifd(0x8769)[36867] = "2024:06:15 10:30:00"  # DateTimeOriginal
+    image.save(tmp_path / "a_original.jpg", "JPEG", quality=95, exif=exif.tobytes())
+    exif[0x010F] = "Test Camera"  # Make: changes the bytes, not the pixels
+    image.save(tmp_path / "b_copy.jpg", "JPEG", quality=95, exif=exif.tobytes())
+
+
+def _capture_grey_stores(monkeypatch) -> list:
+    """Record each GreySigStore the pipeline creates, through its factory seam."""
+    import core.app_service.scan_runner as _sr
+
+    created: list = []
+    real_factory = _sr._new_grey_store
+
+    def _factory():
+        store = real_factory()
+        created.append(store)
+        return store
+
+    monkeypatch.setattr(_sr, "_new_grey_store", _factory)
+    return created
+
+
+def _assert_one_exact_and_no_store_file(
+    manifest: Path, created: list, *, spilled: bool
+) -> None:
+    import sqlite3
+
+    with sqlite3.connect(manifest) as conn:
+        actions = [a for (a,) in conn.execute("SELECT action FROM migration_manifest")]
+    assert actions.count("EXACT") == 1, f"expected one EXACT row, got {actions!r}"
+    assert len(created) == 1, f"expected one grey store per scan, got {len(created)}"
+    store_path = created[0].path
+    if spilled:
+        assert store_path is not None, "no signature reached the grey store"
+    if store_path is not None:
+        assert not store_path.exists(), f"grey store file left behind: {store_path}"
+
+
+class TestGreySignatureSpill:
+    """GROUPING 11 — the grey signature leaves RAM for a scan-local file.
+
+    A metadata-only copy (same pixels, different EXIF bytes) must stay one
+    EXACT row on both executor paths. The thread path always spills before
+    classify, so its store file must exist during the scan; the process path
+    spills from a future callback that may land after classify, so it only
+    asserts that no file survives.
+    """
+
+    def test_metadata_only_copy_is_one_exact_row_on_thread_path(
+        self, tmp_path, monkeypatch
+    ):
+        _metadata_only_copy_pair(tmp_path)
+        out = tmp_path / "m.sqlite"
+        created = _capture_grey_stores(monkeypatch)
+        failed: list[str] = []
+        worker = _PipelineRun(
+            sources={"s": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"s": False},
+            workers=2,
+        )
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert not failed, f"scan must not fail: {failed}"
+        _assert_one_exact_and_no_store_file(out, created, spilled=True)
+
+    def test_metadata_only_copy_is_one_exact_row_on_process_path(
+        self, tmp_path, monkeypatch
+    ):
+        import concurrent.futures as _cf
+
+        _metadata_only_copy_pair(tmp_path)
+        out = tmp_path / "m.sqlite"
+        created = _capture_grey_stores(monkeypatch)
+        instantiated: list[bool] = []
+        real_thread_pool = _cf.ThreadPoolExecutor
+
+        class SpyProcessPool(real_thread_pool):
+            # Thread-backed stand-in (no OS spawn), as in TestHashPoolSetting.
+            def __init__(self, *args, **kwargs):
+                instantiated.append(True)
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
+        failed: list[str] = []
+        worker = _PipelineRun(
+            sources={"s": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="process",
+        )
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert instantiated == [True], "process mode must select ProcessPoolExecutor"
+        assert not failed, f"scan must not fail: {failed}"
+        _assert_one_exact_and_no_store_file(out, created, spilled=False)
+
+
 class TestHashPoolCalibration:
     """#486-PR3 — hash_pool="auto" times a sample through both executors at
     scan start, projects each to the real file count, and runs the faster.
@@ -1457,6 +1575,7 @@ class TestPipelineLateCancel:
                 "output_path would be overwritten"
             )
 
+        created = _capture_grey_stores(monkeypatch)
         monkeypatch.setattr(_hasher, "_hashes_from_data", cancel_during_hash)
         monkeypatch.setattr(_dedup, "classify", must_not_run_classify)
         monkeypatch.setattr(_scoring, "apply_scoring_to_rows", must_not_run_score)
@@ -1482,6 +1601,11 @@ class TestPipelineLateCancel:
         assert out.read_bytes() == b"PRIOR-MANIFEST-SENTINEL", (
             "destination manifest was overwritten despite cancel — "
             "the WRITE-stage check failed to fire"
+        )
+        # GROUPING 11 — a cancelled scan still deletes its grey store file.
+        assert len(created) == 1, f"expected one grey store, got {len(created)}"
+        assert created[0].path is None or not created[0].path.exists(), (
+            f"grey store file left behind after cancel: {created[0].path}"
         )
 
     def test_cancel_before_write_only_preserves_existing_manifest(

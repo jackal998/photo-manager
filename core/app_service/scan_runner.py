@@ -18,6 +18,7 @@ from loguru import logger
 from core.app_service.cancel_token import _CancelToken
 from core.app_service.dtos import ScanConfig
 from core.app_service.events import ScanProgressBus
+from scanner.grey_store import GreyBytes, GreySigStore, StoredGreySig
 
 # ---------------------------------------------------------------------------
 # Stage name constants (mirrored from scan_worker.py — kept in sync manually;
@@ -557,6 +558,47 @@ def _calibrate_hash_pool(
 
 
 # ---------------------------------------------------------------------------
+# GROUPING 11 — the grey signature spill (scanner/grey_store.py)
+# ---------------------------------------------------------------------------
+
+# Seam: every scan gets its own store from this factory. Tests monkeypatch it
+# to capture the store and assert its temporary file is gone after the scan.
+_new_grey_store = GreySigStore
+
+
+def _spill_grey(outcome, store: GreySigStore) -> None:
+    """Move an outcome's in-memory grey signature into ``store``.
+
+    Parent process only, once per file. Never raises: ``Future`` callbacks
+    swallow exceptions, and a failed write leaves ``grey128`` None, which
+    makes the file "pixel check unavailable", never EXACT.
+    """
+    grey = getattr(outcome, "grey128", None)
+    if not isinstance(grey, GreyBytes):
+        return
+    try:
+        outcome.grey128 = StoredGreySig(store, store.put(grey.bytes()))
+    except (OSError, ValueError, RuntimeError):
+        outcome.grey128 = None
+
+
+def _spill_future(fut, store: GreySigStore) -> None:
+    """Process-pool done-callback: spill a finished hash future's signature."""
+    if fut.cancelled() or fut.exception() is not None:
+        return
+    _spill_grey(fut.result()[1], store)
+
+
+def _report_grey_failures(bus: ScanProgressBus, count: int, what: str) -> None:
+    """Log one WARNING line when the grey store failed ``count`` times."""
+    if count:
+        bus.log(
+            f"  WARNING: {count:,} pixel signature(s) {what}; those files get"
+            " 'pixel check unavailable'"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -574,7 +616,24 @@ def run_pipeline(
     ``cancel_token`` is polled cooperatively at every stage boundary and
     inside every hot loop.  Callers cancel by calling
     ``cancel_token.request()``.
+
+    GROUPING 11: this wrapper owns the scan-local grey signature store and
+    deletes its temporary file on every exit path.
     """
+    grey_store = _new_grey_store()
+    try:
+        _run_pipeline(config, cancel_token, bus, grey_store)
+    finally:
+        grey_store.close_and_delete()
+
+
+def _run_pipeline(
+    config: ScanConfig,
+    cancel_token: _CancelToken,
+    bus: ScanProgressBus,
+    grey_store: GreySigStore,
+) -> None:
+    """The pipeline body; ``run_pipeline`` owns ``grey_store``'s lifetime."""
     import threading
     from concurrent.futures import (
         ProcessPoolExecutor,
@@ -1060,7 +1119,11 @@ def run_pipeline(
             for dev, items in proc_device_records.items():
                 pool = process_pools[dev]
                 for _idx, _r in items:
-                    futures[pool.submit(run_hash_for_record, _idx, _r)] = _idx
+                    fut = pool.submit(run_hash_for_record, _idx, _r)
+                    # GROUPING 11 — spill in the executor's callback thread so a
+                    # stalled main loop never holds completed signatures in RAM.
+                    fut.add_done_callback(lambda f: _spill_future(f, grey_store))
+                    futures[fut] = _idx
                 # #549(a) — assign to KILL_ON_JOB_CLOSE job.
                 _assign_process_pool_to_kill_job(pool)
             for future in as_completed(futures):
@@ -1241,7 +1304,11 @@ def run_pipeline(
 
                 def _cb(f, _dev=c_dev, _n=n):
                     byte_budgets[_dev].release(_n)
-                    out_q.put(f.result())
+                    result = f.result()
+                    # GROUPING 11 — spill BEFORE out_q, so the queue only ever
+                    # holds a small reference to the signature.
+                    _spill_grey(result[1], grey_store)
+                    out_q.put(result)
 
                 try:
                     compute_pool.submit(
@@ -1334,6 +1401,8 @@ def run_pipeline(
         return
 
     hash_results = [r for r in hash_results if r is not None]
+    grey_put_failures = grey_store.failures
+    _report_grey_failures(bus, grey_put_failures, "could not be stored")
 
     if skipped:
         bus.log(f"  Skipped {len(skipped):,} unreadable file(s):")
@@ -1403,6 +1472,11 @@ def run_pipeline(
         screenshot_demotion=config.auto_select_rules.b7,
     )
     _emit_stage(bus, classify_tracker, 1, 1, force=True)
+    _report_grey_failures(
+        bus, grey_store.failures - grey_put_failures, "could not be read"
+    )
+    # GROUPING 11 — classify is the last reader; free the disk before scoring.
+    grey_store.close_and_delete()
 
     # --- 4.5: score within each duplicate group (#187) ---
     if cancel_token():
