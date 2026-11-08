@@ -184,7 +184,7 @@ code decides it, and which test or scenario pins it.
 
 - **Rule:** With the screenshot rule (B7, default on in v1) turned off, a match between two PNGs is judged like a photo. Shot time is not read (GROUPING 14: a grouping verdict is decided on content). With the rule on, a pair of PNGs whose pixels are not identical is capped at low too; a pixel-identical pair is `EXACT` (GROUPING 12). Takes effect at the next scan.
 - **Owning code:** `scanner/dedup.py::_demotion_note`
-- **Pins:** `tests/test_dedup_rule_toggles.py::TestScreenshotRule::test_screenshot_demotion_off_near_dup_png_is_high`, `tests/test_dedup_rule_toggles.py::TestScreenshotRule::test_shot_time_demotion_survives_screenshot_off`
+- **Pins:** `tests/test_dedup_rule_toggles.py::TestScreenshotRule::test_screenshot_demotion_off_near_dup_png_is_high`, `tests/test_dedup_rule_toggles.py::TestScreenshotRule::test_screenshot_off_near_pngs_group_whatever_the_shot_times`
 - **Status:** pinned
 
 ### R-SCAN-11 — A stored rule value resolves per rule to its default when unreadable; the API refuses unknown ids and non-boolean values with 422
