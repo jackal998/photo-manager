@@ -705,8 +705,10 @@ def _rescue_identity(
     this pass only its SHA could say so. Identity is decided here on content
     alone: the same pHash AND the same pixel dimensions (or a 90° swap) narrow
     the bucket, the mean-colour and dHash gates of every exact-bucket edge pass
-    (``_gates_pass``), and ``_pixels_identical`` is True. A pass writes EXACT
-    with ``duplicate_of`` the bucket's keeper (``_keeper_key``). Anything less
+    (``_gates_pass``), and ``_pixels_identical`` is True. The bucket is split
+    by pixel identity (``_pixel_clusters``, GROUPING 15) so that several flat
+    pictures sharing one pHash each keep their own copies; a pass writes EXACT
+    with ``duplicate_of`` its cluster's keeper (``_keeper_key``). Anything less
     writes nothing — not a REVIEW row and not a hint — because the pHash
     carries no evidence for these rows. Only lossy rows (``LOSSY_TYPES``) take
     part: a RAW is never a dedup decision (the complementary policy of
@@ -726,25 +728,26 @@ def _rescue_identity(
     for bucket in buckets.values():
         if len(bucket) < 2:
             continue
-        ordered = sorted(bucket, key=lambda h: _keeper_key(h, source_priority))
-        keeper = ordered[0]
-        for duplicate in ordered[1:]:
-            key = str(duplicate.record.path)
-            if key in rows or not _gates_pass(
-                keeper, duplicate, mean_color_threshold, dhash_threshold
-            ):
-                continue
-            if _pixels_identical(keeper, duplicate) is not True:
-                continue
-            rows[key] = _make_row(
-                duplicate,
-                "EXACT",
-                duplicate_of=str(keeper.record.path),
-                hamming=0,
-                reason=f"pixel-identical copy of {keeper.record.path.name} "
-                       f"(low-contrast or flat image; pHash not trusted)",
-                match_confidence="high",
-            )
+        # GROUPING 15: a bucket may hold several flat pictures (four eclipse
+        # frames with one degenerate pHash); split it by pixel identity like
+        # the exact bucket, so every copy is judged against its own picture.
+        for cluster in _pixel_clusters(bucket, source_priority):
+            keeper = cluster[0]
+            for duplicate in cluster[1:]:
+                key = str(duplicate.record.path)
+                if key in rows or not _gates_pass(
+                    keeper, duplicate, mean_color_threshold, dhash_threshold
+                ):
+                    continue
+                rows[key] = _make_row(
+                    duplicate,
+                    "EXACT",
+                    duplicate_of=str(keeper.record.path),
+                    hamming=0,
+                    reason=f"pixel-identical copy of {keeper.record.path.name} "
+                           f"(low-contrast or flat image; pHash not trusted)",
+                    match_confidence="high",
+                )
 
 
 def _format_review_row(
@@ -1062,7 +1065,11 @@ def _gates_pass(
 # alike is now a REVIEW row in one group (pixels differ) instead of a hint; a
 # pixel-identical copy is EXACT whatever its EXIF dates say. The 2 s constant
 # survives only as the burst-stack relabel threshold (``_is_burst``).
-GROUPING_STRATEGY_VERSION = "14"
+# "15": the GROUPING 13 rescue bucket is split by pixel identity (``_pixel_clusters``)
+# like the exact bucket. GROUPING 14 had dropped the shot-moment split without a
+# replacement, so a bucket of several flat pictures judged every copy against one
+# keeper and lost the others' copies (blind round 2, two eclipse frames).
+GROUPING_STRATEGY_VERSION = "15"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
