@@ -826,3 +826,233 @@ worktree, opus reviews, owner says "yes" per merge; the owner launches the app; 
   the pair is one "photo". The rule "a lone Live Photo is not a group" (#88 / GROUPING 9) is therefore confirmed, not
   an open question. This docs PR carries the STATE tail since #1053; grouping10-design.md landed with #1055 and gains
   the owner's decision line.
+- 2026-11-08 ~14:40: **#1056 merged** (squash aaa297b); local master fast-forwarded. Next: PR-4b plan (B6 Live MOV
+  follows its photo's decision; B7 default census by a B7-off rescan).
+- 2026-11-08 ~15:20: **B7 default census (real rescan on master, `--rules=B7=false`, 5.5 min).** B7 off vs on:
+  groups 413 -> 441 (+28), grouped rows 1,449 -> 1,516, pairs +57, EXACT rows 537 -> 575 (all "format duplicate (png
+  vs png)" = the 32x32 pixel signature), REVIEW/high +2, PNG-only groups 51 -> 79 of which 39 hold different bytes;
+  low-only 0, cross-day 3, stem-bridge 0 unchanged. Contact sheets of the first 6 gained groups: 4 are true duplicates
+  (one screenshot saved in Takeout + iPhone backup + J); **2 are false merges of bank-transfer receipts** — two
+  different transactions (different amount and date) joined once by a PNG near-dup edge (hamming 6, "1 s apart"
+  because a screenshot's date is its save time) and once by the pixel-identity tier itself (one receipt became an
+  EXACT "format duplicate" of a different receipt = an aggressive DELETE candidate). This is dedup-core class B
+  reopened. **Lead recommendation: B7 default stays ON** (PRD §6 "default off" is refuted by data); the ~24 true
+  screenshot-copy groups B7 on misses are a GROUPING follow-up (an exact decoded-pixel hash for PNG pairs would group
+  them without the 32x32 signature), not a B7 question.
+  **B6 census (iteration-4 manifest):** 195 videos sit in groups (of 298 videos). 144 have a same-folder same-stem
+  still with the same ContentIdentifier in their group — that still is EXACT for 67 (B6 would delete the video with
+  it), a keeper/ref for 61, REVIEW for 16; 41 have no same-stem still in their folder; 10 have a still whose CID
+  differs/missing. 63 videos are byte-identical copies already EXACT (B3 territory). Today all 132 non-EXACT videos
+  in groups are "—" passengers that aggressive never deletes.
+- 2026-11-08 ~16:30: owner approved the PR-4b plan (B7 stays ON; B6 as scoped) and said: keep going on grouping
+  until it is reliable, general and product-grade; stack PRs; do not stop to ask. **New grouping defect found while
+  checking the B7 census: the EXACT pixel-identity gate is too coarse.** Full-resolution comparison of all 137 EXACT
+  "format duplicate" rows of the B7-on manifest (119 decodable + 18 DNG pairs): 108 are honest re-encodes or
+  metadata-only copies (max 4x4-block grey difference at 128 px <= 2.2, p99.9 pixel difference <= 4), **11 are
+  different pictures**: consecutive group shots where people moved, a second shutter press with the camera shifted,
+  two shots of a hazy temple, two shots of a notebook page, and two bank-app screenshots saved as JPG 80 minutes
+  apart with a different balance line. All 11 are aggressive-delete candidates today (B7 does not apply to JPG/HEIC).
+  Their statistics start at max-block 6.6 / p99.9 12 and run to 100 / 134. Contact sheets in the scratchpad
+  (look/pairs). The 32x32 RGB mean-difference gate (<= 6.0) passes them because the change is local or a small shift.
+  -> GROUPING 11 (next PR, stacked): a 128x128 grey signature per file (BOX of the oriented working image, 16 KB),
+  spilled to a scan-local store so RAM stays flat; EXACT for a pHash-0 pair with different bytes requires
+  max 4x4-block mean difference <= 4.0 AND p99.9 pixel difference <= 8.0 on that signature (plus today's dimension
+  and channel-shift checks); missing signature -> "pixel check unavailable" (REVIEW, as today). Version "11".
+  Also folds in the B7 default = ON statement (PRD §6 note). B6 follows as its own stacked PR.
+- 2026-11-08 ~17:40: two opus designs returned (scratchpad g11-design.md, b6-design.md; both land in the repo with
+  their PRs). Lead decisions on B6's open questions: EXACT byte-copy videos follow their photo while B3 is on; never
+  delete a capture's last non-deleted clip; follow only when EVERY qualifying still is deleted. Lead decisions on
+  G11: spill file in the system temp dir (not next to a manifest that may be on the NAS); census parity through the
+  real signature code is a merge gate; HASH_RECIPE_VERSION 5 -> 6 as the planner found. B6 implemented (worktree b6,
+  branch feat/auto-select-b6-live-video, 00e6c16 + a802d99; new core/services/live_photo.py; 154 layer-1 tests,
+  frontend tests + build green; blob scans clean). **Replay of plan_auto_select on the iteration-4 manifest:** B6 off
+  = today (452 deletes, 26 of them videos); B6 on adds 56 deletes, all videos (36 EXACT MP4 copies under deleted
+  photos, 20 Live MOV passengers), removes none, and 0 captures lose their last clip; identical at both thresholds.
+  Fresh opus review of B6 running. GROUPING 11 task A (store + hasher + gate + tests) implementing in worktree g11.
+- 2026-11-08 ~18:00: GROUPING 11 task A committed (6540467 gate + store + hasher + tests, abbf2ff design doc); 334
+  targeted tests green; Pillow 12.2 supports reduce() on mode F; blob scans clean. Task B (scan_runner wiring, pipeline
+  tests, docs, PRD B7 note) dispatched. **Pre-existing privacy item found by the implementer's grep (not touched):**
+  a test docstring in tests/test_dedup.py (~line 453, committed in b311fe3) quotes a real library folder path
+  ("Production case from …"). Add to the owner's scrub list with the 8 old STATE.md lines.
+- 2026-11-08 ~19:00: **merge-gate census through the real task-A code FAILED and found the real mechanism.** Real
+  recipe: 118 EXACT / 19 differ instead of 126 / 11. The 11 different pictures all fail the gate (correct), but 8
+  honest pairs fail too, every one cross-route: a JPEG decoded at reduced DCT resolution (draft to ~504 px) against a
+  fully decoded HEIC or PNG, or two differently encoded JPEGs. Under the real routes the classes overlap on every
+  mean-difference statistic (honest max 4x4 block up to 15.6 vs distinct min 6.2) and on per-block normalized
+  cross-correlation (the two subtle distinct pairs keep NCC >= 0.98). Blur, Lanczos, two-stage BOX: no separation.
+  Decoding the JPEG side fully restores the census exactly (honest max 2.19, tail 0; distinct min 6.62, tail 39).
+  Measured decode cost on real files (median, 40 JPEGs 12-24 MP, 30 HEICs): JPEG drafted RGB 14 ms, full RGB 33 ms,
+  full luma-only 19 ms; HEIC 193 ms either way (pillow_heif 1.3.0 has no draft). **Decision: grey128 comes from a
+  full-resolution LUMA decode** — JPEG via a second luma-only decode (`draft("L", im.size)`, +19 ms per JPEG), RAW via
+  its embedded preview JPEG bytes through the same path, other formats via convert("L") of the already-full working
+  image; EXIF orientation applied; BOX 128. The pHash recipe (drafted RGB) is untouched, so hash values and grouping
+  do not move; only the EXACT gate changes. Confirmed on all 137 pairs: honest max 2.56 (tail 0), distinct min 6.62
+  (tail 39); thresholds stay 4.0 / 16. The 18 ".dng" files are JPEG containers by content and take the JPEG route.
+  Task C (hasher luma signature + tests + design addendum) follows task B in worktree g11.
+- 2026-11-08 ~20:10: **B6 PR #1057 open, CI green (12/12)** after one iteration with two mechanical causes: the
+  rules register accepts pins only as path::Class::test_fn (the class-level R-SCAN-12 pin failed), and the new
+  translation keys left docs/reference/i18n-keys.md stale (regenerated; the other eight reference files differed only
+  by line endings and were not staged). B6 branch: 00e6c16 rule, a802d99 docs + pr4b-design.md, 6b2bfaa the three
+  review notes (B6 in the muted-label sentence; a test pinning the B8:spared -> B6:delete trace change; the surviving
+  clip asserted by name), 15e2188 news, 278ce38 CI fixes. Opus review APPROVE. Real headless rescan with aggressive
+  auto-select on the branch logged "Rules v2 … B6 on" and "B6 marked 56 delete", equal to the replay. GROUPING 11
+  task B landed (5f9ad3b wiring + pipeline tests, c56d23e docs; blob scans clean); task C (full-luma signature) in
+  progress. Both PRs wait for the owner's merge yes; #1057 is independent of GROUPING 11 (disjoint files except
+  scan.md and scan_runner.py at different places; the second to merge gets a `git merge origin/master`).
+- 2026-11-08 ~20:40: GROUPING 11 task C committed (2baf560: `_grey_from_jpeg_bytes`, `_grey_for_route`,
+  `_raw_preview_and_sizes` returns the grey signature as a fourth value, five route tests incl. the drafted-vs-full
+  proof; blob scan clean). **Merge gate passed through the real code: 137 census pairs -> 126 EXACT / 11 differ,
+  exactly the census.** Real rescan 5 on the branch (5.3 min, no store warning, no leftover temp file): grouping
+  identical to iteration 4 (413 groups, 0 pairs lost or gained, every EXACT row keeps its group); exactly the 11
+  different pictures moved from EXACT/high to REVIEW_DUPLICATE/high "same pHash, pixels differ"; format-duplicate
+  EXACT rows 137 -> 126; REVIEW/high 239 -> 250; nothing else moved. Fresh opus review of the five-commit branch
+  running; then push, PR (news `.bugfix`), CI.
+- 2026-11-08 ~21:00: opus review of GROUPING 11 = NEEDS-FIX. **HIGH (real regression):** the new luma decode opens a
+  fresh image, so on a JPEG with corrupt EXIF `exif_transpose` raises SyntaxError that no guard catches, the file
+  becomes a HashFailure and leaves the manifest (an existing scan_runner test fails on the branch; it passes on
+  master; the RGB path survives only because the date read pre-warms PIL's EXIF cache). Task C's acceptance set did
+  not include tests/test_scan_runner.py — lesson: any hasher change runs the scan_runner and pipeline tests too.
+  LOW: two stale version sentences in scan.md; a needless full-size `convert("L")` copy on the luma/RAW paths.
+  Fixes sent to the implementer; then re-review, parity rerun, rescan 6. The test set has no corrupt-EXIF file
+  (rescan 5 kept all 2,043 rows), so the regression was invisible to the real-data check alone.
+- 2026-11-08 ~21:30: fix commit d980576 (SyntaxError tolerated at the luma transpose and in the helper's outer
+  guard -> un-rotated signature or None, never a HashFailure; new corrupt-EXIF hasher test that failed before the
+  fix; version sentences "11"; no redundant L copy). 348 targeted tests green incl. the scan_runner set. Parity gate
+  through the final code: 126 / 11 again. Rescan 6 (5.2 min) equals rescan 5 row for row; no temp leftover. Blob
+  scan clean. Reviewer re-check and the full local suite running; then push, PR, CI.
+- 2026-11-08 ~22:00: re-check APPROVE (the reviewer ran the new corrupt-EXIF test against 2baf560: raises; against
+  d980576: 16,384 bytes). **GROUPING 11 PR #1058 open, CI green (11/11)** after one body edit (the two version
+  sentences sit in the "lone Live Photo" and "bursts" entries, which the Docs impact line had to name). Branch:
+  6540467 gate+store+hasher, abbf2ff design, 5f9ad3b wiring, c56d23e docs, 2baf560 full-luma route, d980576 review
+  fixes, adb76a8 news. Both #1057 (B6) and #1058 (GROUPING 11) await the owner's merge yes; whichever merges second
+  gets a `git merge origin/master` before its merge (scan.md and scan_runner.py are touched at different places).
+  **Candidate GROUPING 12:** with a reliable full-resolution gate, PNG pairs that are pixel-identical could group
+  as EXACT even while B7 is on (today ~24 true screenshot-copy groups stay apart; the receipt false positive that
+  Principle C guarded against was a 32x32 artefact). Near-dup PNG pairs would stay hints under B7. To be measured
+  on the B7-off manifest's PNG pairs through the new gate before deciding.
+- 2026-11-08 ~22:20: measured: the B7-off manifest's 157 format-duplicate pairs through the GROUPING 11 gate = 144
+  EXACT / 13 differ; the 13 are the 11 known different pictures plus exactly the 2 receipt PNG pairs (census max
+  48.6 and 32.4); all 36 other PNG pairs are pixel-identical. **GROUPING 12 dispatched** (worktree g12 stacked on the
+  GROUPING 11 branch): in `_format_verdict`, the "both screenshots" demotion is lifted only when `_pixels_identical`
+  is True (shot-time disagreement still wins; the near-dup PNG path is unchanged); version "12"; docs narrow
+  Principle C to non-identical pixels. Expected on the rescan: about 24 new PNG-only groups, the two receipt pairs
+  stay apart, the near-dup receipt merge stays a hint. Full local suite on the GROUPING 11 tip running.
+- 2026-11-08 ~23:00: GROUPING 12 committed (5747ac4 on fix/grouping-12-png-pixel-identity, stacked on the GROUPING
+  11 tip; `_format_verdict` order: shot time -> pixel gate -> PNG note -> EXACT; version "12"; six new tests; two
+  flipped tests whose fixtures were pixel-identical; docs incl. R-SCAN-10). 377 tests green; blob scan clean. Real
+  rescan 7 vs GROUPING 11: groups 413 -> 441 (+28), pairs +43 / 0 lost, EXACT rows 526 -> 562 (+36 = the
+  pixel-identical PNG copies), PNG-only groups 51 -> 79, no REVIEW row moved, low-only 0, stem-bridge 0, cross-day
+  3. The five bank-receipt screenshots sit in four byte-identical groups exactly as under GROUPING 11; the two
+  B7-off false merges do not reappear. Fresh review of 5747ac4 running; one authorized follow-up commit aligns the
+  B7 comment in auto_select_rules.py.
+- 2026-11-08 ~23:20: full local suite on the GROUPING 11 tip (ran while two rescans were in flight): coverage
+  93.61 %, only the two known exiftool-rotation timing flakes failed (same two as earlier today; CI pytest on #1058
+  green). GROUPING 12 review: code APPROVE; one MEDIUM doc gap (scan.md's aggressive-delete clause still said no
+  PNG pair is ever delete-eligible), two LOWs (a version sentence; no test for the unavailable-pixel-check branch)
+  and the B7 toggle label wording — all sent to the implementer (7e03cbe already aligned the rules comment).
+- 2026-11-08 ~23:45: GROUPING 12 fixes landed (3dec817: scan.md aggressive clause (b) names "PNG screenshots that are
+  not pixel-identical"; version sentence; unavailable-pixel-check test; B7 label "… unless they are pixel-identical"
+  in en/zh_TW; frontend tests 54/54 and build green), news a8c491c. **PR #1059 open, stacked on #1058 (gh stack
+  #1060), CI green (12/12)** after one Docs-impact body edit. State of the three PRs awaiting the owner's merge yes,
+  in order: #1057 (B6, independent), #1058 (GROUPING 11), #1059 (GROUPING 12, base = #1058's branch; after #1058
+  merges, check `gh pr view 1059 --json mergeable` and `git merge origin/master` if CONFLICTING — never rebase).
+  Housekeeping after merges: remove the `frontend/node_modules` junctions in worktrees b6 and g12 (rmdir the link
+  only), and the stale worktrees pr4a / agent-a1a13cf2207cfc02a / g10 / g10b / g11 / g12 / b6.
+  **Lead assessment of grouping after rounds 10-12 on the dev test set (2,043 files):** groups form only on byte
+  identity, full-resolution pixel identity, agreeing content signals within one shot moment, or a shared Apple
+  ContentIdentifier; names, low-confidence matches and undated rows never bridge; every EXACT row is a true copy by
+  the full-luma gate (126 + 36 verified pairs; 11 + 2 different pictures rejected); the only cross-day groups are
+  UTC-timed videos of one capture. Remaining known limits, by design: a shot subtler than the boat case (block
+  difference < 4 at 128 px) would still read EXACT; a lone Live Photo is not a group (owner decision); PNG near-dups
+  stay hints under B7; B7 off reopens class B. Next evidence should come from new odd combinations pulled into the
+  test set, not from more tuning on this one.
+- 2026-11-08 ~19:10: **#1057 merged** (squash d1dda09); local master fast-forwarded. #1058 then read CONFLICTING: #1057
+  and GROUPING 11 both edited the Rules entry in scan.md. Resolved in the g11 worktree with `git merge origin/master`
+  (d277a32: master six-rule text plus the two GROUPING 11 sentences), targeted tests green, pushed; CI re-running.
+- 2026-11-08 ~19:45: **#1058 merged** (squash 24c0ca1, via the merge-async REST API: a `gh stack` member refuses `gh pr merge`);
+  local master fast-forwarded. #1059 retargeted to master and read CONFLICTING (stacked-squash artefacts in 6 files plus
+  the B6/B7 overlap in rules, labels and scan.md); resolved in g12 with `git merge origin/master` (6c843b7), 3-way checked against the g11 tip as base; tests green; CI re-running.
+- 2026-11-08 ~20:00: **#1059 merged** (squash 0eee966, merge-async API); local master fast-forwarded; frontend/dist rebuild pending (see next entry).
+  Housekeeping done: worktrees g10 g10b g11 g12 pr4a b6 and 15 agent-* removed (branches kept; the dirty ones held only
+  CRLF noise in docs/reference), 3 empty agent-* dirs deleted, both node_modules junctions removed; agent-a77a63527484fef54 left (locked).
+- 2026-11-08 ~20:05: **incident** — removing the pr4a / agent-* worktrees with `git worktree remove` emptied the main
+  checkout's `frontend/node_modules` (a junction inside one of them pointed there; Git for Windows deletes through
+  junctions, reproduced in a scratch repo). No tracked file touched. frontend/dist is the 03:25 build (pre-#1057); rebuild needs `npm ci` (gated, owner asked). Owner yes ~20:20; `npm ci` (295 packages, lockfile) + `npm run build` done 20:23, bundle carries scan-rule-b6.
+- 2026-11-08 ~21:00: **blind test set drawn.** Owner asked for a double-blind check after rounds 10-12. Sampler
+  `select_blind_windows.py` (scratchpad) reads only shot times from the full-library manifest: 45 random 30-min windows
+  (all drives, cap 25) + 40 random undated rows with their same-stem siblings; seed 1794141460; dev-set paths excluded;
+  686 files / 2.98 GiB, copied to a new NAS root with copy_testset.py. Lead does not open any sampled image before the owner judges.
+  Copy done ~21:00: 686/686 ok (sha256-verified), three drive subfolders. Next: owner scans the blind root in the app (default rules);
+  lead runs `blind-sheets.py` (scratchpad; G list = every group, R list = ungrouped hint / same-minute pHash<=12 / same-basename / same-stem pairs) without viewing, owner reports exceptions by id.
+- 2026-11-08 ~21:45: owner scanned the blind root in the app (manifest saved over the gitignored test-set manifest name,
+  21:03; snapshot in scratchpad). 686 rows: 107 groups, EXACT 181, REVIEW_DUPLICATE 3, ungrouped low hints 28, UNDATED 29. G/R sheets generated unseen; awaiting owner judgments.
+- 2026-11-08 ~22:00: **blind test, lead predictions registered before any judgment** (text-only stats; no image opened).
+  Set: 107 groups (104 keeper+EXACT only, 3 with a REVIEW row, 31 span two or three sources, 0 burst stacks drawn), 381 ungrouped
+  (28 hinted, 29 undated). R list 164: R-hint 26 (21 at hamming 8-10), R-time 120 (30 at hamming<=4), R-stem 15, R-name 3.
+  P1 no group holds a stranger. P2 R-stem 15 = Takeout Live pairs (HEIC+MP4, same CID, same second) ungrouped by design. P3 R045 = a
+  PNG pair, same second/dims, identical pHash, quality 14 both: quality gate blocks the pixel check -> predicted real miss. P4 R-name 3 = different photos. P5 R-time<=4 = re-shots (2 s rule).
+
+## 2026-11-08 ~22:30: blind round 1, owner feedback and text-only census
+
+- Owner: ids unreadable on the sheets; every group shows one size/resolution/extension; no Live + plain mix drawn. Sheets regenerated with 34 px ids and file size (blind-sheets2.py; scratchpad look/blind2, ids identical to v1).
+- Census of the blind manifest (no image opened): 107 groups, 0 with more than one still resolution, 7 with more than one extension (3 HEIC+MP4, 3 MOV+MP4, 1 JPEG+PNG), 31 with more than one file size. All 164 R candidates share dims and extension and differ only in size. The round-1 sample holds no cross-resolution/format pair, grouped or not; it tests copy precision, not similar-grouping recall.
+- Full library (v6 manifest, text only): 138 same-moment still pairs (hamming <= 8) differing in dims or extension (dims 27, ext 111); 63 Live stills with a non-Live still within 2 s (54 hamming <= 4). None drawn in round 1.
+
+## 2026-11-08 ~23:05: blind round 2 drawn by shape, copied
+
+- select_blind_shapes.py (scratchpad; seed 1794141460) samples by metadata only (shot time, hamming, dims, extension, same-stem siblings); group_id/action never read. Shapes: S1 cross-shape 47, S2 Live+plain 44, S3 same pHash more than 2 s apart 49, S4 undated+dated 51, S5 PNG pairs 47, S6 bursts 19, S7 DNG+JPEG 7. 574 files, 1.61 GB, copied to the second blind root (copy_testset.py), 574/574 sha256 ok.
+- Owner scans it after GROUPING 13 merges (the S5 shape exercises that fix). Lead still has not opened any blind image.
+
+## 2026-11-08 ~23:25: P3 confirmed from code; GROUPING 13 identity rescue
+
+- _classify_phash drops entropy/dimension/quality-gated rows from the candidate list, so _classify_format_group and _pixels_identical never see them; only SHA could pair a byte-different copy. Confirmed by reading the code, not the images (blind protocol kept).
+- Full-library census: 564 quality-gated rows; 99 (pHash, dims) buckets with 238 rows; 166 pairs differ in SHA, 70 of them at the same shot second: all invisible to the grouper before this.
+- Fix: _rescue_identity (same pHash + same dims or 90-degree swap + one shot moment + mean-colour/dHash gates + _pixels_identical True -> EXACT; anything less writes nothing; undated left alone). GROUPING_STRATEGY_VERSION 13. Branch feat/grouping-13-identity-rescue (worktree g13), commits c8a42df, 5e71d26. Targeted tests green (test_dedup, exact_pixels, grey_gate, scan_pipeline, scan_runner); full suite running; PR pending. ruff: the project config autofixes on check and rewrote both files once; restored from origin/master and re-applied (use ruff check --no-fix).
+- ~23:30 lossy-only follow-up commit 7d5775a (a gated RAW+JPEG pair stays as it was; class-A trio fixture carries distinct grey128). Full suite in the worktree: coverage 93.73 % total, dedup.py 97 %; two exif-rotation timing tests failed once and passed on rerun (the known flake). PR #1061 opened 2026-11-09 ~00:00, news fragment 43e64d6, CI all green. Awaiting owner merge; owner scans blind round 2 after it merges.
+- 2026-11-09 ~00:15: #1061 merged (squash 3a1cb3b, gh pr merge --squash; owner yes). Local master fast-forwarded to 3a1cb3b; worktree g13 removed (no junctions inside; main frontend/node_modules intact, 295 entries) and its local branch deleted. Owner now scans blind round 2 with master.
+
+## 2026-11-09 ~01:30: blind round 2 scanned by the owner; lead judged first (owner withholding)
+
+- Owner scan: 514 rows, 127 groups, EXACT 72, REVIEW 84, hints 50, GROUPING 13 rescues 7. The scan sources covered D and J of the round-2 root but the H source still pointed at the ROUND-1 blind root, so 113 round-2 files (all H) were not scanned and 53 round-1 H rows are mixed in. 162 of 264 cases are complete (every still present); 102 incomplete await a rescan with the H source corrected.
+- Protocol change at owner request: the lead judged the complete cases from case sheets (blind2-cases2.py: one row per case, members with action/confidence/group letter) BEFORE hearing the owner; the owner judges the same sheets next.
+- Complete-case verdicts (lead): S1 cross-resolution/format 21: 20 grouped correctly, 1 miss (C016: same second, pHash 4, dHash 5, mean-colour distance 34.2 > 30 vetoed the pair with no hint). S5 PNG pairs 20/20 EXACT, all pixel-identical screenshots. S2 Live+plain 23/23 stills grouped (Live still copies via ContentIdentifier edge or EXACT); 2 Live videos (.mov, wrong file date) not attached to their still. S4 undated+dated 35/35 grouped across resolution (downsized undated copy + dated original); in 9 of them the classifier made the small undated copy the keeper and the full-size original the REVIEW_DUPLICATE (keeper direction worth a look). S3 same pHash > 2 s apart 42: 18 timezone-offset copies (2 h / 8 h) all grouped; 24 re-shots left as hints by the 2 s rule, of which C109 (identical screenshot two days apart) is the one a user may call a duplicate. S6 bursts 19: same-second stacks grouped; frames > 2 s apart hints; two 4-frame exposure brackets split into two groups by exposure (C249, C250). S7 DNG+JPEG 2/2 are different photos sharing a stem, correctly ungrouped.
+- GROUPING 13 in the wild: 7 rescues, all genuine copies (night skyline JPEG+JPG, eclipse frames), zero false ones seen.
+- Open findings for owner decision: (a) mean-colour gate vetoes a pHash+dHash-agreeing same-second pair without even a hint (C016); (b) keeper direction for undated small copy vs dated original; (c) 2 Live .mov not attached; (d) 2 s rule vs identical screenshots days apart (C109).
+
+## 2026-11-09 ~02:30: blind round 2 complete (H source corrected, rescanned); lead verdicts on all 264 cases
+
+- Rescan manifest snapshot: manifest-blind2-owner.sqlite (scratchpad); v1 kept as -v1. All 264 cases complete. Sheets for the 102 newly complete cases: scratchpad look/blind2-cases-v2 (ids unchanged).
+- Verdicts (lead, before hearing the owner): S1 cross-shape 47: 46 correct (45 one group incl. HEIC+JPEG same-second exports, crops, 90-degree swap; 1 case carries an unrelated same-stem PNG that is correctly left out), 1 miss = C016 (mean-colour veto). S2 Live+plain 44: 44 stills correct; the 5 unattached .mov (C067/C079/C081/C082/C084) have no ContentIdentifier and shot dates months away from the stills: filename reuse, correctly refused. Finding (c) withdrawn. S3 49: 23 timezone-offset copies (2 h / 8 h) all grouped; 22 re-shots hints by design (C109 the arguable one); C115 two night shots 10 s apart, quality-gated, correctly apart. S4 51/51 grouped (16 new ones are same-dims undated copies, EXACT); keeper direction issue stands for 9 of the 35 cross-resolution ones. S5 47/47 EXACT (7 via GROUPING 13, all genuine). S6 19 as before (two exposure brackets split by brightness). S7 7: 2 stem collisions correct; **5 iPhone ProRAW DNG + its JPEG, same second, same stem, same dir, NOT grouped and no hint** (pHash hamming 18-22: the RAW preview and the processed night-sky JPEG hash far apart, so no content tier passes and GROUPING 10 removed the stem-only edge).
+- Totals: 264 cases, 6 misses (C016 + 5 ProRAW pairs), 0 false groups seen, 7 GROUPING 13 rescues all genuine.
+- Open findings for owner decision: (a) mean-colour gate vetoes a pHash+dHash+same-second pair with no hint (C016); (b) keeper direction small undated copy vs dated original (9 cases); (d) 2 s rule vs identical screenshots days apart (C109); (e) RAW+JPEG same capture (same stem, dir, second) with far pHash: 5/5 missed, the largest recall class of round 2.
+
+## 2026-11-09 ~03:00: owner verdict on round 2; lead proposals withdrawn; metadata audit of the current rules
+
+- Owner: satisfied with every group seen (no stranger in any group). A ProRAW DNG and its heavily processed JPEG count as two pictures by the owner standard (content only), so the 5 S7 cases are not misses. Standing direction restated: a rule is about CONTENT; same-second / same-stem / same-dir conditions are monkey patches and are refused.
+- Lead withdraws all four proposals of ~02:30 (mean-colour-with-same-second, keeper direction by date, stem+second RAW rule, 2 s rule debate).
+- Metadata audit of GROUPING 13 as shipped (what is NOT content): (1) shot-time vote, BURST_MAX_GAP_S = 2 s plus whole half-hour offsets up to 14 h (_shot_time_vote / _time_vote) - a VETO: a pHash-0 pair whose times disagree is a hint even when pixels are identical (_format_verdict checks the time note before the pixel check; only SHA-identical bypasses it); also splits exact buckets into shot moments (_shot_moments), gates near-dup edges (_demotion_note), refuses undated bridging (_would_link_two_moments), and bounds the GROUPING 13 rescue bucket; (2) burst stack relabel uses the same 2 s (_mark_burst_stacks); (3) Live pair edge = same stem + ContentIdentifier (_collect_pair_edges / _pair_pass): stem is metadata, the identifier is the camera declaration; (4) dimension gate >= 128 px and the keeper rule (format, source priority, path) are not grouping evidence but affect eligibility/keeper. Content-only elements: SHA, pHash, dHash, mean colour, entropy/quality gates, rgb32 + grey128 pixel identity. Origin of (1): dedup-core research 2026-11-05 class B (same pHash, different captures grouped falsely) - approved then as GROUPING 10. Owner to decide whether the time veto stays.
+
+## 2026-11-09 ~02:10: GROUPING 14 — shot time removed from grouping (owner direction)
+
+- Owner: a re-shot seconds later is two pictures, but CONTENT must say so, not time. Remove the 2 s veto; list every other rule that is not about content.
+- Branch feat/grouping-14-content-only, worktree g14, commits 7eba428 (engine+tests+docs) and e4ce37a (R-SCAN-10 heading). Gone: _shot_time_vote/_time_vote (2 s + half-hour offsets), _gap_text, _shot_moments, _would_link_two_moments, _reset_refused_row, _shot_times, the undated-bridge hint, the GROUPING 13 shot-moment condition. New: _pixel_clusters splits an exact bucket by pixel identity (own keeper per picture; later cluster keepers are REVIEW of the first keeper when dHash agrees, hints otherwise); _burst_runs makes the 2 s burst relabel run per consecutive-frame run inside a content-formed group. GROUPING_STRATEGY_VERSION 14.
+- Tests: test_dedup_time_gate.py rewritten; 25 expectations moved from "time disagrees -> hint" to "content agrees -> one group" (grouping10, hint_edges, burst_stack, rule_toggles, TestIdentityRescue). Lesson: the fixture default (one constant pixel signature for every row) means "all copies"; a grey128 that differs by 1-2 levels still passes the grey gate (GREY_BLOCK_MAX 4, GREY_TAIL_MAX 8), so a "different picture" fixture needs levels tens apart. All 152 dedup tests green; full suite running.
+- Remaining non-content rules (for the owner): (1) burst-stack relabel reads shot times (2 s runs) - relabel only, never groups; (2) Live pair edge = ContentIdentifier (camera declaration) + same stem; (3) dimension gate >= 128 px smaller side (image property; keeps icons/thumbnails out of pHash grouping); (4) B7 PNG-pair demotion is keyed on FILE FORMAT, not pixels; (5) RAW complementary policy (never a dedup decision) is format-based; (6) keeper order = format priority, source priority, path; (7) UNDATED action label = EXIF date absent (action, not grouping).
+- 2026-11-09 ~02:35: #1062 merged (squash 050009b, owner yes in advance). CI 11/11 green after the R-SCAN-10 pin fix (8f8f97f). Local full suite: coverage 93.61 %, dedup.py 97 %; the register test failed only because that run started before the pin fix, plus the two known exif-rotation timing flakes. Local master fast-forwarded; worktree g14 removed. Next: lead rescans blind round 2 headlessly on master to see what the 24 S3 re-shot cases became.
+
+## 2026-11-09 ~10:40: blind round 2 rescanned headlessly on master (GROUPING 14) and compared with the owner GROUPING 13 scan
+
+- Headless pipeline (headless-rescan.py, no auto-select) on the second blind root, 1.0 min: 574 rows, 213 groups (was 203), EXACT 171 (was 140 + 141 KEEP stamps), REVIEW 112 (was 88), hints 8 (was 54). Row-level: 30 "- -> EXACT" transitions are the owner KEEP stamps (auto-select relabels the classifier EXACT row it keeps), not engine changes.
+- S3 re-shots (24 cases): 18 became one REVIEW group (C093 C094 C100 C102 C103 C111 C112 C114 C118 C123 C124 C128 C131 C132 C136 C139 C140 + C104 partly), 1 became ungrouped with no hint (C113: dHash disagrees, nothing else speaks), 1 became EXACT (C120). 23 timezone-offset copies unchanged. S6 C240 burst-of-3 now one group. Everything else identical (241/264 cases unchanged).
+- C120 is a precision defect exposed by removing the time veto: two interior shots 3 s apart (handheld, static scene), grey128 gate says identical (max 4x4 block mean 2.81 <= 4, 1 pixel > 8 <= 16) but the full-resolution grey diff is mean 3.9 with 12.6 % of pixels > 8 and 1 % > 32 (right third of the frame moved): a re-shot, not a copy. The 128x128 identity test cannot separate a steady re-shot from a transcode; GROUPING 10-13 hid this behind the shot-time veto. Other re-shots (C093 block mean 13.8, C094 40.6, C114 79, C132 74) are far from the gate. 1 of 24 in this sample. Content-based remedy for the owner to decide: confirm EXACT with a finer identity test when the grey gate passes but bytes differ (e.g. full-resolution mean abs diff; a transcode sits at noise < 2 levels, a re-shot at sensor noise 3-4+), paid only on those rare pairs.
+- Regression of GROUPING 14 found: C052/C053 (eclipse-frame copies, quality-gated, one degenerate pHash for four frames) lost their EXACT because the rescue bucket was no longer split and every copy was judged against one keeper. Fixed as GROUPING 15 (_rescue_identity uses _pixel_clusters), branch fix/grouping-15-rescue-clusters, worktree g15, commit 748a118; dedup tests 175 green; headless rescan with the fix running for confirmation.
+- ~10:55 GROUPING 15 verified on the blind-2 root (headless rescan from worktree g15): only C052 and C053 changed, both back to one group with the copy EXACT via the rescue; every other case identical to the GROUPING 14 scan (574 rows, 215 groups, EXACT 173, REVIEW 112, hints 8). PR #1063 open, news fragment a838de7, CI watching; merge waits for owner yes.
+- 2026-11-09 ~11:05: #1063 merged (squash f0f34f0, owner yes). CI 11/11 green. Local master fast-forwarded; worktree g15 removed, branch deleted. Master now = GROUPING 15. Open for owner decision: the C120 EXACT gate (steady re-shot passes the 128x128 grey identity test).
+
+## 2026-11-09 ~11:30: owner direction after GROUPING 15
+
+- Blind round 1 group sheets (GROUPING 13 engine) are dropped as obsolete; only the current engine is judged from now on.
+- Owner wants to see more C120-shaped pairs with their own eyes before ruling on the EXACT gate. Lead runs a census over the full-library manifest: same pHash + dims, different SHA, 3 s < gap <= 30 min and not a half-hour offset (search heuristic only), recomputes the engine EXACT gate (rgb32 shift + grey128 block/tail) on each pair and renders the passing ones with full-resolution diff stats (c120-census.py; sheets in scratchpad look/c120-census).
+- ~11:50 C120 census over the full library (c120-census.py, gap > 2 s): 266 re-shot-shaped pairs (same pHash + dims, different SHA, 3 s - 30 min apart, not a half-hour offset); 8 pass the EXACT gate: 4 are C120 itself (two files x two copies, re-shot 3 s apart, full-res grey diff mean 3.9, 12.6 % > 8), 2 are a screenshot re-saved 23 s later (mean 0.02, a true copy), 2 are a scanned print kept in colour and as a black-and-white edit 5-10 min apart (grey mean 0.1-0.2 but visibly different pictures: the rgb32 channel-shift test lets a desaturation of a low-saturation scene through). So two gate-looseness classes exist, both rare: a steady re-shot (1 picture in 39,888) and a colour-vs-mono edit (1). Sheets: scratchpad look/c120-census-3s/X-page-01..02.png; paths in c120-census.local.txt there. Remaining blind-2 hints (8) are all the B7 both-screenshots rule (format-based).
+- ~12:10 Owner ruling on the EXACT gate: X001-X008 as EXACT is acceptable and close to the intended effect (a steady re-shot 3 s apart and a colour-vs-mono edit of one scan both count as the same picture for dedup purposes). Finding (a) of ~02:30 and the "finer identity confirmation" direction are CLOSED, no work. The grey128 block/tail + rgb32 shift gate stays as the EXACT definition. Open items for owner decision stay: mean-colour hard veto without hint (C016), B7 PNG rule being format-based, keeper direction (small undated copy over dated original), exposure brackets split by mean colour, 128 px dimension gate, Live video by identifier only.
+- ~12:40 Owner: apply the rules already given to the six open items; leave only true product decisions. Reviewed against the recorded rulings (content only, 11-09; a colour/tone difference makes two pictures, 11-09 ~02:30; lone Live pair is one photo, 11-08; pairing evidence is the ContentIdentifier, 11-07; B7 default ON, 11-08 ~16:30; approved scorer weights put resolution first at 0.25). (1) C016 is a colour-graded export of one frame (pHash 4, rgb32 channel shift 30 against a gate of 4): two pictures under the tone ruling; the mean-colour veto stands and no hint is owed (a hint is the soft binding the owner declined). CLOSED. (2) Exposure brackets C249/C250 split by brightness: same ruling, the split stands. CLOSED. (3) Keeper direction: in blind 2 under GROUPING 15, 17 of the 38 mixed-resolution groups have the smaller file as structural keeper (9 UNDATED small copy + dated original, 8 same-source pairs); every one is same-source, so the path tiebreak of _keeper_key decided, not source priority. The scorer's top row is the biggest file in 38 of 38, so aggressive never deletes the original (the small keeper carries no duplicate action, the big REVIEW row is the protected top scorer), but such a group yields zero deletes and shows the original as the duplicate. Lead reading: pixel count before path in _keeper_key is what the content principle and the approved scorer already say; a GROUPING 16 engine item, not a product decision. (4) 128 px dimension gate: 28 of 34,702 stills in the full library, 4 of them share a pHash with a full-size row; a known recall gap of 4 rows, no decision. (5) Live video by identifier: the identifier is the evidence the owner named; the same-stem AND condition can only lose the video of a renamed still; the count needs an exiftool census; no decision. (6) B7: the 4 remaining blind-2 hint pairs rendered side by side (sheet in the scratchpad): C108, C134, C137 are different screenshots of one app (chat scrolled, prices moved, slide changed) that pHash+dHash would group as REVIEW with B7 off; C109 is one page re-saved three days apart that B7 keeps as a hint. B7 is the last format-keyed rule; its content-based replacement would be a templated-UI detector on pixels, a design change. THE ONE PRODUCT DECISION LEFT: keep B7 as the PNG proxy for "templated image, pHash not enough" (lead recommends, default ON as ruled) or commission the content-based detector.
