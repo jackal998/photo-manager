@@ -125,11 +125,11 @@ const DHASH_TOOLTIP_EN =
   "auto-select. Lower = stricter confirmation.";
 
 const COLOR_TOOLTIP_EN =
-  "L2 distance between the average RGB color of two images. After the pHash " +
-  "check, images whose mean colors differ by more than this value are excluded " +
-  "from grouping — catching pHash false positives where similar DCT structure " +
-  "but different colors were matched. 0 = disabled; higher = more permissive " +
-  "color gate.";
+  "L2 distance between the average RGB color of two images. Read only when " +
+  "dHash cannot vote on a pHash match: then images whose mean colors differ by " +
+  "more than this value are excluded from grouping. When dHash agrees, colour " +
+  "never splits a pair (a colour grade or an exposure step is the same " +
+  "picture). 0 = disabled; higher = more permissive color gate.";
 
 /**
  * Parse a threshold `<input type="number">`'s raw string value to an int

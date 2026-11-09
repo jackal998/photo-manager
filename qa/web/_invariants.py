@@ -519,12 +519,14 @@ def reset_scan_persistence(base_url: str) -> None:
             "sources.output": "",
             "ui.prune_singletons": "never",
             # PR-4a — one settings.json is shared by the whole batch, so a
-            # toggle left off by one scenario would leak into the next.
+            # toggle left off by one scenario would leak into the next. The
+            # full product default (GROUPING 16: B7 off, B6 on).
             "scan.auto_select.rules": {
                 "B3": True,
                 "B4": True,
                 "B5": True,
-                "B7": True,
+                "B6": True,
+                "B7": False,
                 "B8": True,
             },
         },

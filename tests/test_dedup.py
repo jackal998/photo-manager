@@ -287,6 +287,51 @@ class TestNearDuplicate:
         rows = _rows(classify([a, b], threshold=10))
         assert rows["/b.jpg"].action != "REVIEW_DUPLICATE"
 
+    def test_colour_graded_export_with_agreeing_dhash_is_grouped(self):
+        """GROUPING 16 (blind round 2, C016): pHash 4 and an agreeing dHash on
+        a colour-graded export whose mean colour sits 34 from the original.
+        Structure outranks colour: the pair is one picture, so it groups."""
+        import imagehash
+        base = imagehash.hex_to_hash("a" * 16)
+        near = imagehash.hex_to_hash("5" + "a" * 15)
+        a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color="50,70,156",
+                source_label="takeout", exif_date=_dt(), dhash="0" * 16)
+        b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color="48,58,124",
+                source_label="takeout", exif_date=_dt(), dhash="0" * 16)
+        rows = _rows(classify([a, b], threshold=10))
+        assert rows["/b.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/a.jpg"].group_id is not None
+        assert rows["/a.jpg"].group_id == rows["/b.jpg"].group_id
+
+    def test_mean_colour_still_vetoes_a_phash_only_match(self):
+        """GROUPING 16 keeps the #462 gate for the fallback where dHash cannot
+        vote: a pHash-only match with far-apart colours is not even a hint."""
+        import imagehash
+        base = imagehash.hex_to_hash("a" * 16)
+        near = imagehash.hex_to_hash("5" + "a" * 15)
+        a = _hr("/a.jpg", sha256="s1", phash=str(base), mean_color="10,20,30",
+                source_label="takeout", exif_date=_dt(), dhash=None)
+        b = _hr("/b.jpg", sha256="s2", phash=str(near), mean_color="200,180,160",
+                source_label="takeout", exif_date=_dt(), dhash=None)
+        rows = _rows(classify([a, b], threshold=10))
+        assert rows["/b.jpg"].action == ""
+        assert rows["/b.jpg"].group_id is None
+        assert rows["/b.jpg"].match_confidence is None
+
+    def test_format_pair_colour_mismatch_with_agreeing_dhash_is_review(self):
+        """GROUPING 16 on the exact bucket: pHash 0, dHash agrees, mean colours
+        far apart, pixels not identical (a graded export). The colour gate no
+        longer drops the pair; it is a REVIEW row of the keeper, one group."""
+        heic = _hr("/a.heic", sha256="h1", phash="a" * 16, file_type="heic",
+                   mean_color="50,70,156", source_label="jdrive", exif_date=_dt(),
+                   dhash="0" * 16)
+        jpeg = _hr("/a.jpg", sha256="h2", phash="a" * 16, file_type="jpeg",
+                   mean_color="48,58,124", source_label="jdrive", exif_date=_dt(),
+                   dhash="0" * 16, grey128=GreyBytes(bytes([120]) * 16384))
+        rows = _rows(classify([heic, jpeg]))
+        assert rows["/a.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/a.jpg"].group_id == rows["/a.heic"].group_id is not None
+
     def test_mean_color_match_confirms_near_duplicate(self):
         """pHash near-duplicate with similar mean_color IS flagged."""
         import imagehash

@@ -651,7 +651,7 @@ class TestRuleTogglesResolution:
         )
         resolved = req.resolved_with(self._settings({"B8": False}))
         assert resolved.auto_select_rules == {
-            "B3": False, "B4": True, "B5": True, "B6": True, "B7": True, "B8": True,
+            "B3": False, "B4": True, "B5": True, "B6": True, "B7": False, "B8": True,
         }
 
     def test_unknown_rule_id_is_422(self, client):

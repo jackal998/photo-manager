@@ -284,6 +284,9 @@ def _screenshot_pair(a: HashResult, b: HashResult) -> bool:
     PNG is the screenshot / UI-render class in a photo library. Two screenshots
     that hash alike (same app chrome, same status bar) are not one capture, so
     the pair is capped at the review tier and never earns ``high`` confidence.
+    The rule (B7) is OFF by default since GROUPING 16: the owner ruled on blind
+    round 2 that matching screenshots of one app belong in one group; the
+    toggle stays for libraries that want the caution.
     """
     return a.record.file_type == "png" and b.record.file_type == "png"
 
@@ -326,7 +329,8 @@ def classify(
         records: All hashed file records to classify.
         threshold: Maximum Hamming distance to flag as REVIEW_DUPLICATE.
         mean_color_threshold: L2 distance gate for mean-color false-positive rejection.
-            0 disables the gate; higher values are more permissive.
+            0 disables the gate; higher values are more permissive. GROUPING 16:
+            read only when dHash cannot vote; an agreeing dHash outranks colour.
         source_priority: Mapping of source label → priority integer (lower wins).
             When ``None``, priority is inferred from the order labels first appear
             in ``records`` (first seen = priority 0).
@@ -990,11 +994,25 @@ def _gates_pass(
     mean_color_threshold: int,
     dhash_threshold: int,
 ) -> bool:
-    """#462 mean-colour and #524 dHash gates for one exact-bucket edge."""
-    if mean_color_threshold > 0 and a.mean_color and b.mean_color:
-        if _mean_color_distance(a.mean_color, b.mean_color) > mean_color_threshold:
-            return False
-    return _dhash_vote(a, b, dhash_threshold) != "disagree"
+    """#524 dHash gate first; the #462 mean-colour gate only when dHash cannot vote.
+
+    GROUPING 16: structure over colour. When pHash and dHash both agree, the
+    pair is one picture whatever its colours: a colour grade, an exposure step
+    or a mono edit (owner decision 2026-11-09, blind round 2 case C016). Mean
+    colour decides only the pHash-only fallback, where no second structural
+    signal exists."""
+    vote = _dhash_vote(a, b, dhash_threshold)
+    if vote == "disagree":
+        return False
+    return vote == "agree" or _mean_color_passes(a, b, mean_color_threshold)
+
+
+def _mean_color_passes(a: HashResult, b: HashResult, threshold: int) -> bool:
+    """#462 — False only when both mean colours are known and further apart
+    than ``threshold``; 0 disables the gate."""
+    if threshold <= 0 or not a.mean_color or not b.mean_color:
+        return True
+    return _mean_color_distance(a.mean_color, b.mean_color) <= threshold
 
 
 # ---------------------------------------------------------------------------
@@ -1069,7 +1087,12 @@ def _gates_pass(
 # like the exact bucket. GROUPING 14 had dropped the shot-moment split without a
 # replacement, so a bucket of several flat pictures judged every copy against one
 # keeper and lost the others' copies (blind round 2, two eclipse frames).
-GROUPING_STRATEGY_VERSION = "15"
+# "16": structure over colour (owner decision 2026-11-09, blind round 2). The #462
+# mean-colour gate is read only when dHash cannot vote; an agreeing dHash makes a
+# colour-graded export, an exposure step or a mono edit the same picture
+# (``_gates_pass``, ``_classify_near_duplicates``). The screenshot rule B7 defaults
+# to off (``DEFAULT_RULES``): matching PNG screenshots group like photos.
+GROUPING_STRATEGY_VERSION = "16"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -1203,7 +1226,8 @@ def _classify_near_duplicates(
     and return their ``(edges, hints)``.
 
     #538 — edge collection is DECOUPLED from classification. Every pair that
-    passes the distance + mean-color (#462) + dHash (#524) gates and is
+    passes the distance + dHash (#524) gates (and the mean-colour gate, #462,
+    when dHash cannot vote — GROUPING 16) and is
     ``high`` yields a union-find edge, even when one endpoint is already
     classified via another bridge. Previously the ``if hr_b … in rows: continue``
     guard dropped such an edge, so a genuine near-dup whose only bridge was
@@ -1244,18 +1268,19 @@ def _classify_near_duplicates(
             distance = hash_a - hash_b
             if not (0 < distance <= threshold):
                 continue
-            # Mean-color gate: reject if average colors clearly differ (a pHash
-            # false positive — similar DCT structure, different colours).
-            # Skipped when either file lacks mean_color (RAW, hash failure).
-            if mean_color_threshold > 0 and hr_a.mean_color and hr_b.mean_color:
-                if _mean_color_distance(hr_a.mean_color, hr_b.mean_color) > mean_color_threshold:
-                    continue
             # #524 — dHash grouping gate: pHash is only a candidate; the
             # independent dHash must also agree (or be unavailable). A
             # "disagree" verdict means the two scenes only collided on the
             # coarse pHash → not a real near-dup → no edge, no classification.
             vote = _dhash_vote(hr_a, hr_b, dhash_threshold)
             if vote == "disagree":
+                continue
+            # #462 mean-colour gate, GROUPING 16: read only for the pHash-only
+            # fallback (dHash unavailable). Two agreeing structures are one
+            # picture whatever their colours (a grade, an exposure step).
+            if vote != "agree" and not _mean_color_passes(
+                hr_a, hr_b, mean_color_threshold
+            ):
                 continue
             # dedup-core research 2026-11-05 class B — a PNG-pair demotion caps
             # confidence at "low" whatever the dHash said (GROUPING 14: shot
