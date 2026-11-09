@@ -69,18 +69,19 @@ class TestScreenshotRule:
         rows = _rows(classify(records, source_priority=PRIORITY, screenshot_demotion=False))
         assert _group_sizes(rows) == [4]
 
-    def test_shot_time_demotion_survives_screenshot_off(self):
+    def test_screenshot_off_near_pngs_group_whatever_the_shot_times(self):
         later = T1 + timedelta(days=2)
         records = [
             _png("/s/a.png", "sha_a", P0, T1),
             _png("/s/b.png", "sha_b", P1, later),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY, screenshot_demotion=False))
-        # GROUPING 10: the shot-time disagreement is a hint, so no REVIEW row.
-        assert not [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
-        for row in rows.values():
-            assert row.match_confidence == "low"
-            assert "shot 48.0 h apart" in row.reason, row.reason
+        # GROUPING 14: shot time is not read and B7 is off, so the near-dup pair
+        # is judged like a photo: one group, a high REVIEW row.
+        assert _group_sizes(rows) == [2]
+        assert rows["/s/b.png"].action == "REVIEW_DUPLICATE"
+        assert rows["/s/b.png"].match_confidence == "high"
+        assert not [r for r in rows.values() if "shot" in r.reason]
 
 
 class TestDefaultsAreGrouping10:

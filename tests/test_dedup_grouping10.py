@@ -72,10 +72,12 @@ def _group_sizes(rows: dict) -> list[int]:
 
 
 def _low_only_pair() -> list[HashResult]:
-    """Two lone JPEGs, pHash 4 bits apart, dHash agreeing, shot 36 h apart."""
+    """Two lone JPEGs, pHash 4 bits apart, no dHash on either side: pHash-only
+    evidence, which is low (GROUPING 14: shot time no longer makes a match low,
+    so the fixture's low cause is the missing second signal)."""
     return [
-        _hr("/lo/one.jpg", "lo1", PA, PA, T0),
-        _hr("/lo/two.jpg", "lo2", PNEAR, PA, T_PLUS_36H),
+        _hr("/lo/one.jpg", "lo1", PA, None, T0),
+        _hr("/lo/two.jpg", "lo2", PNEAR, None, T_PLUS_36H),
     ]
 
 
@@ -127,34 +129,40 @@ class TestLowOnlyEvidenceNeverGroups:
             assert row.match_confidence == "low"
             assert HINT_ONLY_PREFIX in row.reason, row.reason
             assert partner in row.reason, row.reason
-            assert "h apart" in row.reason, row.reason
+            assert "dHash unavailable" in row.reason, row.reason
 
-    def test_lone_file_next_to_byte_copy_pair_stays_ungrouped(self):
+    def test_lone_near_dup_joins_the_byte_copy_pair_whatever_its_shot_time(self):
+        """GROUPING 14: pHash near, dHash agreeing is content evidence; the 36 h
+        gap is not read. The lone file is a REVIEW member of the pair's group."""
         pair = [
             _hr("/a/p.jpg", "sp", PA, PA, T0, "src_a"),
             _hr("/b/p_copy.jpg", "sp", PA, PA, T0, "src_b"),
         ]
         lone = _hr("/c/lone.jpg", "sl", PNEAR, PA, T_PLUS_36H, "src_a")
         rows = _rows(classify(pair + [lone], source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2]
-        assert rows["/c/lone.jpg"].group_id is None
-        assert rows["/c/lone.jpg"].match_confidence == "low"
-        assert rows["/a/p.jpg"].group_id == rows["/b/p_copy.jpg"].group_id
+        assert _group_sizes(rows) == [3]
+        assert rows["/c/lone.jpg"].group_id == rows["/a/p.jpg"].group_id
+        assert rows["/c/lone.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/c/lone.jpg"].match_confidence == "high"
 
 
 class TestTorii:
-    def test_three_moments_stay_three_groups_with_no_review_row(self):
+    def test_three_captures_of_one_scene_are_one_group(self):
+        """GROUPING 14: the three torii captures hash within 2-4 bits with the
+        dHash agreeing, so content links them into one group; the byte copies
+        stay EXACT and the other captures are REVIEW rows (pixels differ or
+        unverified), never silently EXACT."""
         rows = _rows(classify(_torii(), source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2, 2, 2]
-        assert not [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
+        assert _group_sizes(rows) == [6]
+        assert [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
+        assert sum(1 for r in rows.values() if r.action == "EXACT") == 3
 
-    def test_keepers_name_their_hint_and_keep_their_confidence(self):
+    def test_no_hint_text_when_content_links_the_captures(self):
         rows = _rows(classify(_torii(), source_priority=PRIORITY))
-        keepers = [r for r in rows.values() if r.action != "EXACT"]
-        assert len(keepers) == 3
-        for row in keepers:
-            assert "hint: low-confidence match with" in row.reason, row.reason
-            assert row.match_confidence != "low", row.reason
+        assert not [r for r in rows.values() if "hint:" in r.reason]
+        for row in rows.values():
+            assert row.group_id is not None
+            assert row.match_confidence in ("high", None), row.reason
 
 
 class TestPortraitAndScreenshots:
@@ -263,26 +271,30 @@ class TestTwoShotMomentsInOneBucket:
 
     T_MOMENT_B = T0 + timedelta(hours=34)
 
-    def test_each_moment_keeps_its_own_exact_pair_with_a_cross_moment_hint(self):
+    def test_two_pictures_that_hash_alike_keep_their_own_exact_copy(self):
+        """GROUPING 14: the bucket is split by pixel identity, not shot time.
+        Picture B (its own grey signature) is a second cluster: b.jpg is EXACT
+        of b.heic, and b.heic is a REVIEW row of a.heic (same pHash, pixels
+        differ). One group of four; the 34 h gap plays no part."""
+        # dHash agrees everywhere: the second signal that makes b.heic a REVIEW
+        # row of a.heic rather than a hint (pixels differ, so never EXACT).
+        other = GreyBytes(bytes([9]) * 16384)
         records = [
-            _hr("/m/a.heic", "ah", PA, None, T0, ftype="heic"),
-            _hr("/m/a.jpg", "aj", PA, None, T0, ftype="jpeg"),
-            _hr("/m/b.heic", "bh", PA, None, self.T_MOMENT_B, ftype="heic"),
-            _hr("/m/b.jpg", "bj", PA, None, self.T_MOMENT_B, ftype="jpeg"),
+            _hr("/m/a.heic", "ah", PA, PA, T0, ftype="heic"),
+            _hr("/m/a.jpg", "aj", PA, PA, T0, ftype="jpeg"),
+            _hr("/m/b.heic", "bh", PA, PA, self.T_MOMENT_B, ftype="heic", grey128=other),
+            _hr("/m/b.jpg", "bj", PA, PA, self.T_MOMENT_B, ftype="jpeg", grey128=other),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2, 2]
-        for row in rows.values():
-            if row.group_id is not None:
-                assert row.match_confidence != "low", row.source_path
-        for group_id in {r.group_id for r in rows.values()}:
-            members = [r for r in rows.values() if r.group_id == group_id]
-            keepers = [r for r in members if r.action != "EXACT"]
-            copies = [r for r in members if r.action == "EXACT"]
-            assert len(keepers) == 1 and len(copies) == 1, group_id
-            assert copies[0].match_confidence == "high"
-        for keeper in (r for r in rows.values() if r.action != "EXACT"):
-            assert "shot 34.0 h apart" in keeper.reason, keeper.reason
+        assert _group_sizes(rows) == [4]
+        assert rows["/m/a.jpg"].action == "EXACT"
+        assert rows["/m/a.jpg"].duplicate_of.endswith("a.heic")
+        assert rows["/m/b.jpg"].action == "EXACT"
+        assert rows["/m/b.jpg"].duplicate_of.endswith("b.heic")
+        assert rows["/m/b.heic"].action == "REVIEW_DUPLICATE"
+        assert rows["/m/b.heic"].match_confidence == "high"
+        assert rows["/m/b.heic"].duplicate_of.endswith("a.heic")
+        assert not [r for r in rows.values() if "apart" in r.reason]
 
 
 class TestHintTextAndReclaim:
@@ -290,12 +302,16 @@ class TestHintTextAndReclaim:
         """LOW-4: a lone file hinted by three partners names the first by sorted
         path and counts the other two."""
         lone = _hr("/x/x.jpg", "xx", PA, PA, T0)
-        # Offsets are not whole half-hours: a 12 h gap would read as a timezone
-        # shift and merge the partners into one moment.
+        # GROUPING 14: the partners carry no dHash, so each match is pHash-only
+        # and low; their shot times play no part. Each is its own picture (own
+        # grey signature), so the three do not collapse into one copy group.
         partners = [
-            _hr("/p/p1.jpg", "p1", PNEAR, PA, T0 + timedelta(hours=36)),
-            _hr("/p/p2.jpg", "p2", PNEAR, PA, T0 + timedelta(hours=36, minutes=7)),
-            _hr("/p/p3.jpg", "p3", PNEAR, PA, T0 + timedelta(hours=36, minutes=13)),
+            _hr("/p/p1.jpg", "p1", PNEAR, None, T0 + timedelta(hours=36),
+                grey128=GreyBytes(bytes([60]) * 16384)),
+            _hr("/p/p2.jpg", "p2", PNEAR, None, T0 + timedelta(hours=36, minutes=7),
+                grey128=GreyBytes(bytes([120]) * 16384)),
+            _hr("/p/p3.jpg", "p3", PNEAR, None, T0 + timedelta(hours=36, minutes=13),
+                grey128=GreyBytes(bytes([240]) * 16384)),
         ]
         rows = _rows(classify([lone] + partners, source_priority=PRIORITY))
         reason = rows["/x/x.jpg"].group_id, rows["/x/x.jpg"].reason
@@ -308,8 +324,8 @@ class TestHintTextAndReclaim:
         the high REVIEW row from H, because a hint never claims a row."""
         x = _hr("/c/x.jpg", "xx", PA, PA, T0, "src_b")
         h = _hr("/b/h.jpg", "hh", PNEAR, PA, T0, "src_a")
-        lo = _hr("/a/l.jpg", "ll", "00000000ffff0ff0", PA,
-                 T0 + timedelta(hours=36), "src_a")
+        lo = _hr("/a/l.jpg", "ll", "00000000ffff0ff0", None,
+                 T0 + timedelta(hours=36), "src_a")  # no dHash: pHash-only, low
         rows = _rows(classify([x, h, lo], source_priority=PRIORITY))
         row_x = rows["/c/x.jpg"]
         assert row_x.action == "REVIEW_DUPLICATE", row_x.reason
@@ -319,22 +335,6 @@ class TestHintTextAndReclaim:
         assert row_x.group_id == rows["/b/h.jpg"].group_id
         assert rows["/a/l.jpg"].group_id is None
         assert rows["/a/l.jpg"].match_confidence == "low"
-
-
-class TestShotGapText:
-    def test_a_two_minute_gap_is_named_in_minutes(self):
-        """LOW-3: a gap under an hour prints as minutes, not as "0.0 h"."""
-        records = [
-            _hr("/m/a.heic", "ah", PA, None, T0, ftype="heic"),
-            _hr("/m/a.jpg", "aj", PA, None, T0, ftype="jpeg"),
-            _hr("/m/b.heic", "bh", PA, None, T0 + timedelta(minutes=2), ftype="heic"),
-            _hr("/m/b.jpg", "bj", PA, None, T0 + timedelta(minutes=2), ftype="jpeg"),
-        ]
-        rows = _rows(classify(records, source_priority=PRIORITY))
-        keepers = [r for r in rows.values() if r.action != "EXACT"]
-        assert len(keepers) == 2
-        for keeper in keepers:
-            assert "shot 2 min apart" in keeper.reason, keeper.reason
 
 
 def _assert_partner_invariant(result: list) -> None:
@@ -358,7 +358,10 @@ class TestUndatedRowNeverLinksTwoMoments:
     # 8 bits from PA, 12 from PNEAR: a near-duplicate of PA, not of PNEAR.
     P_FAR = "ff000000ffffffff"
 
-    def test_undated_bridge_is_refused_and_the_far_moment_is_a_hint(self):
+    def test_undated_row_links_the_moments_its_content_matches(self):
+        """GROUPING 14: an undated near-duplicate of two dated rows joins both.
+        Shot time is not grouping evidence, so no bridge is refused and no row
+        is a hint; the January and May rows share one group through it."""
         records = [
             _hr("/m/a_undated.jpg", "ua", PA, PA, None),
             _hr("/m/b_jan.jpg", "jb", PNEAR, PA, self.T_JAN),
@@ -366,43 +369,9 @@ class TestUndatedRowNeverLinksTwoMoments:
         ]
         result = classify(records, source_priority=PRIORITY)
         rows = _rows(result)
-        a, b, c = rows["/m/a_undated.jpg"], rows["/m/b_jan.jpg"], rows["/m/c_may.jpg"]
-        assert a.group_id is not None and a.group_id == b.group_id
-        assert c.group_id is None
-        assert c.match_confidence == "low"
-        assert HINT_ONLY_PREFIX in c.reason, c.reason
-        # F1: the refused row keeps no duplicate verdict naming an ungrouped partner.
-        assert c.action != "REVIEW_DUPLICATE", c.reason
-        assert c.duplicate_of is None
-        assert c.reason.startswith("unique; " + HINT_ONLY_PREFIX), c.reason
-        # F2: one hint per pair, so the undated row names its partner once.
-        assert "+1 more" not in a.reason, a.reason
-        assert "a_undated.jpg" in c.reason, c.reason
-        assert "hint:" in a.reason, a.reason
-        _assert_partner_invariant(result)
-
-    def test_refused_row_edge_resets_a_row_that_then_joins_another_group(self):
-        """Case (i): the undated row A is a near-duplicate of the May row X
-        (joins it, a high edge) and of the Jan row B (its own row link, refused).
-        A must not keep the verdict that names B."""
-        # The near-duplicate pass visits rows in path order. X (lower priority,
-        # sorted first) is flagged to A first; then B (sorted before A) is A's
-        # keeper and flags A, so A's own link is to B. Row edges sort X-A before
-        # A-B, so A joins X, and its link to B is refused.
-        records = [
-            _hr("/m/c_a_undated.jpg", "ua", PNEAR, PA, None, "src_a"),
-            _hr("/m/a_x_may.jpg", "xx", PA, PA, self.T_MAY, "src_b"),
-            _hr("/m/b_b_jan.jpg", "jb", "ff000000fffffff0", PA, self.T_JAN, "src_a"),
-        ]
-        result = classify(records, source_priority=PRIORITY)
-        rows = _rows(result)
-        x, a, b = rows["/m/a_x_may.jpg"], rows["/m/c_a_undated.jpg"], rows["/m/b_b_jan.jpg"]
-        assert a.group_id is not None and a.group_id == x.group_id
-        assert a.duplicate_of is None
-        assert a.action == "UNDATED", a.reason
-        assert "near-duplicate" not in a.reason, a.reason
-        assert b.group_id is None
-        assert HINT_ONLY_PREFIX in b.reason, b.reason
+        assert _group_sizes(rows) == [3]
+        assert not [r for r in rows.values() if HINT_ONLY_PREFIX in r.reason]
+        assert rows["/m/a_undated.jpg"].action == "UNDATED"
         _assert_partner_invariant(result)
 
     def test_agreeing_moments_group_all_three(self):
@@ -495,18 +464,18 @@ class TestGrouping12PngPixels:
             assert rows[path].group_id is None
             assert "same pHash, both screenshots" in rows[path].reason, rows[path].reason
 
-    def test_b7_on_shot_time_disagreement_wins_over_identical_pixels(self):
-        # Seven minutes apart: not within the same-moment window, not a half-hour
-        # multiple, so the shot-time vote disagrees and names the gap.
+    def test_b7_on_identical_pixels_are_exact_whatever_the_shot_times(self):
+        # GROUPING 14: seven minutes apart is not read; identical pixels are
+        # identity evidence, so the pair is EXACT even with B7 on.
         rows = _rows(classify(
             [_png("/s/one.png", "p1", "src_a"),
              _png("/t/two.png", "p2", "src_b", exif=T0 + timedelta(minutes=7))],
             source_priority=PRIORITY,
         ))
-        assert _group_sizes(rows) == []
+        assert _group_sizes(rows) == [2]
         dup = rows["/t/two.png"]
-        assert dup.action == ""
-        assert "shot" in dup.reason and "both screenshots" not in dup.reason, dup.reason
+        assert dup.action == "EXACT"
+        assert "both screenshots" not in dup.reason and "shot" not in dup.reason, dup.reason
 
     def test_b7_on_near_duplicate_pngs_stay_a_hint(self):
         # pHash hamming 4 (PNEAR): not the exact-hash path, so the pixel match

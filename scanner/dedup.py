@@ -59,10 +59,10 @@ FORMAT_PRIORITY = {"heic": 0, "jpeg": 1, "png": 2, "gif": 3, "webp": 4, "raw": -
 
 LOSSY_TYPES = {"jpeg", "heic", "png", "gif", "webp"}
 
-# Same-moment burst gap (dedup-core research 2026-11-06, T2). Two shot times
-# within this many seconds "agree" (``_shot_time_vote``), and every gap between
-# consecutive frames of a burst must sit within it too (``_is_burst``). One
-# constant, so the two cannot drift apart.
+# Same-moment burst gap (dedup-core research 2026-11-06, T2): every gap between
+# consecutive frames of a burst must sit within it (``_is_burst``). GROUPING 14:
+# this is a relabel threshold only. No grouping decision reads shot time; the
+# content gates (SHA, pHash, dHash, mean colour, pixel identity) decide alone.
 BURST_MAX_GAP_S = 2
 
 # A union-find edge: (path_a, path_b, confidence), confidence "high" or "pair".
@@ -278,41 +278,6 @@ def _dhash_vote(a: HashResult, b: HashResult, dhash_threshold: int) -> str:
     return "agree" if distance <= dhash_threshold else "disagree"
 
 
-def _shot_time_vote(a: HashResult, b: HashResult, tolerance_s: int = BURST_MAX_GAP_S) -> str:
-    """dedup-core research 2026-11-05 class B — do the two shot times agree?
-
-    Returns one of:
-      * ``"agree"``    — the capture times match within ``tolerance_s``, or
-                         differ by a whole number of half-hours up to 14 h.
-                         The half-hour case is the same instant written as UTC
-                         by one tool and as local time by another (Google
-                         Takeout, some cameras); on the real manifest these
-                         pHash-identical pairs sit almost exactly 8 h apart and
-                         are genuine copies (issue #820 has the tz background).
-      * ``"disagree"`` — both EXIF dates present and the gap is neither: two
-                         different captures that happen to hash alike.
-      * ``"unknown"``  — either side has no EXIF date (RAW, scan, stripped
-                         metadata): no evidence either way, nothing demoted.
-    """
-    return _time_vote(a.exif_date, b.exif_date, tolerance_s)
-
-
-def _time_vote(
-    a_dt: datetime | None, b_dt: datetime | None, tolerance_s: int = BURST_MAX_GAP_S
-) -> str:
-    """``_shot_time_vote`` on two bare shot times: the same three answers and the
-    same tolerance. The union rule (``_would_link_two_moments``) needs it for
-    dated rows that are not HashResults."""
-    if a_dt is None or b_dt is None:
-        return "unknown"
-    delta = abs((a_dt - b_dt).total_seconds())
-    if delta <= tolerance_s:
-        return "agree"
-    if delta <= 14 * 3600 + tolerance_s and abs(delta - round(delta / 1800) * 1800) <= tolerance_s:
-        return "agree"
-    return "disagree"
-
-
 def _screenshot_pair(a: HashResult, b: HashResult) -> bool:
     """dedup-core research 2026-11-05 class B — both files are PNG.
 
@@ -323,29 +288,17 @@ def _screenshot_pair(a: HashResult, b: HashResult) -> bool:
     return a.record.file_type == "png" and b.record.file_type == "png"
 
 
-def _gap_text(seconds: float) -> str:
-    """A shot-time gap for a hint: seconds under a minute, minutes under an
-    hour, hours otherwise. A gap of seconds must not print as "0.0 h"."""
-    if seconds < 60:
-        return f"{seconds:.0f} s"
-    if seconds < 3600:
-        return f"{seconds / 60:.0f} min"
-    return f"{seconds / 3600:.1f} h"
-
-
 def _demotion_note(
     a: HashResult, b: HashResult, screenshot_demotion: bool = True
 ) -> Optional[str]:
     """Short reason a pHash match is capped at ``low`` confidence, or None.
 
     A non-None note makes the match a hint, which never groups (GROUPING "10").
-    Shot-time disagreement is named first (it carries the hour gap); a
-    both-PNG pair is the fallback cause, and only while ``screenshot_demotion``
-    (the PR-4a B7 rule) is on.
+    GROUPING 14: the only cause left is a both-PNG pair while
+    ``screenshot_demotion`` (the PR-4a B7 rule) is on. Shot-time disagreement
+    was a cause from GROUPING 10 to 13 and is gone: shot time is metadata, and
+    a grouping verdict is decided on content (owner decision 2026-11-09).
     """
-    if _shot_time_vote(a, b) == "disagree":
-        gap = _gap_text(abs((a.exif_date - b.exif_date).total_seconds()))
-        return f"shot {gap} apart"
     if screenshot_demotion and _screenshot_pair(a, b):
         return "both screenshots"
     return None
@@ -463,15 +416,13 @@ def classify(
     # Pass 5: assign group_id via union-find over duplicate_of + pair edges +
     # pHash transitive edges (#538 near-dup, #824 complementary). A pair
     # cluster that would bridge two groups is skipped and says so in its reason.
-    # A content edge that would link two shot moments through an undated row
-    # comes back as a hint (GROUPING 10, iteration 3).
-    skipped_pairs, undated_hints = _assign_group_ids(rows, pair_edges + phash_edges)
+    skipped_pairs = _assign_group_ids(rows, pair_edges + phash_edges)
     for path in skipped_pairs:
         rows[path].reason += _PAIR_SKIPPED_SUFFIX
     if burst_stacks:
         _mark_burst_stacks(rows)
     # GROUPING 10: hints run last, so a burst reason stays first in the text.
-    _mark_hints(rows, [*phash_hints, *undated_hints])
+    _mark_hints(rows, phash_hints)
 
     return list(rows.values())
 
@@ -751,56 +702,49 @@ def _rescue_identity(
     entropy, #523 dimension, recipe "5" quality), so it takes no part in pHash
     grouping. A byte-different copy of such an image (a re-encoded screenshot,
     a Takeout export of a near-white chat capture) is still a copy, and before
-    this pass only its SHA could say so. Identity is decided here by the
-    strongest evidence that does not lean on the pHash as a signal: the same
-    pHash AND the same pixel dimensions (or a 90° swap) narrow the bucket, both
-    sides are dated and sit in one shot moment (``_shot_moments``), the
-    mean-colour and dHash gates of every exact-bucket edge pass
+    this pass only its SHA could say so. Identity is decided here on content
+    alone: the same pHash AND the same pixel dimensions (or a 90° swap) narrow
+    the bucket, the mean-colour and dHash gates of every exact-bucket edge pass
     (``_gates_pass``), and ``_pixels_identical`` is True. A pass writes EXACT
-    with ``duplicate_of`` the moment's keeper (``_keeper_key``). Anything less
-    writes nothing — not a
-    REVIEW row and not a hint — because the pHash carries no evidence for these
-    rows. Undated gated rows are left alone: without a shot time there is no
-    second signal. Only lossy rows (``LOSSY_TYPES``) take part: a RAW is never a
-    dedup decision (the complementary policy of ``_classify_format_group``), so
-    a gated RAW and its gated JPEG stay as they were. Buckets are small (same
-    pHash and dims among gated rows), so the pairwise pixel check is cheap.
+    with ``duplicate_of`` the bucket's keeper (``_keeper_key``). Anything less
+    writes nothing — not a REVIEW row and not a hint — because the pHash
+    carries no evidence for these rows. Only lossy rows (``LOSSY_TYPES``) take
+    part: a RAW is never a dedup decision (the complementary policy of
+    ``_classify_format_group``), so a gated RAW and its gated JPEG stay as they
+    were. GROUPING 14 dropped the shot-moment condition of GROUPING 13: shot
+    time is not grouping evidence. Buckets are small (same pHash and dims among
+    gated rows), so the pairwise pixel check is cheap.
     """
     buckets: dict[tuple, list[HashResult]] = {}
     for hr in gated:
         if hr.record.file_type not in LOSSY_TYPES:
             continue
-        if hr.exif_date is None or hr.pixel_width is None or hr.pixel_height is None:
+        if hr.pixel_width is None or hr.pixel_height is None:
             continue
         dims = (min(hr.pixel_width, hr.pixel_height), max(hr.pixel_width, hr.pixel_height))
         buckets.setdefault((hr.phash, dims), []).append(hr)
     for bucket in buckets.values():
         if len(bucket) < 2:
             continue
-        moments = sorted(
-            (sorted(m, key=lambda h: _keeper_key(h, source_priority))
-             for m in _shot_moments(bucket)),
-            key=lambda ordered: _keeper_key(ordered[0], source_priority),
-        )
-        for ordered in moments:
-            keeper = ordered[0]
-            for duplicate in ordered[1:]:
-                key = str(duplicate.record.path)
-                if key in rows or not _gates_pass(
-                    keeper, duplicate, mean_color_threshold, dhash_threshold
-                ):
-                    continue
-                if _pixels_identical(keeper, duplicate) is not True:
-                    continue
-                rows[key] = _make_row(
-                    duplicate,
-                    "EXACT",
-                    duplicate_of=str(keeper.record.path),
-                    hamming=0,
-                    reason=f"pixel-identical copy of {keeper.record.path.name} "
-                           f"(low-contrast or flat image; pHash not trusted)",
-                    match_confidence="high",
-                )
+        ordered = sorted(bucket, key=lambda h: _keeper_key(h, source_priority))
+        keeper = ordered[0]
+        for duplicate in ordered[1:]:
+            key = str(duplicate.record.path)
+            if key in rows or not _gates_pass(
+                keeper, duplicate, mean_color_threshold, dhash_threshold
+            ):
+                continue
+            if _pixels_identical(keeper, duplicate) is not True:
+                continue
+            rows[key] = _make_row(
+                duplicate,
+                "EXACT",
+                duplicate_of=str(keeper.record.path),
+                hamming=0,
+                reason=f"pixel-identical copy of {keeper.record.path.name} "
+                       f"(low-contrast or flat image; pHash not trusted)",
+                match_confidence="high",
+            )
 
 
 def _format_review_row(
@@ -834,40 +778,30 @@ def _keeper_key(h: HashResult, source_priority: dict[str, int]) -> tuple:
     )
 
 
-def _shot_moments(lossy: list[HashResult]) -> list[list[HashResult]]:
-    """GROUPING "10" — split an all-lossy pHash-0 bucket into shot moments.
+def _pixel_clusters(
+    lossy: list[HashResult], source_priority: dict[str, int]
+) -> list[list[HashResult]]:
+    """GROUPING 14 — split an all-lossy pHash-0 bucket by pixel identity.
 
-    Dated members link when their shot times agree (``_shot_time_vote``),
-    transitively: the same chaining the same-moment burst rule uses, so a burst
-    of frames two seconds apart is one moment. Undated members follow
-    ``_complementary_edges``: after the dated members, each joins the first
-    moment it agrees with (an unknown time agrees with anything), so an undated
-    file never links two moments.
+    Members are visited in keeper order (``_keeper_key``); each joins the first
+    cluster whose keeper it is pixel-identical to (``_pixels_identical`` True),
+    else it starts a cluster. A cluster is one picture's copies, so a copy is
+    EXACT of its own picture's keeper; two clusters are two pictures that hash
+    alike (a re-shot, an edit, a crop), linked as REVIEW between their keepers.
+    This replaces the GROUPING 10 split by shot time with a content test. A
+    pair whose identity cannot be verified (a missing signature, ``None``)
+    does not join; it is judged against the first keeper and ends REVIEW
+    "pixel check unavailable" or a hint, as before.
     """
-    moments: list[list[HashResult]] = []
-    dated = sorted(
-        (h for h in lossy if h.exif_date is not None), key=lambda h: str(h.record.path)
-    )
-    for member in dated:
-        merged = [member]
-        rest: list[list[HashResult]] = []
-        for moment in moments:
-            if any(_shot_time_vote(member, other) != "disagree" for other in moment):
-                merged.extend(moment)
-            else:
-                rest.append(moment)
-        moments = rest + [merged]
-    undated = sorted(
-        (h for h in lossy if h.exif_date is None), key=lambda h: str(h.record.path)
-    )
-    for member in undated:
-        for moment in moments:
-            if any(_shot_time_vote(member, other) != "disagree" for other in moment):
-                moment.append(member)
+    clusters: list[list[HashResult]] = []
+    for member in sorted(lossy, key=lambda h: _keeper_key(h, source_priority)):
+        for cluster in clusters:
+            if _pixels_identical(cluster[0], member) is True:
+                cluster.append(member)
                 break
         else:
-            moments.append([member])
-    return moments
+            clusters.append([member])
+    return clusters
 
 
 def _format_verdict(
@@ -876,30 +810,20 @@ def _format_verdict(
     mean_color_threshold: int,
     dhash_threshold: int,
     screenshot_demotion: bool,
-    same_moment: bool = False,
 ) -> ManifestRow | Hint | None:
     """The verdict for one lossy duplicate of a pHash-0 keeper: a row when the
     match is certain enough to group, a ``Hint`` when it is not, or ``None``
     when a gate says the pair is not a duplicate at all.
 
     Two independent signals make a match ``high`` (GROUPING "10", Principle A):
-    the dHash vote agrees, or the 32×32 pixel signatures are identical. A
-    demotion note (shot time disagrees, or a PNG pair) and an unknown second
-    signal are hints. EXACT still means pixel-identical (GROUPING "8").
-
-    ``same_moment``: the duplicate was clustered into the keeper's shot moment
-    (``_shot_moments``), which already is the shot-time agreement, so only the
-    PNG rule can demote the pair."""
+    the dHash vote agrees, or the pixel signatures are identical. A PNG pair
+    that is not pixel-identical and an unknown second signal are hints. EXACT
+    still means pixel-identical (GROUPING "8"). GROUPING 14: shot time is not
+    read here any more; a re-shot of the same scene is a REVIEW row (same
+    pHash, pixels differ), never an EXACT one."""
     if not _gates_pass(keeper, duplicate, mean_color_threshold, dhash_threshold):
         return None
     vote = _dhash_vote(keeper, duplicate, dhash_threshold)
-    # dedup-core research 2026-11-05 class B — a pHash-0 match is not a certain
-    # duplicate when the shot times disagree. Shot time is checked first and
-    # always wins; the same_moment branch already agrees on shot time.
-    time_note = None if same_moment else _demotion_note(
-        keeper, duplicate, screenshot_demotion=False)
-    if time_note is not None:
-        return _hint(keeper, duplicate, f"same pHash, {time_note}")
     # EXACT means pixel-identical, not just pHash 0: pHash is greyscale, so
     # a colour grade, a resize or the next frame of a burst also hashes 0.
     same_pixels = _pixels_identical(keeper, duplicate)
@@ -977,37 +901,32 @@ def _classify_format_group(
             group, mean_color_threshold, dhash_threshold, screenshot_demotion
         )
 
-    # All lossy FORMAT_DUPLICATE. GROUPING "10": one keeper per shot moment, so
-    # a second moment's genuine pair is compared to its own keeper, not lost.
-    # Moments are ordered by their keeper, so the result is deterministic.
-    moments = sorted(
-        (sorted(m, key=lambda h: _keeper_key(h, source_priority))
-         for m in _shot_moments(lossy)),
-        key=lambda ordered: _keeper_key(ordered[0], source_priority),
-    )
+    # All lossy FORMAT_DUPLICATE. GROUPING 14: the bucket is split by pixel
+    # identity (``_pixel_clusters``), not by shot time. Each cluster is one
+    # picture's copies with its own keeper, so a copy is EXACT of its own
+    # picture; the keeper of every later cluster is judged against the first
+    # keeper like any member: same pHash, pixels differ -> REVIEW (dHash
+    # agreeing), or a hint (PNG pair, dHash unknown).
+    clusters = _pixel_clusters(lossy, source_priority)
     hints: list[Hint] = []
-    for ordered in moments:
-        keeper = ordered[0]
+
+    def judge(keeper: HashResult, duplicate: HashResult) -> None:
+        key = str(duplicate.record.path)
+        if key in rows:
+            return
+        verdict = _format_verdict(
+            keeper, duplicate, mean_color_threshold, dhash_threshold, screenshot_demotion,
+        )
+        if isinstance(verdict, ManifestRow):
+            rows[key] = verdict
+        elif verdict is not None:
+            hints.append(verdict)
+
+    for ordered in clusters:
         for duplicate in ordered[1:]:
-            key = str(duplicate.record.path)
-            if key in rows:
-                continue
-            verdict = _format_verdict(
-                keeper, duplicate, mean_color_threshold, dhash_threshold,
-                screenshot_demotion, same_moment=True,
-            )
-            if isinstance(verdict, ManifestRow):
-                rows[key] = verdict
-            elif verdict is not None:
-                hints.append(verdict)
-    # Cross-moment links: each later moment's keeper hints at the first keeper.
-    # Moments disagree pairwise on shot time, so the note is set; an unknown
-    # time (undated keeper) yields no note and no link.
-    first = moments[0][0]
-    for ordered in moments[1:]:
-        note = _demotion_note(first, ordered[0], screenshot_demotion)
-        if note is not None:
-            hints.append(_hint(first, ordered[0], f"same pHash, {note}"))
+            judge(ordered[0], duplicate)
+    for ordered in clusters[1:]:
+        judge(clusters[0][0], ordered[0])
     # The component is already carried by the duplicate_of links written above.
     return [], hints
 
@@ -1019,8 +938,8 @@ def _complementary_edges(
     screenshot_demotion: bool = True,
 ) -> tuple[list[Edge], list[Hint]]:
     """#824 — union-find edges for an exact-pHash bucket that takes no dedup
-    decision (RAW+lossy complementary, or all-RAW). The bucket is split by shot
-    time, the same way the all-lossy and near-dup paths decide a pair.
+    decision (RAW+lossy complementary, or all-RAW). GROUPING 14: the bucket is
+    split only by the PNG-pair rule (``_demotion_note``); shot time is not read.
 
     Members are visited in path order, dated before undated. Each joins the first cluster
     whose anchor it agrees with on shot time (``_demotion_note`` is None; an
@@ -1135,7 +1054,15 @@ def _gates_pass(
 # dimensions and the same shot moment (``_rescue_identity``, lossy rows only); a pass is
 # EXACT, anything less writes nothing. Byte-different copies of flat or low-contrast images were only
 # ever found by SHA before.
-GROUPING_STRATEGY_VERSION = "13"
+# "14": shot time is not grouping evidence (owner decision 2026-11-09: a rule is
+# about content). Gone: the shot-time vote (2 s tolerance, half-hour offsets) that
+# demoted pHash matches to hints, the split of an exact bucket into shot moments,
+# the refusal of an undated row bridging two moments, and the shot-moment
+# condition of the GROUPING 13 rescue. A re-shot of the same scene that hashes
+# alike is now a REVIEW row in one group (pixels differ) instead of a hint; a
+# pixel-identical copy is EXACT whatever its EXIF dates say. The 2 s constant
+# survives only as the burst-stack relabel threshold (``_is_burst``).
+GROUPING_STRATEGY_VERSION = "14"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -1323,8 +1250,9 @@ def _classify_near_duplicates(
             vote = _dhash_vote(hr_a, hr_b, dhash_threshold)
             if vote == "disagree":
                 continue
-            # dedup-core research 2026-11-05 class B — shot-time or PNG-pair
-            # demotion caps confidence at "low" whatever the dHash said.
+            # dedup-core research 2026-11-05 class B — a PNG-pair demotion caps
+            # confidence at "low" whatever the dHash said (GROUPING 14: shot
+            # time no longer demotes).
             note = _demotion_note(hr_a, hr_b, screenshot_demotion)
             confidence = _edge_confidence(vote, note)
             if confidence == "low":
@@ -1367,7 +1295,7 @@ def _classify_near_duplicates(
 
 def _edge_confidence(vote: str, note: Optional[str]) -> str:
     """Confidence of a pHash near-dup pair: ``high`` only when dHash agrees
-    and no demotion note (shot-time / both-PNG, class B) applies."""
+    and no demotion note (both-PNG, class B) applies."""
     return "high" if vote == "agree" and note is None else "low"
 
 
@@ -1471,8 +1399,7 @@ def _burst_frames(group_rows: list[ManifestRow]) -> list[ManifestRow]:
 def _is_burst(times: list[datetime]) -> bool:
     """A same-moment burst: the span is longer than ``BURST_MAX_GAP_S`` (a
     fast burst inside it keeps its status quo) and every consecutive gap is
-    within it. One wider gap is a non-burst bridge (undated node, tz-shifted
-    copy, Live-Photo pair edge), and the group is left alone."""
+    within it (always true for a ``_burst_runs`` run; kept as the contract)."""
     if len(times) < 2:
         return False
     gaps = [(b - a).total_seconds() for a, b in zip(times, times[1:])]
@@ -1505,15 +1432,35 @@ def _relabel_burst(frames: list[ManifestRow], rows: dict[str, ManifestRow]) -> N
 def _mark_burst_stacks(rows: dict[str, ManifestRow]) -> None:
     """GROUPING 7 — a same-moment burst inside an already-formed group becomes
     a keep-all stack. Groups are visited in sorted group_id order. Only the
-    verdicts of the burst's frames change; no edge is added or merged."""
+    verdicts of the burst's frames change; no edge is added or merged.
+
+    GROUPING 14: a group is formed on content alone, so it may also hold a
+    near-duplicate shot hours away. The stack is therefore each run of
+    consecutive frames within ``BURST_MAX_GAP_S`` (``_burst_runs``), not the
+    whole group; a far member keeps its own verdict."""
     by_group: dict[str, list[ManifestRow]] = {}
     for row in rows.values():
         if row.group_id is not None:
             by_group.setdefault(row.group_id, []).append(row)
     for group_id in sorted(by_group):
-        frames = _burst_frames(by_group[group_id])
-        if _is_burst([datetime.fromisoformat(r.shot_date) for r in frames]):
-            _relabel_burst(frames, rows)
+        for run in _burst_runs(_burst_frames(by_group[group_id])):
+            if _is_burst([datetime.fromisoformat(r.shot_date) for r in run]):
+                _relabel_burst(run, rows)
+
+
+def _burst_runs(frames: list[ManifestRow]) -> list[list[ManifestRow]]:
+    """Split time-ordered frames into runs whose consecutive gaps are within
+    ``BURST_MAX_GAP_S``; a wider gap starts a new run."""
+    runs: list[list[ManifestRow]] = []
+    previous: datetime | None = None
+    for frame in frames:
+        t = datetime.fromisoformat(frame.shot_date)
+        if previous is None or (t - previous).total_seconds() > BURST_MAX_GAP_S:
+            runs.append([frame])
+        else:
+            runs[-1].append(frame)
+        previous = t
+    return runs
 
 
 def _pair_pass(
@@ -1579,49 +1526,10 @@ def _pair_pass(
 
 # GROUPING 10 iteration 3: the hint text for a content edge refused because an
 # undated row would have linked two shot moments.
-_UNDATED_BRIDGE_DETAIL = "shot time unknown; would link two moments"
-
-
-def _reset_refused_row(row: ManifestRow, dated: bool) -> None:
-    """GROUPING 10 iteration 3 (F1): a row whose own ``duplicate_of`` link was
-    refused takes back its Pass-3 verdict, so no verdict names a partner it does
-    not share a group with. The partner is not re-pointed: the hamming to it is
-    unknown here. A row that later joins a group through another edge stays a
-    plain member."""
-    row.action = "" if dated else "UNDATED"
-    row.reason = "unique" if dated else "no EXIF DateTimeOriginal"
-    row.duplicate_of = None
-    row.hamming_distance = None
-    row.match_confidence = None
-
-
-def _shot_times(rows: dict[str, ManifestRow]) -> dict[str, datetime]:
-    """Each dated row's ``shot_date``, parsed once. A missing or unparseable
-    value is undated: the row is absent from the map."""
-    times: dict[str, datetime] = {}
-    for path, row in rows.items():
-        if not row.shot_date:
-            continue
-        try:
-            times[path] = datetime.fromisoformat(row.shot_date)
-        except ValueError:
-            continue
-    return times
-
-
-def _would_link_two_moments(dated_a: list[datetime], dated_b: list[datetime]) -> bool:
-    """True when both components hold a dated row and no dated row of one agrees
-    (``_time_vote``) with a dated row of the other. An undated row has no time to
-    disagree with, so only the components' dated rows are compared."""
-    if not dated_a or not dated_b:
-        return False
-    return not any(_time_vote(x, y) == "agree" for x in dated_a for y in dated_b)
-
-
 def _assign_group_ids(
     rows: dict[str, ManifestRow],
     edges: list[Edge] | None = None,
-) -> tuple[list[str], list[Hint]]:
+) -> list[str]:
     """Assign group_id via union-find over duplicate_of edges + ``edges``.
 
     Files transitively connected by ``high`` edges (A→B, B→C) all receive the
@@ -1633,25 +1541,20 @@ def _assign_group_ids(
     and complementary edges (#538 / #824). Only ``high`` and ``pair`` edges
     exist: low-confidence evidence is a ``Hint`` and never unions.
 
-    Content edges are unioned in four phases (GROUPING "10", iteration 3):
-    identity (a ``duplicate_of`` to an EXACT row, dates ignored); dated-dated
-    content; content with an undated end, refused when it would link two shot
-    moments (``_would_link_two_moments``) and returned as a hint; then the
-    "pair" edges (``_pair_pass``). A cluster joins only through a member that
-    is already grouped, and never bridges two components that each hold a
-    still.
+    Content edges are unioned first (identity edges, then the rest), then the
+    "pair" edges (``_pair_pass``). GROUPING 14: shot time is not read here; the
+    GROUPING 10 refusal of an undated row bridging two shot moments is gone,
+    because a content edge is content evidence whatever the EXIF dates say. A
+    pair cluster joins only through a member that is already grouped, and never
+    bridges two components that each hold a still.
 
     Returns the unjoined members of every refused pair cluster, for the
-    caller's reason text, and the refused undated hints, for ``_mark_hints``.
+    caller's reason text.
 
     Which lone file pairs with which follows path spelling (the lex-min rule);
     that is deliberate, so a rescore reproduces the same groups.
     """
     parent: dict[str, str] = {}
-    shot_times = _shot_times(rows)
-    # Component root -> the dated shot times of its rows. A root absent here
-    # holds no dated row. Merged on every union.
-    dated: dict[str, list[datetime]] = {path: [t] for path, t in shot_times.items()}
 
     def find(x: str) -> str:
         while x in parent:
@@ -1664,7 +1567,6 @@ def _assign_group_ids(
             return
         lo, hi = (ra, rb) if ra < rb else (rb, ra)
         parent[hi] = lo
-        dated[lo] = dated.get(lo, []) + dated.pop(hi, [])
 
     # ``joined``: nodes a high edge touched. A pair cluster joins only through
     # one of these.
@@ -1683,27 +1585,7 @@ def _assign_group_ids(
     for a, b, _ in identity:
         link(a, b)
     for a, b, _ in ordered_content:
-        if a in shot_times and b in shot_times:
-            link(a, b)
-    refused: list[Hint] = []
-    refused_pairs: set[tuple[str, str]] = set()
-    for a, b, _ in ordered_content:
-        if a in shot_times and b in shot_times:
-            continue
-        if find(a) == find(b) or not _would_link_two_moments(
-            dated.get(find(a), []), dated.get(find(b), [])
-        ):
-            link(a, b)
-            continue
-        # Refused: one hint per unordered pair (a row edge and a pHash edge can
-        # name the same pair), and a row that owned this link resets its verdict.
-        pair_key = (min(a, b), max(a, b))
-        if pair_key not in refused_pairs:
-            refused_pairs.add(pair_key)
-            refused.append((a, b, _UNDATED_BRIDGE_DETAIL))
-        for flagged, partner in ((a, b), (b, a)):
-            if rows[flagged].duplicate_of == partner:
-                _reset_refused_row(rows[flagged], flagged in shot_times)
+        link(a, b)
 
     pair_pairs = sorted(
         (min(a, b), max(a, b)) for a, b, confidence in (edges or []) if confidence == "pair"
@@ -1720,7 +1602,7 @@ def _assign_group_ids(
         if row.source_path in joined:
             row.group_id = find(row.source_path)
         # else: stays None (isolated file, or a hint, which never groups)
-    return skipped, refused
+    return skipped
 
 
 # ---------------------------------------------------------------------------

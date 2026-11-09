@@ -140,28 +140,25 @@ def test_undated_bridge_is_not_a_burst():
     right = [_frame(f"r{i}.jpg", f"r{i}", ph, 10 + i)
              for i, ph in enumerate(["00000007fffffff8", "0000000ffffffff0", "0000001fffffffe0"])]
     rows = _rows(classify(left + [bridge] + right, source_priority=PRIORITY))
-    # GROUPING 10 iteration 3: an undated row never links two shot moments, so
-    # the bridge may join only one moment and the other edge is refused. The two
-    # moments stay two groups, and no burst spans the gap.
-    left_ids = {rows[f"/a/l{i}.jpg"].group_id for i in range(3)}
-    right_ids = {rows[f"/a/r{i}.jpg"].group_id for i in range(3)}
-    assert len(left_ids) == 1 and len(right_ids) == 1 and left_ids != right_ids
+    # GROUPING 14: the undated row is a content link to both sides, so the seven
+    # files are one group. The stack test runs per run of consecutive frames
+    # within 2 s: each side spans exactly 2 s (not longer), so no burst forms.
+    ids = {rows[f"/a/l{i}.jpg"].group_id for i in range(3)} | {rows[f"/a/r{i}.jpg"].group_id for i in range(3)}
+    assert len(ids) == 1 and rows["/a/m_undated.jpg"].group_id in ids
     assert not any(BURST_PREFIX in r.reason for r in rows.values())
 
 
-def test_hint_leaf_hours_away_untouched():
-    # A lone leaf 5 h 17 min away joins the burst only by a low edge. (Exactly
-    # 5 h would read as "agree": _shot_time_vote accepts whole half-hour offsets
-    # as a timezone shift.) A hint leaf keeps its REVIEW/low verdict and reason,
-    # and is not a frame. The burst still forms from the five frames (span 8 s).
+def test_far_near_dup_joins_the_group_but_not_the_stack():
+    # GROUPING 14: a near-duplicate 5 h 17 min away is content evidence, so it
+    # joins the group as a REVIEW row; the stack is the run of frames within
+    # 2 s of each other, so the far member is not a frame and keeps its verdict.
     records = _five_frames() + [_hr("/a/zz_leaf.jpg", "leaf", "00000000fffffffe",
                                     _at(5 * 3600 + 17 * 60), "src_a")]
     rows = _rows(classify(records, source_priority=PRIORITY))
-    # GROUPING 10: the leaf's link is a hint, so it is ungrouped and undecided.
     leaf = rows["/a/zz_leaf.jpg"]
-    assert leaf.action == ""
-    assert leaf.group_id is None
-    assert leaf.match_confidence == "low"
+    assert leaf.action == "REVIEW_DUPLICATE"
+    assert leaf.group_id == rows["/a/f0.jpg"].group_id
+    assert leaf.match_confidence == "high"
     assert not leaf.reason.startswith(BURST_PREFIX)
     _assert_all_burst_frames(rows, ["f0.jpg", "f1.jpg", "f2.jpg", "f3.jpg", "f4.jpg"],
                              "5 frames over 8 s")

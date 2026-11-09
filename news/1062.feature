@@ -1,0 +1,1 @@
+Decide every grouping on content alone: shot time no longer demotes a pHash match or splits an exact bucket, so a pixel-identical copy is `EXACT` whatever its EXIF dates say and a re-shot that hashes alike is a `REVIEW_DUPLICATE` in one group (GROUPING 14) (#1062)

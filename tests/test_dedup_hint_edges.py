@@ -74,30 +74,32 @@ class TestTorii:
             _hr("/b/torii_1702_copy.jpg", "m3", "00000000ffffffcf", T_17_02, "src_b"),
         ]
 
-    def test_three_moments_stay_three_groups_of_two(self):
+    def test_three_captures_of_one_scene_are_one_group(self):
+        """GROUPING 14: the captures hash within 2-4 bits with the dHash
+        agreeing, so content links all six rows; shot time is not read."""
         rows = _rows(classify(self._records(), source_priority=PRIORITY))
-        assert _group_sizes(rows) == [2, 2, 2]
+        assert _group_sizes(rows) == [6]
 
-    def test_cross_moment_matches_are_hints_that_name_their_partner(self):
-        """GROUPING "10": cross-moment matches are hints. No REVIEW row is
-        written, and each grouped moment row names its other moment as text."""
+    def test_cross_capture_matches_are_review_rows_not_hints(self):
+        """GROUPING 14: a capture that hashes like another is a REVIEW row in
+        the same group (pixels differ or unverified), not a hint. The byte
+        copies stay EXACT and no reason carries hint text."""
         rows = _rows(classify(self._records(), source_priority=PRIORITY))
-        assert not [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
-        # Byte copies are EXACT and take no hint; each moment keeper names the
-        # other moments as text.
-        keepers = [r for r in rows.values() if r.action != "EXACT"]
-        assert len(keepers) == 3
-        for row in keepers:
+        assert sum(1 for r in rows.values() if r.action == "EXACT") == 3
+        assert [r for r in rows.values() if r.action == "REVIEW_DUPLICATE"]
+        assert not [r for r in rows.values() if "hint:" in r.reason]
+        for row in rows.values():
             assert row.group_id is not None
-            assert "hint: low-confidence match with" in row.reason, row.reason
-            assert " h apart" in row.reason, row.reason
+            assert row.match_confidence in ("high", None), row.reason
 
 
 class TestLeafAttach:
     """A lone file whose only edge is low joins a two-member group. The target
     is high-cored: two byte-identical copies (a high sha edge)."""
 
-    def test_lone_file_attaches_as_low_leaf(self):
+    def test_lone_near_dup_joins_the_pair(self):
+        """GROUPING 14: pHash near with dHash agreeing is a high edge whatever
+        the shot times; the lone file is a REVIEW member of the pair's group."""
         records = [
             _hr("/a/grp_a.jpg", "ga", A, T1, "src_a"),
             _hr("/b/grp_a_copy.jpg", "ga", A, T1, "src_b"),
@@ -105,10 +107,10 @@ class TestLeafAttach:
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
         lone = rows["/c/lone.jpg"]
-        assert lone.match_confidence == "low"
-        assert lone.group_id is None
-        assert HINT_ONLY_PREFIX in lone.reason, lone.reason
-        assert _group_sizes(rows) == [2]
+        assert lone.match_confidence == "high"
+        assert lone.group_id == rows["/a/grp_a.jpg"].group_id
+        assert HINT_ONLY_PREFIX not in lone.reason, lone.reason
+        assert _group_sizes(rows) == [3]
 
 
 class TestNoChainingThroughALeaf:
@@ -126,14 +128,13 @@ class TestNoChainingThroughALeaf:
             recs = [recs[i] for i in order]
         return recs
 
-    def test_leaf_joins_exactly_one_group_by_sorted_edge_order(self):
+    def test_middle_near_dup_bridges_both_pairs(self):
         rows = _rows(classify(self._records(), source_priority=PRIORITY))
-        # GROUPING 10: the low leaf never joins either pair; both pairs stay
-        # high cores, and the middle file is an isolated hint.
-        assert _group_sizes(rows) == [2, 2]
-        assert rows["/c/middle.jpg"].group_id is None
-        assert rows["/a/grp_a.jpg"].group_id == rows["/a/grp_a_copy.jpg"].group_id
-        assert rows["/b/grp_b.jpg"].group_id == rows["/b/grp_b_copy.jpg"].group_id
+        # GROUPING 14: the middle file is a high near-duplicate of both pairs
+        # (dHash agrees), so the transitive closure (#538) is one group of five.
+        assert _group_sizes(rows) == [5]
+        assert rows["/c/middle.jpg"].group_id == rows["/a/grp_a.jpg"].group_id
+        assert rows["/a/grp_a.jpg"].group_id == rows["/b/grp_b.jpg"].group_id
 
     def test_result_is_identical_when_record_order_is_shuffled(self):
         base = _rows(classify(self._records(), source_priority=PRIORITY))
@@ -166,16 +167,17 @@ class TestHighEdgesUnchanged:
 class TestTwoSingletonsByLowHint:
     """Nobody else is nearby: a low hint alone still groups two files."""
 
-    def test_two_singletons_joined_only_by_low_edge_form_one_pair(self):
+    def test_two_singletons_joined_by_a_high_edge_form_one_pair(self):
         records = [
             _hr("/a/solo_x.jpg", "sx", A, T1, "src_a"),
             _hr("/c/solo_y.jpg", "sy", S, T_PLUS_36H, "src_a"),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert _group_sizes(rows) == []
-        for path in ("/a/solo_x.jpg", "/c/solo_y.jpg"):
-            assert rows[path].group_id is None
-            assert rows[path].match_confidence == "low"
+        # GROUPING 14: the edge is high (dHash agrees), so the two form a pair.
+        assert _group_sizes(rows) == [2]
+        assert rows["/a/solo_x.jpg"].group_id == rows["/c/solo_y.jpg"].group_id
+        assert rows["/c/solo_y.jpg"].action == "REVIEW_DUPLICATE"
+        assert rows["/c/solo_y.jpg"].match_confidence == "high"
 
 
 # Screenshot pHashes for the chain tests: consecutive links are within the
@@ -258,9 +260,9 @@ class TestUngroupedRowWithOnlyHintsIsUndecided:
     """(i) GROUPING 10: a file whose only links are low-confidence hints is
     ungrouped and carries no dedup action, even beside a grouped pair."""
 
-    def test_ungrouped_row_with_only_hints_stays_undecided(self):
-        """x's only links are hints (shot time disagrees with both moments), so
-        it is ungrouped with an undecided action."""
+    def test_near_dup_of_two_pairs_joins_them_into_one_group(self):
+        """GROUPING 14: x is a high near-duplicate of both pairs (dHash agrees;
+        its shot time is not read), so the five rows are one group."""
         records = [
             _hr("/a/a1.jpg", "ga", A, T1, "src_a"),
             _hr("/a/a2.jpg", "ga", A, T1, "src_a"),
@@ -270,9 +272,10 @@ class TestUngroupedRowWithOnlyHintsIsUndecided:
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
         x = rows["/c/x.jpg"]
-        assert x.group_id is None
-        assert x.action == ""
-        assert HINT_ONLY_PREFIX in x.reason, x.reason
+        assert _group_sizes(rows) == [5]
+        assert x.group_id == rows["/a/a1.jpg"].group_id == rows["/b/b1.jpg"].group_id
+        assert x.action == "REVIEW_DUPLICATE"
+        assert HINT_ONLY_PREFIX not in x.reason, x.reason
 
 
 def _chain_hash(k: int) -> str:
@@ -325,33 +328,28 @@ def _raw(path: str, sha: str, exif_date: datetime) -> HashResult:
     return _hr(path, sha, A, exif_date, "src_a", file_type="raw")
 
 
-class TestComplementaryRawPairsRespectShotTime:
+class TestComplementaryRawPairsIgnoreShotTime:
     """M1 — a RAW+RAW bucket with an identical pHash (no dedup decision) groups
-    only when the shot times agree."""
+    on content; GROUPING 14 reads no shot time."""
 
-    def test_disagreeing_times_pair_as_a_low_hint_not_a_certain_group(self):
-        """Two lone RAWs with disagreeing shot times form one 2-row hint pair:
-        the low edge between the two cluster anchors pairs them, exactly as the
-        all-lossy branch and the near-dup path pair a time-disagreeing match.
-        Rows stay undecided (no dedup action)."""
+    def test_two_raws_hours_apart_form_one_complementary_pair(self):
+        """Two lone RAWs with the same pHash are one group whatever their shot
+        times say. Rows stay undecided (no dedup action) and carry no hint."""
         records = [
             _raw("/r/x1.dng", "r1", T1),
             _raw("/r/x2.dng", "r2", T1 + timedelta(hours=5, minutes=10)),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        # GROUPING 10: the disagreeing-time link is a hint, so no group forms.
-        assert _group_sizes(rows) == []
+        assert _group_sizes(rows) == [2]
         for path in ("/r/x1.dng", "/r/x2.dng"):
-            assert rows[path].group_id is None
+            assert rows[path].group_id is not None
             assert rows[path].action == ""
-            assert HINT_ONLY_PREFIX in rows[path].reason, rows[path].reason
+            assert HINT_ONLY_PREFIX not in rows[path].reason, rows[path].reason
 
-    def test_cr2_and_its_conversion_stay_together_across_a_moment(self):
-        """#824's own example: x.cr2 and its DNG conversion agree on time with
-        each other but not with m0 (an earlier moment, same pHash). The
-        conversion pair is a high edge, so they group. m0 is a lone file whose
-        only link is low to x.cr2, a high member, so the hint rule attaches it:
-        the outcome is one group of three, with m0 as the hint leaf."""
+    def test_cr2_its_conversion_and_an_earlier_raw_are_one_group(self):
+        """#824's own example: x.cr2, its DNG conversion and m0 share one pHash.
+        GROUPING 14: the shot times are not read, so the three are one
+        complementary group with no dedup decision and no hint."""
         later = T1 + timedelta(hours=5, minutes=13)
         records = [
             _raw("/a/m0.dng", "m0", T1),
@@ -359,21 +357,15 @@ class TestComplementaryRawPairsRespectShotTime:
             _raw("/c/x_conv.dng", "xd", later),
         ]
         rows = _rows(classify(records, source_priority=PRIORITY))
-        assert rows["/b/x.cr2"].group_id == rows["/c/x_conv.dng"].group_id
-        assert rows["/b/x.cr2"].group_id is not None
-        assert _group_sizes(rows) == [2]
-        # GROUPING 10: m0 is a hint only, so it stays out of the group.
+        assert _group_sizes(rows) == [3]
         m0 = rows["/a/m0.dng"]
-        assert m0.group_id is None
-        assert m0.match_confidence == "low"
-        assert "x.cr2" in m0.reason
+        assert m0.group_id == rows["/b/x.cr2"].group_id == rows["/c/x_conv.dng"].group_id
+        assert m0.action == "" and HINT_ONLY_PREFIX not in m0.reason
 
-    def test_undated_member_does_not_anchor_every_moment(self):
-        """F1: an undated RAW sorting first (/0/z.dng) must not become the
-        anchor of the whole bucket. Dated members form the clusters first, and
-        the undated member joins the first one: the shape is [2,2,2] (m0 with z,
-        x.cr2 with x_conv, y.dng with y.jpg), not one group of six. The renamed
-        /f/z.dng gives the same shape."""
+    def test_undated_member_joins_the_one_bucket_group(self):
+        """GROUPING 14: an undated RAW sorting first (/0/z.dng) or last
+        (/f/z.dng) changes nothing; the six same-pHash files are one group
+        whatever their dates, because shot time is not grouping evidence."""
         later = T1 + timedelta(hours=5, minutes=13)
         for z_path in ("/0/z.dng", "/f/z.dng"):
             records = [
@@ -386,7 +378,7 @@ class TestComplementaryRawPairsRespectShotTime:
                     "src_a", file_type="jpeg"),
             ]
             rows = _rows(classify(records, source_priority=PRIORITY))
-            assert _group_sizes(rows) == [2, 2, 2], z_path
+            assert _group_sizes(rows) == [6], z_path
             assert rows[z_path].group_id == rows["/a/m0.dng"].group_id
 
     def test_raw_and_edited_jpeg_at_same_time_group(self):
