@@ -1580,6 +1580,26 @@ class TestIdentityRescue:
         rows = _rows(classify([a, b], source_priority={"jdrive": 0}))
         assert rows["/j/shot.png"].action == "EXACT"
 
+    def test_two_flat_pictures_in_one_bucket_each_keep_their_copy(self):
+        """GROUPING 15: four gated rows share one pHash and one size, but they
+        are two pictures (two grey signatures) with one copy each. Each copy is
+        EXACT of its own picture; the two pictures do not group together."""
+        other = GreyBytes(bytes([120]) * 16384)
+        a1, a2 = self._pair()
+        b1 = _hr("/d/other.png", sha256="c", file_type="png", phash_quality=14.1,
+                 phash="a5c3f0e1b2d49687", exif_date=self._T,
+                 pixel_width=1179, pixel_height=2556, grey128=other)
+        b2 = _hr("/j/other.png", sha256="d", file_type="png", phash_quality=14.1,
+                 phash="a5c3f0e1b2d49687", exif_date=self._T,
+                 pixel_width=1179, pixel_height=2556, grey128=other)
+        rows = _rows(classify([a1, a2, b1, b2], source_priority={"jdrive": 0}))
+        assert rows["/j/shot.png"].action == "EXACT"
+        assert rows["/j/shot.png"].duplicate_of.endswith("shot.png")
+        assert rows["/j/other.png"].action == "EXACT"
+        assert rows["/j/other.png"].duplicate_of.endswith("other.png")
+        groups = {r.group_id for r in rows.values()}
+        assert None not in groups and len(groups) == 2
+
     def test_trusted_rows_do_not_enter_the_rescue(self):
         # A trusted pHash goes through the ordinary format path unchanged.
         a, b = self._pair()
