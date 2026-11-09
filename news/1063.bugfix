@@ -1,0 +1,1 @@
+Restore the EXACT verdict for copies of a flat or low-contrast image when several such pictures share one pHash: the identity rescue now splits its bucket by pixel identity (GROUPING 15) (#1063)
