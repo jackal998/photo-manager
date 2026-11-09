@@ -13,8 +13,8 @@ Fixtures (the same two sources as s80):
   - a temp folder holding two BYTE copies of qa/sandbox/unique/unique_00.jpg.
 
 Phase 1 — defaults, aggressive, confirm threshold "medium":
-  1. Every rule checkbox reads checked (the defaults; B7 is ON, today's
-     behaviour).
+  1. Every rule checkbox except B7 reads checked (the defaults; B7 is OFF
+     since GROUPING 16, so matching screenshots group like photos).
   2. The copy pair has one KEEP and one delete.
   3. No REVIEW_DUPLICATE row is marked delete: B8 vetoes what medium admits.
   4. Soft probe: print every near-dup row's confidence_level. If no REVIEW row
@@ -29,7 +29,8 @@ Phase 2 — a second scan into a new manifest, B3 and B8 off:
      This is the #517 set that B8 off restores. Soft when no medium row exists.
 
 Phase 3 — reopen the dialog:
-  9. B3 and B8 read unchecked (persisted); B4, B5, B6 and B7 read checked.
+  9. B3 and B8 read unchecked (persisted); B4, B5 and B6 read checked; B7
+     reads unchecked (its default).
 
 B6 (a Live video follows its photo) has no positive path here: no sandbox
 fixture carries an Apple ContentIdentifier (see s11_video_live.py), so the
@@ -78,7 +79,7 @@ _REPO = Path(__file__).resolve().parents[3]
 _NEAR_DUPS_DIR = str(_REPO / "qa" / "sandbox" / "near-duplicates")
 _UNIQUE_JPEG = _REPO / "qa" / "sandbox" / "unique" / "unique_00.jpg"
 _COPY_NAMES = ("copy_a.jpg", "copy_b.jpg")
-_DEFAULT_RULES = {"B3": True, "B4": True, "B5": True, "B6": True, "B7": True, "B8": True}
+_DEFAULT_RULES = {"B3": True, "B4": True, "B5": True, "B6": True, "B7": False, "B8": True}
 
 
 def _get_manifest(base_url: str, db_path: str) -> dict:
@@ -188,9 +189,11 @@ def run(*, base_url: str) -> None:
             open_scan_dialog(page)
             page.get_by_test_id(SCAN_ADVANCED).click()
             for testid in (
-                SCAN_RULE_B3, SCAN_RULE_B4, SCAN_RULE_B5, SCAN_RULE_B6, SCAN_RULE_B7, SCAN_RULE_B8,
+                SCAN_RULE_B3, SCAN_RULE_B4, SCAN_RULE_B5, SCAN_RULE_B6, SCAN_RULE_B8,
             ):
                 expect(page.get_by_test_id(testid)).to_have_attribute("data-state", "checked")
+            # GROUPING 16: the screenshot rule B7 is off by default.
+            expect(page.get_by_test_id(SCAN_RULE_B7)).to_have_attribute("data-state", "unchecked")
             page.get_by_test_id(SCAN_AUTO_SELECT).click()
             page.get_by_test_id(SCAN_AGGRESSIVE_DELETE).click()
             page.get_by_test_id(SCAN_CONFIRM_BELOW).select_option("medium")
@@ -222,7 +225,7 @@ def run(*, base_url: str) -> None:
             expect(page.get_by_test_id(SCAN_RULE_B4)).to_have_attribute("data-state", "checked")
             expect(page.get_by_test_id(SCAN_RULE_B5)).to_have_attribute("data-state", "checked")
             expect(page.get_by_test_id(SCAN_RULE_B6)).to_have_attribute("data-state", "checked")
-            expect(page.get_by_test_id(SCAN_RULE_B7)).to_have_attribute("data-state", "checked")
+            expect(page.get_by_test_id(SCAN_RULE_B7)).to_have_attribute("data-state", "unchecked")
     finally:
         try:
             _patch_settings(

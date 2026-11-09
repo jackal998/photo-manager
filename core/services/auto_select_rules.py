@@ -66,10 +66,11 @@ class RuleToggles:
         return cls(**{key.lower(): value for key, value in values.items()})
 
 
-# PRD defaults for the owner's library. B7 stays ON here. With B7 on, two PNGs
-# group only as byte-identical or pixel-identical copies (GROUPING "12"); a PNG
-# pHash match that is not pixel-identical is a hint.
-DEFAULT_RULES = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=True, b6=True)
+# PRD defaults for the owner's library. B7 is OFF since GROUPING "16" (owner
+# ruling 2026-11-09 on blind round 2: matching screenshots of one app are one
+# group, judged like photos). With B7 on, two PNGs group only as byte-identical
+# or pixel-identical copies (GROUPING "12"); a non-identical PNG match is a hint.
+DEFAULT_RULES = RuleToggles(b3=True, b4=True, b5=True, b7=False, b8=True, b6=True)
 
 # Master behaviour before PR-4a. ``apply_best_copy`` passes this explicitly.
 LEGACY_RULES = RuleToggles(b3=True, b4=True, b5=True, b7=True, b8=False, b6=False)

@@ -17,7 +17,7 @@ from core.services.auto_select_rules import (
 
 def test_default_rules_match_prd():
     assert DEFAULT_RULES.to_dict() == {
-        "B3": True, "B4": True, "B5": True, "B6": True, "B7": True, "B8": True,
+        "B3": True, "B4": True, "B5": True, "B6": True, "B7": False, "B8": True,
     }
 
 
@@ -37,7 +37,7 @@ def test_describe_rules_order():
     from core.services.auto_select_rules import describe_rules
 
     assert describe_rules(DEFAULT_RULES) == (
-        "Rules v2: B3 on, B4 on, B5 on, B6 on, B7 on, B8 on."
+        "Rules v2: B3 on, B4 on, B5 on, B6 on, B7 off, B8 on."
     )
 
 

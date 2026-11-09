@@ -150,7 +150,7 @@ scan_dialog:
   dhash_tooltip: "A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation. Like the pHash scale this one starts at 2, not 1: an odd value usually confirms exactly the same pairs as the even value below it, and 1 would confirm nothing. 2 is the strictest useful setting."
   color_label: "<b>Mean Color Gate</b> (default: 30, range: 0–100)"
   color_desc: "Reject a pHash match when average colours differ by more than this (L2). 0 = off."
-  color_tooltip: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
+  color_tooltip: "L2 distance between the average RGB color of two images. Read only when dHash cannot vote on a pHash match: then images whose mean colors differ by more than this value are excluded from grouping. When dHash agrees, colour never splits a pair (a colour grade or an exposure step is the same picture). 0 = disabled; higher = more permissive color gate."
   auto_select_label: "Auto select after scan"
   auto_select_desc: "Mark + lock the top-scored file in each group as KEEP. Never deletes on its own."
   auto_select_tooltip: "When enabled, the highest-scoring file in each duplicate group is marked KEEP and the row is locked (lock badge in the tree) so accidental bulk-regex applies can't overwrite the keeper. Auto-select picks keepers, never deleters — unless you also enable the aggressive option below."
@@ -826,7 +826,7 @@ web:
     dhash_tooltip: "A second, independent perceptual hash (gradient / brightness based) that confirms a pHash near-duplicate. When two files' dHashes also differ by at most this many bits the match is flagged high-confidence; otherwise low-confidence. Grouping is unchanged either way — but a low-confidence (pHash-only) near-duplicate is never auto-marked for delete by aggressive auto-select. Lower = stricter confirmation."
     color_label: "Mean Color Gate (default: 30, range: 0–100)"
     color_desc: "Reject a pHash match when average colours differ by more than this (L2). 0 = off."
-    color_tooltip: "L2 distance between the average RGB color of two images. After the pHash check, images whose mean colors differ by more than this value are excluded from grouping — catching pHash false positives where similar DCT structure but different colors were matched. 0 = disabled; higher = more permissive color gate."
+    color_tooltip: "L2 distance between the average RGB color of two images. Read only when dHash cannot vote on a pHash match: then images whose mean colors differ by more than this value are excluded from grouping. When dHash agrees, colour never splits a pair (a colour grade or an exposure step is the same picture). 0 = disabled; higher = more permissive color gate."
     error_prefix: "Error: {error}"
     start_button: "Start Scan"
     # #896 — shown in the still-open dialog after a scan that found no media

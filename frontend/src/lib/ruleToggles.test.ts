@@ -19,7 +19,7 @@ describe("rulesFromSettings", () => {
 });
 
 describe("DEFAULT_RULES", () => {
-  it("has every rule on, B7 included (today's behaviour)", () => {
-    expect(DEFAULT_RULES).toEqual({ B3: true, B4: true, B5: true, B6: true, B7: true, B8: true });
+  it("has every rule on except B7 (off since GROUPING 16)", () => {
+    expect(DEFAULT_RULES).toEqual({ B3: true, B4: true, B5: true, B6: true, B7: false, B8: true });
   });
 });
