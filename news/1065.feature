@@ -1,0 +1,1 @@
+GROUPING 16: a pHash match whose dHash agrees groups whatever its colours (the mean-colour gate reads only when dHash cannot vote), and the screenshot rule B7 is off by default so matching PNG screenshots group like photos (#1065)
