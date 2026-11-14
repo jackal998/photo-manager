@@ -775,12 +775,23 @@ def _hint(a: HashResult, b: HashResult, detail: str) -> Hint:
     return (str(a.record.path), str(b.record.path), detail)
 
 
+def _pixel_rank(h: HashResult) -> tuple[int, int]:
+    """GROUPING 17 — pixel-count tier: the larger picture first, a known size
+    before an unknown one. A resized copy hashes alike and is the duplicate of
+    its original, so the original must keep the keeper's place."""
+    if h.pixel_width is None or h.pixel_height is None:
+        return (1, 0)
+    return (0, -h.pixel_width * h.pixel_height)
+
+
 def _keeper_key(h: HashResult, source_priority: dict[str, int]) -> tuple:
     """The keeper rule of an all-lossy bucket: highest format, then highest
-    source priority, then lexicographically smallest path (#792)."""
+    source priority, then the larger picture (GROUPING 17), then
+    lexicographically smallest path (#792)."""
     return (
         FORMAT_PRIORITY.get(h.record.file_type, 99),
         _priority(h.record.source_label, source_priority),
+        _pixel_rank(h),
         str(h.record.path),
     )
 
@@ -1092,7 +1103,10 @@ def _mean_color_passes(a: HashResult, b: HashResult, threshold: int) -> bool:
 # colour-graded export, an exposure step or a mono edit the same picture
 # (``_gates_pass``, ``_classify_near_duplicates``). The screenshot rule B7 defaults
 # to off (``DEFAULT_RULES``): matching PNG screenshots group like photos.
-GROUPING_STRATEGY_VERSION = "16"
+# "17": the keeper of a duplicate group prefers the larger picture before the path
+# tiebreak (``_pixel_rank``), so a resized copy is no longer the keeper of its
+# original (blind round 2 measurement: 17 of 38 mixed-resolution groups).
+GROUPING_STRATEGY_VERSION = "17"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -1307,6 +1321,7 @@ def _classify_near_duplicates(
                 [hr_a, hr_b],
                 key=lambda h: (
                     _priority(h.record.source_label, source_priority),
+                    _pixel_rank(h),  # GROUPING 17: the larger picture keeps
                     str(h.record.path),  # deterministic on same-priority (#792)
                 ),
             )
