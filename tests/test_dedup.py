@@ -499,7 +499,7 @@ class TestLivePhotoPair:
         unions them into a single component. All three must share one
         group_id.
 
-        Production case from ``D:\\Takeout-0508\\Takeout\\Google 相簿\\2023 年的相片``.
+        Production case: a Google Takeout album folder of a Live Photo export.
         """
         heic_path = Path("/iphone/IMG_4278.HEIC")
         mov_path = Path("/iphone/IMG_4278.MOV")
