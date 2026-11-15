@@ -1106,7 +1106,11 @@ def _mean_color_passes(a: HashResult, b: HashResult, threshold: int) -> bool:
 # "17": the keeper of a duplicate group prefers the larger picture before the path
 # tiebreak (``_pixel_rank``), so a resized copy is no longer the keeper of its
 # original (blind round 2 measurement: 17 of 38 mixed-resolution groups).
-GROUPING_STRATEGY_VERSION = "17"
+# "18": a Live Photo video pairs with its still by the Apple ContentIdentifier alone
+# (``_collect_pair_edges``); the same-folder same-name condition is gone (owner
+# decision 2026-11-14; a census of one 39,814-file library found the identifier
+# never joined two moments and never disagreed with a same-name pair).
+GROUPING_STRATEGY_VERSION = "18"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
@@ -1349,39 +1353,37 @@ def _edge_confidence(vote: str, note: Optional[str]) -> str:
 def _collect_pair_edges(
     records: list[HashResult], rows: dict[str, ManifestRow]
 ) -> list[Edge]:
-    """Return the Live Photo "pair" edges between same-stem cluster members.
+    """Return the Live Photo "pair" edges between the files of one capture.
 
-    GROUPING "10" (G4, owner decision 2026-11-07): a filename never creates an
-    edge. The walker's ``pair_cluster`` is keyed on the name alone, so it
-    proves nothing about capture. Two rules replace the stem edge:
+    GROUPING "18" (owner decision 2026-11-14): the Apple ContentIdentifier
+    alone decides. The camera writes one identifier into a Live Photo's still
+    and its video, so two files that carry the same one are one capture,
+    whatever their names or folders. GROUPING "10" also required the two files
+    to sit in one folder under one name (the walker's ``pair_cluster``); a
+    renamed or moved video lost its still. Two rules:
 
     * still <-> still: no edge. Stills group only through the pHash tiers,
       which compare every candidate pair with content evidence anyway.
-    * any pair with a video side: a ``"pair"`` edge only when both files carry
-      the same non-None Apple ContentIdentifier. A video whose identity is
-      missing or different is not its still's passenger.
+    * any pair with a video side: a ``"pair"`` edge when both files carry the
+      same non-None identifier. A video whose identity is missing or
+      different is not its still's passenger, whatever it is named.
 
     Action, ``user_decision`` and ``reason`` are never propagated. Each row keeps
     its own classification. A pair edge only links rows into a group, and
     ``_pair_pass`` decides whether that link may join a group at all.
     """
-    edges: list[Edge] = []
-    by_path: dict[str, HashResult] = {str(hr.record.path): hr for hr in records}
+    by_cid: dict[str, list[str]] = {}
     for hr in records:
-        own_key = str(hr.record.path)
-        if own_key not in rows:
-            continue
-        for peer_path in hr.record.pair_cluster:
-            peer_key = str(peer_path)
-            peer_hr = by_path.get(peer_key)
-            if peer_key not in rows or peer_hr is None:
-                continue
-            if not (is_video(own_key) or is_video(peer_key)):
-                continue  # still <-> still: content tiers only (G4)
-            cid = hr.content_identifier
-            if cid is None or peer_hr.content_identifier != cid:
-                continue  # no device-written identity shared: not a pair
-            edges.append((own_key, peer_key, "pair"))
+        key = str(hr.record.path)
+        if hr.content_identifier is not None and key in rows:
+            by_cid.setdefault(hr.content_identifier, []).append(key)
+    edges: list[Edge] = []
+    for cid in sorted(by_cid):
+        members = sorted(by_cid[cid])
+        for i, own_key in enumerate(members):
+            for peer_key in members[i + 1:]:
+                if is_video(own_key) or is_video(peer_key):
+                    edges.append((own_key, peer_key, "pair"))
     return edges
 
 

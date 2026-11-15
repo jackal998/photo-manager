@@ -498,7 +498,7 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
 - **SHA-256** exact duplicate detection across all source folders
 - **pHash** (imagehash) cross-format detection — JPEG vs HEIC vs RAW vs PNG
 - **Hamming distance** configurable near-duplicate threshold
-- **Live Photo pairs** — same-stem HEIC + MOV treated as an atomic unit
+- **Live Photo pairs** — a still and its video are paired by the Apple ContentIdentifier they share, whatever they are named
 - **RAW + lossy** — DNG/ARW/CR3 always kept alongside their JPEG/HEIC partner
 - **Magic-byte verification** — catches JPEG files saved with a `.HEIC` extension
 - **Google Takeout numbering** — `IMG_9556(1).HEIC` handled correctly
