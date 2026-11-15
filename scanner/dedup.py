@@ -791,11 +791,50 @@ def _pixel_rank(h: HashResult) -> tuple[int, int]:
     return (0, -h.pixel_width * h.pixel_height)
 
 
-def _keeper_key(h: HashResult, source_priority: dict[str, int]) -> tuple:
-    """The keeper rule of an all-lossy bucket: highest format, then highest
-    source priority, then the larger picture (GROUPING 17), then
+def _pixel_count(h: HashResult) -> int | None:
+    """Pixel count of a row, or ``None`` when its dimensions are unknown."""
+    if h.pixel_width is None or h.pixel_height is None:
+        return None
+    return h.pixel_width * h.pixel_height
+
+
+def _dated_pixel_ceiling(bucket: list[HashResult]) -> int | None:
+    """GROUPING 19 — the largest pixel count among the dated members of a
+    bucket, or ``None`` when no dated member has a known size."""
+    dated = [
+        pixels
+        for h in bucket
+        if h.exif_date is not None and (pixels := _pixel_count(h)) is not None
+    ]
+    return max(dated, default=None)
+
+
+def _evidence_rank(h: HashResult, dated_ceiling: int | None) -> int:
+    """GROUPING 19 — 1 for a member the evidence names a copy, else 0.
+
+    A copy made from a picture normally has no more pixels and no more EXIF
+    than its source: a re-encode keeps or shrinks the picture and keeps or
+    strips the capture date. So a member with no capture date and fewer pixels
+    than a dated member of its bucket (``_dated_pixel_ceiling``) is taken as a
+    copy, and it ranks after every member that is not, whatever the formats.
+    A dated member is never ranked down, and neither is an undated member of
+    unknown size or one at least as large as every dated member: nothing names
+    those a copy, so the order below decides between them."""
+    pixels = _pixel_count(h)
+    if dated_ceiling is None or h.exif_date is not None or pixels is None:
+        return 0
+    return 1 if pixels < dated_ceiling else 0
+
+
+def _keeper_key(
+    h: HashResult, source_priority: dict[str, int], dated_ceiling: int | None = None
+) -> tuple:
+    """The keeper rule of an all-lossy bucket: a member the evidence names a
+    copy last (GROUPING 19, ``_evidence_rank``), then highest format, then
+    highest source priority, then the larger picture (GROUPING 17), then
     lexicographically smallest path (#792)."""
     return (
+        _evidence_rank(h, dated_ceiling),
         FORMAT_PRIORITY.get(h.record.file_type, 99),
         _priority(h.record.source_label, source_priority),
         _pixel_rank(h),
@@ -819,7 +858,8 @@ def _pixel_clusters(
     "pixel check unavailable" or a hint, as before.
     """
     clusters: list[list[HashResult]] = []
-    for member in sorted(lossy, key=lambda h: _keeper_key(h, source_priority)):
+    ceiling = _dated_pixel_ceiling(lossy)
+    for member in sorted(lossy, key=lambda h: _keeper_key(h, source_priority, ceiling)):
         for cluster in clusters:
             if _pixels_identical(cluster[0], member) is True:
                 cluster.append(member)
@@ -1117,7 +1157,12 @@ def _mean_color_passes(a: HashResult, b: HashResult, threshold: int) -> bool:
 # (``_collect_pair_edges``); the same-folder same-name condition is gone (owner
 # decision 2026-11-14; a census of one 39,814-file library found the identifier
 # never joined two moments and never disagreed with a same-name pair).
-GROUPING_STRATEGY_VERSION = "18"
+# "19": in an all-lossy bucket a member the evidence names a copy (no capture
+# date, fewer pixels than a dated member; ``_evidence_rank``) ranks after every
+# other member, before the format order is read (owner decision 2026-11-14: the
+# keeper is the true original where it can be found). Measured on two test sets:
+# 4 groups where a larger dated PNG was the duplicate of a smaller undated JPEG.
+GROUPING_STRATEGY_VERSION = "19"
 
 # Candidate count below which we keep the legacy O(N²) brute-force pairwise
 # scan instead of building a BK-tree.
