@@ -200,3 +200,26 @@ def test_two_stills_sharing_an_identifier_get_no_pair_edge():
     rows = _rows(classify([a, b]))
     assert _gid(rows, "/cam/IMG_8.HEIC") is None
     assert _gid(rows, "/cam/IMG_8-1.HEIC") is None
+
+
+def test_identifier_shared_by_stills_of_two_groups_refuses_the_video():
+    """One identifier on two stills that content keeps apart (the original and a
+    heavy edit, each with a byte copy). The identifier puts the video with both,
+    so joining it would bridge the two groups: it joins neither and says why.
+    Under GROUPING 17 the video sat with the still it was named after."""
+    original = _hr("/a/IMG_9.HEIC", sha256="o", phash=PHASH, file_type="heic",
+                   exif_date=_dt(), content_identifier="CID-9")
+    original_copy = _hr("/b/IMG_9.HEIC", sha256="o", phash=PHASH, file_type="heic",
+                        exif_date=_dt())
+    edit = _hr("/c/IMG_9_edit.HEIC", sha256="e", phash=PHASH_FAR, file_type="heic",
+               exif_date=_dt(), content_identifier="CID-9")
+    edit_copy = _hr("/d/IMG_9_edit.HEIC", sha256="e", phash=PHASH_FAR, file_type="heic",
+                    exif_date=_dt())
+    mov = _hr("/a/IMG_9.MOV", sha256="m", phash=None, exif_date=_dt(),
+              file_type="mov", content_identifier="CID-9")
+    rows = _rows(classify([original, original_copy, edit, edit_copy, mov]))
+    original_gid = _gid(rows, "/a/IMG_9.HEIC")
+    edit_gid = _gid(rows, "/c/IMG_9_edit.HEIC")
+    assert original_gid is not None and edit_gid is not None and original_gid != edit_gid
+    assert _gid(rows, "/a/IMG_9.MOV") is None
+    assert "pair link skipped: its stills are in different groups" in rows["/a/IMG_9.MOV"].reason
