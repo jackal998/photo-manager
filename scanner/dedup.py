@@ -158,6 +158,7 @@ class HashResult:
         xmp_derived = None
         subsec_time_original = None
         offset_time_original = None
+        content_identifier = self.content_identifier
         if self.inmemory_signals is not None:
             extracted.add("pil_exif_inmemory")
             exif_date = self.inmemory_signals["exif_date"]
@@ -171,6 +172,11 @@ class HashResult:
             # file into a HashFailure and drop it from the manifest.
             subsec_time_original = self.inmemory_signals.get("subsec_time_original")
             offset_time_original = self.inmemory_signals.get("offset_time_original")
+            # A JPEG Live still's Apple identity, parsed from its MakerNote in
+            # the same pass (``apple_maker_note_content_id``).
+            content_identifier = (
+                self.inmemory_signals.get("content_identifier") or content_identifier
+            )
 
         return MediaExtract(
             path=self.record.path,
@@ -187,6 +193,7 @@ class HashResult:
             xmp_derived=xmp_derived,
             subsec_time_original=subsec_time_original,
             offset_time_original=offset_time_original,
+            content_identifier=content_identifier,
             extracted_by=extracted,
         )
 
