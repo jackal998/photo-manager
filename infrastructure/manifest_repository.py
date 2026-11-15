@@ -83,7 +83,10 @@ SELECT id, source_path, source_label, group_id, hamming_distance, reason,
        exif_tag_count, gps_present, xmp_derived,
        -- #517 — persisted scan-time confidence ('high' / 'low' / NULL).
        -- apply_best_copy reads it to honour the aggressive-delete gate.
-       match_confidence
+       match_confidence,
+       -- How alike the row and its group's Ref look (0-100), measured at the
+       -- end of the scan; NULL in older manifests and for unmeasured rows.
+       similarity
 FROM   migration_manifest
 WHERE  outcome = ''
 ORDER  BY
@@ -151,6 +154,11 @@ _MIGRATIONS = [
     # Nullable, no DEFAULT: pre-G10 rows read NULL, which means "no identity
     # recorded", the same as a non-Apple file. Nothing reads it at load time.
     ("content_identifier", "TEXT"),
+    # How alike a row and its group's Ref look, 0-100, measured at the end
+    # of the scan (scanner/similarity.py). Nullable, no DEFAULT: rows of an
+    # older manifest read NULL, which the review view takes as "not measured"
+    # and shows the pHash-derived number for, as before.
+    ("similarity", "INTEGER"),
 ]
 
 # #433 — drop the legacy ``dest_path`` column and migrate ``action='MOVE'``
@@ -193,6 +201,9 @@ _POST_DROP_COLUMNS = (
     # GROUPING 10 (G3) — same trap as #820: an ALTER-added column missing here
     # is silently dropped by the copy-table rebuild. Keep in step with _MIGRATIONS.
     "content_identifier",
+    # Same trap as #820: an ALTER-added column missing here is silently
+    # dropped by the copy-table rebuild. Keep in step with _MIGRATIONS.
+    "similarity",
 )
 
 _UPDATE_LOCK_SQL = """
@@ -343,6 +354,7 @@ def _drop_move_dest_path(conn: sqlite3.Connection) -> None:
             match_confidence TEXT,
             phash_quality   REAL,
             content_identifier TEXT,
+            similarity       INTEGER,
             is_locked        INTEGER NOT NULL DEFAULT 0,
             outcome          TEXT    NOT NULL DEFAULT ''
         );
@@ -429,6 +441,7 @@ def _photo_record(
     db_xmp_derived: "int | None" = None,
     db_match_confidence: "str | None" = None,
     db_reason: "str | None" = None,
+    db_similarity: "int | None" = None,
 ) -> PhotoRecord:
     """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 
@@ -502,6 +515,7 @@ def _photo_record(
         xmp_derived=bool(db_xmp_derived),
         match_confidence=db_match_confidence,
         reason=db_reason or "",
+        similarity=db_similarity,
     )
 
 
@@ -1079,6 +1093,7 @@ class ManifestRepository:
                         db_xmp_derived=row["xmp_derived"],
                         db_match_confidence=row["match_confidence"],
                         db_reason=row["reason"],
+                        db_similarity=row["similarity"],
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Skipping {}: {}", source_path, exc)

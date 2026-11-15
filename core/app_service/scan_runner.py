@@ -19,6 +19,7 @@ from core.app_service.cancel_token import _CancelToken
 from core.app_service.dtos import ScanConfig
 from core.app_service.events import ScanProgressBus
 from scanner.grey_store import GreyBytes, GreySigStore, StoredGreySig
+from scanner.thumb_store import ThumbBytes, ThumbStore
 
 # ---------------------------------------------------------------------------
 # Stage name constants (mirrored from scan_worker.py — kept in sync manually;
@@ -550,11 +551,32 @@ def _spill_grey(outcome, store: GreySigStore) -> None:
         outcome.grey128 = None
 
 
-def _spill_future(fut, store: GreySigStore) -> None:
-    """Process-pool done-callback: spill a finished hash future's signature."""
+# Seam, as above: every scan gets its own thumbnail store.
+_new_thumb_store = ThumbStore
+
+
+def _spill_thumb(outcome, store: ThumbStore) -> None:
+    """Move an outcome's in-memory review thumbnail into ``store``.
+
+    Same contract as :func:`_spill_grey`. A failed write leaves ``thumb``
+    None, which costs the file its similarity number and nothing else.
+    """
+    thumb = getattr(outcome, "thumb", None)
+    if not isinstance(thumb, ThumbBytes):
+        return
+    try:
+        outcome.thumb = store.put(thumb.bytes())
+    except (OSError, RuntimeError):
+        outcome.thumb = None
+
+
+def _spill_future(fut, store: GreySigStore, thumbs: ThumbStore) -> None:
+    """Process-pool done-callback: spill a finished hash future's signature
+    and thumbnail."""
     if fut.cancelled() or fut.exception() is not None:
         return
     _spill_grey(fut.result()[1], store)
+    _spill_thumb(fut.result()[1], thumbs)
 
 
 def _report_grey_failures(bus: ScanProgressBus, count: int, what: str) -> None:
@@ -586,13 +608,15 @@ def run_pipeline(
     ``cancel_token.request()``.
 
     GROUPING 11: this wrapper owns the scan-local grey signature store and
-    deletes its temporary file on every exit path.
+    the thumbnail store, and deletes their temporary files on every exit path.
     """
     grey_store = _new_grey_store()
+    thumb_store = _new_thumb_store()
     try:
-        _run_pipeline(config, cancel_token, bus, grey_store)
+        _run_pipeline(config, cancel_token, bus, grey_store, thumb_store)
     finally:
         grey_store.close_and_delete()
+        thumb_store.close_and_delete()
 
 
 def _run_pipeline(
@@ -600,8 +624,10 @@ def _run_pipeline(
     cancel_token: _CancelToken,
     bus: ScanProgressBus,
     grey_store: GreySigStore,
+    thumb_store: ThumbStore,
 ) -> None:
-    """The pipeline body; ``run_pipeline`` owns ``grey_store``'s lifetime."""
+    """The pipeline body; ``run_pipeline`` owns the lifetime of ``grey_store``
+    and ``thumb_store``."""
     import threading
     from concurrent.futures import (
         ProcessPoolExecutor,
@@ -627,6 +653,7 @@ def _run_pipeline(
     from scanner.dedup import HashResult, classify
     from scanner.manifest import write_manifest, print_summary
     from scanner.scoring import apply_scoring_to_rows
+    from core.app_service.similarity_pass import apply_similarity_to_rows
     from scanner.workers import device_key, hash_workers_for_root
     from scanner.autotune import (
         ReadKneeRamp,
@@ -1090,7 +1117,7 @@ def _run_pipeline(
                     fut = pool.submit(run_hash_for_record, _idx, _r)
                     # GROUPING 11 — spill in the executor's callback thread so a
                     # stalled main loop never holds completed signatures in RAM.
-                    fut.add_done_callback(lambda f: _spill_future(f, grey_store))
+                    fut.add_done_callback(lambda f: _spill_future(f, grey_store, thumb_store))
                     futures[fut] = _idx
                 # #549(a) — assign to KILL_ON_JOB_CLOSE job.
                 _assign_process_pool_to_kill_job(pool)
@@ -1276,6 +1303,7 @@ def _run_pipeline(
                     # GROUPING 11 — spill BEFORE out_q, so the queue only ever
                     # holds a small reference to the signature.
                     _spill_grey(result[1], grey_store)
+                    _spill_thumb(result[1], thumb_store)
                     out_q.put(result)
 
                 try:
@@ -1504,6 +1532,23 @@ def _run_pipeline(
             )
         keepers = stamped
         non_keepers = deletes or None
+
+    # --- 4.7: how alike each grouped picture and its group's Ref look ---
+    # After auto-select: a KEEP stamp is Ref tier, so it can move the Ref the
+    # review screen shows, and the number is measured against that Ref.
+    if cancel_token():
+        logger.warning("Scan cancelled by user before similarity pass")
+        bus.failed("Scan cancelled.")
+        return
+    measured = apply_similarity_to_rows(rows, hash_results, cancel_token)
+    bus.log(f"Similarity: measured {measured:,} picture(s) against their group's Ref.")
+    if thumb_store.failures:
+        bus.log(
+            f"  WARNING: {thumb_store.failures:,} thumbnail(s) could not be stored or"
+            " read; those files show no similarity number"
+        )
+    # The similarity pass is the last reader; free the disk before the write.
+    thumb_store.close_and_delete()
 
     buf = io.StringIO()
     with redirect_stdout(buf):

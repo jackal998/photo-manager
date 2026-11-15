@@ -303,7 +303,7 @@ class TestComputeHashes:
             # (not the dropped rawpy.open_buffer); the path fallback also uses imread.
             mock_rawpy.imread.side_effect = unsupported
 
-            sha, ph, dh, ch, dt, w, h, _, _q, _px, _g = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
+            sha, ph, dh, ch, dt, w, h, _, _q, _px, _g, _t = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None
@@ -363,7 +363,7 @@ class TestRealDecodeFailures:
         # path fallback — the #75 non-camera-TIFF class, routed to "raw".
         f.write_bytes(b"II*\x00" + b"\x00" * 256)
 
-        sha, ph, dh, ch, dt, w, h, _, _q, _px, _g = compute_hashes(f, "raw")  # #786 added index 7
+        sha, ph, dh, ch, dt, w, h, _, _q, _px, _g, _t = compute_hashes(f, "raw")  # #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None and dh is None and ch is None
@@ -1014,7 +1014,7 @@ class TestRawSingleLibRawOpen:
 
         f = tmp_path / "shot.dng"
         f.write_bytes(b"\x00" * 64)
-        sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g = hasher.compute_hashes(f, "raw")
+        sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g, _t = hasher.compute_hashes(f, "raw")
 
         assert len(opens) == 1, (
             f"LibRaw opened {len(opens)}× for one RAW file — #826 wants exactly 1 "
@@ -1063,7 +1063,7 @@ class TestRawSingleLibRawOpen:
 
         f = tmp_path / "nothumb.dng"
         f.write_bytes(b"\x00" * 64)
-        _sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g = hasher.compute_hashes(f, "raw")
+        _sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g, _t = hasher.compute_hashes(f, "raw")
 
         assert len(opens) == 1, f"LibRaw opened {len(opens)}× on the full-decode route"
         assert (px_w, px_h) == (8064, 6048)
@@ -1121,7 +1121,7 @@ class TestPhashQuality:
         f = tmp_path / "flat.jpg"
         Image.new("RGB", (300, 300), (128, 128, 128)).save(f, "JPEG", quality=95)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 11
+        assert len(out) == 12
         assert out[1] is not None  # a real pHash was produced
         assert out[8] is not None and out[8] < 1.0
 
@@ -1154,7 +1154,7 @@ class TestPhashQuality:
         v = tmp_path / "clip.mov"
         v.write_bytes(b"\x00" * 64)
         out = compute_hashes(v, "mov")
-        assert len(out) == 11
+        assert len(out) == 12
         assert out[8] is None
 
     def test_compute_from_bytes_sets_phash_quality(self, tmp_path):
@@ -1216,27 +1216,27 @@ class TestRgb32PixelSignature:
         f = tmp_path / "a.jpg"
         _write_jpeg(f)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 11
+        assert len(out) == 12
         assert isinstance(out[9], bytes)
         assert len(out[9]) == 3072  # 32 * 32 * 3
 
-    def test_video_early_exit_is_eleven_elements_with_no_signature(self, tmp_path):
+    def test_video_early_exit_is_twelve_elements_with_no_signature(self, tmp_path):
         from scanner.hasher import compute_hashes
 
         v = tmp_path / "clip.mov"
         v.write_bytes(b"\x00" * 64)
         out = compute_hashes(v, "mov")
-        assert len(out) == 11
+        assert len(out) == 12
         assert out[9] is None
         assert out[10] is None
 
-    def test_undecodable_image_early_exit_is_eleven_elements_with_no_signature(self, tmp_path):
+    def test_undecodable_image_early_exit_is_twelve_elements_with_no_signature(self, tmp_path):
         from scanner.hasher import compute_hashes
 
         f = tmp_path / "bad.jpg"
         f.write_bytes(b"not an image at all" * 20)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 11
+        assert len(out) == 12
         assert out[1] is None  # phash: decode failed
         assert out[9] is None
         assert out[10] is None
@@ -1289,7 +1289,7 @@ class TestGrey128Signature:
         f = tmp_path / "a.jpg"
         _write_jpeg(f)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 11
+        assert len(out) == 12
         assert isinstance(out[10], bytes)
         assert len(out[10]) == 16384  # 128 * 128, one byte per pixel
 

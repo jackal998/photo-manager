@@ -16,7 +16,6 @@ import sys
 from dataclasses import dataclass
 import hashlib
 import io
-import math
 import os
 import threading
 import time
@@ -33,6 +32,7 @@ if sys.platform == "win32":
 from loguru import logger
 
 from infrastructure.app_data import app_data_root
+from scanner.thumbnail import draft_target as _draft_target
 
 # Optional Pillow and HEIF support (top-level to satisfy linting)
 try:  # pragma: no cover - import availability
@@ -63,7 +63,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 # Recipe version — bump to invalidate the disk cache namespace.
-# Deliberately NOT bumped for #865's _DRAFT_UNDERSHOOT, though it can leave a
+# Deliberately NOT bumped for #865's DRAFT_UNDERSHOOT, though it can leave a
 # cached 2048 px preview beside a freshly-decoded 2016 px one: a full rebuild
 # of every preview for a ≤ 2 % long-edge difference inside the declared
 # tolerance costs far more than it buys, and the cache key already carries
@@ -77,38 +77,9 @@ _THUMB_SIDE_THRESHOLD = 256
 _THUMB_CACHE_DEFAULT_BYTES = 64 * 1024 * 1024   # 64 MB
 _PREVIEW_CACHE_DEFAULT_BYTES = 192 * 1024 * 1024  # 192 MB
 
-# How far below the viewport cap a draft-mode decode is allowed to land (#865).
-# libjpeg's DCT scaler offers only 1/2, 1/4 and 1/8, so a JPEG whose half-scale
-# falls just under the cap decodes at FULL size for want of a few pixels: this
-# library's 4032×3024 embedded frames sit 1.6 % above the half-scale step for a
-# 2048 cap, so they missed the reduction by 32 px and decoded 12.2 MP to paint
-# a 2048 px preview. Accepting a long edge up to this fraction under the cap
-# takes them at half scale (and the 8064×6048 ProRAW frames at quarter).
-# thumbnail() never upscales, so the output long edge may end up this much
-# under the cap — at the 2048 viewport cap that is ≤ 41 px, below one logical
-# pixel on a 4K display at 175 %.
-_DRAFT_UNDERSHOOT = 0.02
-
-
-def _draft_target(size: tuple[int, int], viewport_cap: int) -> tuple[int, int]:
-    """The box to hand ``Image.draft`` for an image of ``size`` at ``viewport_cap``.
-
-    Deliberately NOT a square ``(cap, cap)``. ``draft`` picks its reduction from
-    ``min(w // req_w, h // req_h)`` — it constrains BOTH axes — while
-    ``thumbnail`` fits only the long edge. A square request therefore makes the
-    SHORT edge binding and declines reductions that are perfectly fine.
-    Measured: a 4032×3024 frame against a square 2008 request stays 4032×3024
-    (3024 // 2008 == 1), while the aspect-matched request takes it to 2016×1512.
-
-    So the box is the cap scaled to this image's own aspect ratio, then shrunk
-    by :data:`_DRAFT_UNDERSHOOT` so a near-miss lands on the next DCT step.
-    """
-    width, height = size
-    longest = max(width, height)
-    if longest <= 0:
-        return (1, 1)
-    factor = viewport_cap * (1.0 - _DRAFT_UNDERSHOOT) / longest
-    return (max(1, math.ceil(width * factor)), max(1, math.ceil(height * factor)))
+# The draft-mode helper and how far under the cap it may land (#865) live
+# with the thumbnail recipe in scanner.thumbnail, which the scan shares:
+# imported above as _draft_target (the tolerance is DRAFT_UNDERSHOOT there).
 
 
 # Full-res OOM semaphore: caps concurrent rawpy.postprocess() calls (each may
@@ -862,7 +833,7 @@ class ImageService:
         pixel is decoded (#865), so a capped request decodes at the smallest
         libjpeg reduction that meets the cap and a rejected thumb costs no
         decode at all. The output long edge is at the cap, or up to
-        :data:`_DRAFT_UNDERSHOOT` under it when that buys a whole DCT step.
+        :data:`DRAFT_UNDERSHOOT` under it when that buys a whole DCT step.
         """
         try:
             thumb = raw.extract_thumb()  # type: ignore[attr-defined]
@@ -892,7 +863,7 @@ class ImageService:
                     if viewport_cap > 0:
                         # #865 — libjpeg DCT shrink-on-load. Decode at the
                         # largest 1/8, 1/4 or 1/2 reduction that meets the cap
-                        # (within _DRAFT_UNDERSHOOT) instead of at full size:
+                        # (within DRAFT_UNDERSHOOT) instead of at full size:
                         # on iPhone ProRAW the embedded frame is the whole
                         # 8064x6048 sensor (#826) against a 2048 cap, so this
                         # decodes 3 MP rather than 48 MP, and the transpose and

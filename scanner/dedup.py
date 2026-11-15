@@ -47,6 +47,7 @@ except ImportError:
     _IMAGEHASH_AVAILABLE = False
 
 from scanner.grey_store import GREY_SIDE, GREY_SIG_BYTES, GreySig
+from scanner.thumb_store import Thumb
 from scanner.media import RAW_EXTENSIONS, is_video
 from scanner.walker import FileRecord
 
@@ -113,6 +114,12 @@ class HashResult:
     # (``_grey_identical``), behind a reference: in memory (GreyBytes) or in the
     # scan-local GreySigStore (StoredGreySig). Never persisted. None demotes EXACT.
     grey128: Optional[GreySig] = None
+    # The review thumbnail (JPEG bytes, ``scanner.thumbnail``) behind a
+    # reference: in memory (ThumbBytes) or in the scan-local ThumbStore
+    # (StoredThumb). Never persisted by the scanner. None for video, hash
+    # failure, and any HashResult rebuilt without it: such a row gets no
+    # similarity number.
+    thumb: Optional[Thumb] = None
     # GROUPING 10 (G3): Apple ContentIdentifier, upper-cased, backfilled from
     # the exiftool extract in scan_runner. Persisted (``content_identifier``
     # column). None for stills without an Apple MakerNote and for non-Apple files.
@@ -244,6 +251,12 @@ class ManifestRow:
     # GROUPING 10 (G3): Apple ContentIdentifier (upper-cased), persisted so the
     # pairing evidence survives a rescan-free review. Nothing reads it at load.
     content_identifier: Optional[str] = None
+    # How alike this row and its group's Ref look, 0-100 (100 only for the
+    # same bytes), measured by ``scanner.similarity`` at the end of the scan.
+    # None for the Ref itself, for ungrouped rows and for rows without a
+    # thumbnail (video, a picture that did not decode). Persisted
+    # (``similarity`` column).
+    similarity: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------

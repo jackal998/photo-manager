@@ -65,6 +65,10 @@ class PhotoRecord:
     # Read by apply_best_copy to honour the aggressive-delete gate, and served
     # to the web review tree (#1047) so the badge tooltip can say how sure.
     match_confidence: str | None = None
+    # How alike this row and its group's Ref look, 0-100, measured at the end
+    # of the scan (scanner/similarity.py). None for the Ref, for rows that
+    # could not be measured, and for every row of an older manifest.
+    similarity: int | None = None
     # The classifier's reason for this row's grouping (dedup's reason string,
     # e.g. "near-duplicate (hamming=3)" or "unique"); "" when the manifest
     # predates the column or the row is ungrouped. Served to the web tree.
