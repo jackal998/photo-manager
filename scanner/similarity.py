@@ -186,7 +186,7 @@ def _search(cont: Signature, inner: Signature, long_side: int, scales: list[floa
     return best
 
 
-def _placements(cont: Signature, inner: Signature, pixel_ratio: float | None) -> list[Box]:
+def _placements(cont: Signature, inner: Signature) -> list[Box]:
     """Where ``inner`` may sit inside ``cont``: the widest fit (full frame
     when the shapes agree) and the best cross-correlation window."""
     cw, ch = cont.size
@@ -200,8 +200,6 @@ def _placements(cont: Signature, inner: Signature, pixel_ratio: float | None) ->
         if fit is not None:
             out.append(fit[2])
     scales = [float(s) for s in widest * np.linspace(1.0, 0.5, _SCALE_STEPS)]
-    if pixel_ratio is not None and 0.3 < pixel_ratio <= widest:
-        scales.append(pixel_ratio)
     coarse = _search(cont, inner, _SEARCH_SIDE, scales)
     if coarse is None:
         return out
@@ -257,21 +255,16 @@ def _same_shape(a: Signature, b: Signature) -> bool:
     return abs(a.size[1] / a.size[0] - b.size[1] / b.size[0]) / (b.size[1] / b.size[0]) < 0.005
 
 
-def similarity(a: Signature, b: Signature, pixel_ratio: float | None = None) -> float:
-    """How alike ``a`` and ``b`` look, 0 (nothing in common) to 1.
-
-    ``pixel_ratio`` is the width of ``b`` over the width of ``a`` in
-    original pixels, when known: one more scale for the window search to
-    try, exact for a crop that was not resampled.
-    """
+def similarity(a: Signature, b: Signature) -> float:
+    """How alike ``a`` and ``b`` look, 0 (nothing in common) to 1."""
     results: list[float] = []
     full_frame_done = _same_shape(a, b)
     if full_frame_done:
         results.append(_measure(a, b, _FULL_FRAME))
         if results[0] >= _CAP_VALUE:
             return results[0]
-    for cont, inner, ratio in ((a, b, pixel_ratio), (b, a, 1 / pixel_ratio if pixel_ratio else None)):
-        for box in _placements(cont, inner, ratio):
+    for cont, inner in ((a, b), (b, a)):
+        for box in _placements(cont, inner):
             if box == _FULL_FRAME:
                 if full_frame_done:
                     continue  # the full-frame placement is the same both ways

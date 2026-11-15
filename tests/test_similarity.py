@@ -7,11 +7,21 @@ a different picture keeps little, a crop is worth the share it covers.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw, ImageEnhance
 
-from scanner.similarity import SHOWN_CAP, SIGNATURE_SIDE, Signature, ciede2000, percent, similarity
+from scanner.similarity import (
+    SHOWN_CAP,
+    SIGNATURE_SIDE,
+    Signature,
+    _credit,
+    ciede2000,
+    percent,
+    similarity,
+)
 
 
 def _scene(seed: int, size: tuple[int, int] = (640, 480)) -> Image.Image:
@@ -28,8 +38,27 @@ def _scene(seed: int, size: tuple[int, int] = (640, 480)) -> Image.Image:
     return im
 
 
-def _sim(a: Image.Image, b: Image.Image, pixel_ratio: float | None = None) -> float:
-    return similarity(Signature.from_image(a), Signature.from_image(b), pixel_ratio)
+def _sim(a: Image.Image, b: Image.Image) -> float:
+    return similarity(Signature.from_image(a), Signature.from_image(b))
+
+
+def _grey_lightness(value: float) -> float:
+    """CIE L* of an sRGB grey, written out here so the tests do not check
+    the module against itself."""
+    c = value / 255
+    y = c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    return 116 * (y ** (1 / 3) if y > 0.008856 else 7.787 * y + 16 / 116) - 16
+
+
+def _grey_difference(v1: float, v2: float) -> float:
+    """CIEDE2000 between two greys: only the lightness term is left."""
+    l1, l2 = _grey_lightness(v1), _grey_lightness(v2)
+    mean = (l1 + l2) / 2
+    return abs(l1 - l2) / (1 + 0.015 * (mean - 50) ** 2 / math.sqrt(20 + (mean - 50) ** 2))
+
+
+def _flat(value: int) -> Image.Image:
+    return Image.new("RGB", (256, 192), (value, value, value))
 
 
 class TestColourDifference:
@@ -94,6 +123,38 @@ class TestWhatAPersonWouldSay:
         assert _sim(a, b) == pytest.approx(0.90, abs=0.04)
 
 
+class TestTheRuleItself:
+    """Plain grey pictures have no structure to lose, so the credit is the
+    tone factor alone and the rule's two colour constants can be read off."""
+
+    @pytest.mark.parametrize("other", [150, 156])
+    def test_a_colour_difference_up_to_10_reads_as_the_same(self, other):
+        assert _grey_difference(128, other) < 10
+        assert _sim(_flat(128), _flat(other)) == 1.0
+
+    @pytest.mark.parametrize("pair", [(128, 160), (128, 170), (100, 200)])
+    def test_above_10_the_credit_falls_in_proportion_and_ends_at_50(self, pair):
+        difference = _grey_difference(*pair)
+        assert 10 < difference < 50
+        assert _sim(_flat(pair[0]), _flat(pair[1])) == pytest.approx(1 - difference / 50, abs=0.002)
+
+    def test_a_colour_difference_of_50_or_more_keeps_nothing(self):
+        assert _grey_difference(40, 220) > 50
+        assert _sim(_flat(40), _flat(220)) == 0.0
+
+    def test_structure_is_judged_inside_each_cell_with_the_ssim_constant(self):
+        """One visibly different cell whose texture is the mirror image of
+        the other's. With lightness levels 40/44 against 44/40 the product
+        of the two spreads is 4, so the SSIM structure term is
+        (4.5 - 4) / (4.5 + 4); the tone factor comes from the two glance
+        colours of the cell, black against a dark grey."""
+        black, white = np.zeros((1, 1, 3), np.uint8), np.full((1, 1, 3), 76, np.uint8)
+        difference = float(ciede2000(np.array([0.0, 0, 0]), np.array([_grey_lightness(76), 0, 0])))
+        stripes = np.tile(np.array([40.0, 40.0, 44.0, 44.0]), (4, 1))
+        got = _credit(black, white, stripes, stripes[:, ::-1])
+        assert got == pytest.approx((4.5 - 4) / (4.5 + 4) * (1 - difference / 50), abs=1e-4)
+
+
 class TestPlacement:
     def test_a_crop_is_worth_the_share_it_covers(self):
         """The middle 60 % x 60 % of a picture has the picture's own
@@ -102,13 +163,6 @@ class TestPlacement:
         a = _scene(1)
         crop = a.crop((128, 96, 512, 384))
         assert _sim(a, crop) == pytest.approx(0.36, abs=0.02)
-
-    def test_the_known_pixel_ratio_is_one_more_scale_to_try(self):
-        """The crop is 384 of the picture's 640 px wide and was not
-        resampled; telling the search so must not move the answer away."""
-        a = _scene(1)
-        crop = a.crop((128, 96, 512, 384))
-        assert _sim(a, crop, pixel_ratio=384 / 640) == pytest.approx(0.36, abs=0.02)
 
     def test_the_order_of_the_two_pictures_does_not_matter(self):
         a = _scene(1)
@@ -149,9 +203,10 @@ class TestSignature:
         icon = _scene(6, (16, 16))
         assert _sim(icon, icon.copy()) == 1.0
 
-    @pytest.mark.parametrize("mode", ["L", "RGBA", "P"])
+    @pytest.mark.parametrize("mode", ["L", "RGBA", "P", "CMYK", "1"])
     def test_other_pixel_modes_are_read_as_colour(self, mode):
-        """PNG and GIF files arrive as grey, palette or alpha pictures."""
+        """PNG and GIF files arrive as grey, palette, alpha or 1-bit
+        pictures, print exports as CMYK JPEG."""
         a = _scene(1)
         assert _sim(a.convert(mode), a.convert(mode).convert("RGB")) == 1.0
 
