@@ -303,7 +303,7 @@ class TestComputeHashes:
             # (not the dropped rawpy.open_buffer); the path fallback also uses imread.
             mock_rawpy.imread.side_effect = unsupported
 
-            sha, ph, dh, ch, dt, w, h, _, _q, _px, _g = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
+            sha, ph, dh, ch, dt, w, h, _, _q, _px, _g, _t = compute_hashes(f, "raw")  # +dhash at index 2; #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None
@@ -363,7 +363,7 @@ class TestRealDecodeFailures:
         # path fallback — the #75 non-camera-TIFF class, routed to "raw".
         f.write_bytes(b"II*\x00" + b"\x00" * 256)
 
-        sha, ph, dh, ch, dt, w, h, _, _q, _px, _g = compute_hashes(f, "raw")  # #786 added index 7
+        sha, ph, dh, ch, dt, w, h, _, _q, _px, _g, _t = compute_hashes(f, "raw")  # #786 added index 7
 
         assert sha == compute_sha256(f)
         assert ph is None and dh is None and ch is None
@@ -1014,7 +1014,7 @@ class TestRawSingleLibRawOpen:
 
         f = tmp_path / "shot.dng"
         f.write_bytes(b"\x00" * 64)
-        sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g = hasher.compute_hashes(f, "raw")
+        sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g, _t = hasher.compute_hashes(f, "raw")
 
         assert len(opens) == 1, (
             f"LibRaw opened {len(opens)}× for one RAW file — #826 wants exactly 1 "
@@ -1063,7 +1063,7 @@ class TestRawSingleLibRawOpen:
 
         f = tmp_path / "nothumb.dng"
         f.write_bytes(b"\x00" * 64)
-        _sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g = hasher.compute_hashes(f, "raw")
+        _sha, ph, dh, _mc, _date, px_w, px_h, _sig, _q, _px, _g, _t = hasher.compute_hashes(f, "raw")
 
         assert len(opens) == 1, f"LibRaw opened {len(opens)}× on the full-decode route"
         assert (px_w, px_h) == (8064, 6048)
@@ -1121,7 +1121,7 @@ class TestPhashQuality:
         f = tmp_path / "flat.jpg"
         Image.new("RGB", (300, 300), (128, 128, 128)).save(f, "JPEG", quality=95)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 11
+        assert len(out) == 12
         assert out[1] is not None  # a real pHash was produced
         assert out[8] is not None and out[8] < 1.0
 
@@ -1154,7 +1154,7 @@ class TestPhashQuality:
         v = tmp_path / "clip.mov"
         v.write_bytes(b"\x00" * 64)
         out = compute_hashes(v, "mov")
-        assert len(out) == 11
+        assert len(out) == 12
         assert out[8] is None
 
     def test_compute_from_bytes_sets_phash_quality(self, tmp_path):
@@ -1216,27 +1216,27 @@ class TestRgb32PixelSignature:
         f = tmp_path / "a.jpg"
         _write_jpeg(f)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 11
+        assert len(out) == 12
         assert isinstance(out[9], bytes)
         assert len(out[9]) == 3072  # 32 * 32 * 3
 
-    def test_video_early_exit_is_eleven_elements_with_no_signature(self, tmp_path):
+    def test_video_early_exit_is_twelve_elements_with_no_signature(self, tmp_path):
         from scanner.hasher import compute_hashes
 
         v = tmp_path / "clip.mov"
         v.write_bytes(b"\x00" * 64)
         out = compute_hashes(v, "mov")
-        assert len(out) == 11
+        assert len(out) == 12
         assert out[9] is None
         assert out[10] is None
 
-    def test_undecodable_image_early_exit_is_eleven_elements_with_no_signature(self, tmp_path):
+    def test_undecodable_image_early_exit_is_twelve_elements_with_no_signature(self, tmp_path):
         from scanner.hasher import compute_hashes
 
         f = tmp_path / "bad.jpg"
         f.write_bytes(b"not an image at all" * 20)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 11
+        assert len(out) == 12
         assert out[1] is None  # phash: decode failed
         assert out[9] is None
         assert out[10] is None
@@ -1289,7 +1289,7 @@ class TestGrey128Signature:
         f = tmp_path / "a.jpg"
         _write_jpeg(f)
         out = compute_hashes(f, "jpeg")
-        assert len(out) == 11
+        assert len(out) == 12
         assert isinstance(out[10], bytes)
         assert len(out[10]) == 16384  # 128 * 128, one byte per pixel
 
@@ -1433,3 +1433,154 @@ class TestGrey128Signature:
         assert len(grey) == 16384
         assert grey == _box_grey(Image.fromarray(arr, "RGB"))
 
+
+class TestReviewThumbnail:
+    """Element 11 of ``compute_hashes`` is the review screen's own thumbnail.
+
+    A user loses the similarity number for a picture when this is None or
+    oversized, and loses the picture's hashes when making the thumbnail
+    disturbs them (it shrinks the working image in place, so it must run last).
+    """
+
+    @staticmethod
+    def _long_edge(data: bytes) -> int:
+        with Image.open(io.BytesIO(data)) as out:
+            assert out.format == "JPEG"
+            return max(out.size)
+
+    def test_jpeg_source_gives_a_jpeg_thumbnail_within_the_cap(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "big.jpg"
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(f, "JPEG", quality=92)
+
+        thumb = compute_hashes(f, "jpeg")[11]
+
+        assert thumb is not None
+        assert self._long_edge(thumb) <= 512
+
+    def test_png_source_gives_a_jpeg_thumbnail_within_the_cap(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "big.png"
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(f, "PNG")
+
+        thumb = compute_hashes(f, "png")[11]
+
+        assert thumb is not None
+        assert self._long_edge(thumb) <= 512
+
+    def test_video_has_no_review_thumbnail(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        v = tmp_path / "clip.mov"
+        v.write_bytes(b"\x00" * 64)
+
+        assert compute_hashes(v, "mov")[11] is None
+
+    def test_making_the_thumbnail_leaves_png_hashes_unchanged(self, tmp_path):
+        """The thumbnail shrinks the working image in place; the pHash and the
+        pixel signature must still be those of the full-size picture."""
+        import imagehash
+
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "big.png"
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(f, "PNG")
+        with Image.open(f) as src:
+            full = src.convert("RGB")
+
+        out = compute_hashes(f, "png")
+
+        assert out[1] == str(imagehash.phash(full))
+        assert out[9] == full.resize((32, 32), Image.BOX).tobytes()
+
+    def test_a_thumbnail_that_cannot_be_made_is_none_not_an_error(self):
+        """A JPEG whose EXIF block is cut short: Pillow raises ``struct.error``
+        while reading the Orientation, an exception none of the usual guards
+        name. The thumbnail is an extra, so the answer is "no thumbnail" and
+        the caller goes on to return the file's hashes."""
+        from scanner import hasher
+        from scanner.thumbnail import thumbnail_from_jpeg
+
+        buf = io.BytesIO()
+        Image.fromarray(_photo_array(160, 120), "RGB").save(
+            buf, "JPEG", dpi=(72, 72), exif=b"Exif\x00\x00II*\x00\x08"
+        )
+
+        with pytest.raises(Exception):  # noqa: B017, PT011 - the type is Pillow's to choose
+            thumbnail_from_jpeg(buf.getvalue())
+        assert hasher._thumbnail_or_none(thumbnail_from_jpeg, buf.getvalue()) is None
+
+    def test_thumbnail_is_the_review_size_not_the_hash_working_size(self, tmp_path):
+        """The hash pass drafts a 1600 px JPEG down to 400 px. A thumbnail
+        made from that would be too small for the review screen; it must be
+        the 512 px one (a JPEG may land up to the draft undershoot under)."""
+        from scanner.hasher import compute_hashes
+        from scanner.thumbnail import DRAFT_UNDERSHOOT, THUMBNAIL_SIDE
+
+        jpg, png = tmp_path / "big.jpg", tmp_path / "big.png"
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(jpg, "JPEG", quality=92)
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(png, "PNG")
+
+        assert self._long_edge(compute_hashes(jpg, "jpeg")[11]) >= THUMBNAIL_SIDE * (1 - DRAFT_UNDERSHOOT)
+        assert self._long_edge(compute_hashes(png, "png")[11]) == THUMBNAIL_SIDE
+
+    def test_raw_thumbnail_comes_from_the_embedded_preview(self, tmp_path, monkeypatch):
+        """A RAW file with an embedded JPEG preview: the thumbnail is made
+        from the preview inside the one LibRaw open."""
+        from scanner import hasher
+        from scanner.thumbnail import DRAFT_UNDERSHOOT, THUMBNAIL_SIDE
+
+        buf = io.BytesIO()
+        Image.fromarray(_photo_array(2048, 1536), "RGB").save(buf, "JPEG", quality=85)
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(hasher, "rawpy", _fake_rawpy(buf.getvalue(), 8064, 6048, opens))
+        f = tmp_path / "shot.dng"
+        f.write_bytes(b"\x00" * 64)
+
+        thumb = hasher.compute_hashes(f, "raw")[11]
+
+        assert len(opens) == 1
+        assert THUMBNAIL_SIDE * (1 - DRAFT_UNDERSHOOT) <= self._long_edge(thumb) <= THUMBNAIL_SIDE
+
+    def test_raw_thumbnail_comes_from_the_postprocess_when_there_is_no_preview(self, tmp_path, monkeypatch):
+        from scanner import hasher
+        from scanner.thumbnail import THUMBNAIL_SIDE
+
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(
+            hasher, "rawpy", _fake_rawpy(None, 8064, 6048, opens, postprocess_array=_photo_array(2048, 1536))
+        )
+        f = tmp_path / "nothumb.dng"
+        f.write_bytes(b"\x00" * 64)
+
+        thumb = hasher.compute_hashes(f, "raw")[11]
+
+        assert len(opens) == 1
+        assert self._long_edge(thumb) == THUMBNAIL_SIDE
+
+    def test_raw_frame_that_is_its_own_working_image_is_not_shrunk_before_hashing(self, tmp_path, monkeypatch):
+        """A 2000x400 postprocessed frame is too narrow to be reduced, so the
+        frame itself is the picture that gets hashed. The thumbnail shrinks
+        its input in place and must work on a copy here, or the hashes would
+        be those of a 512 px picture."""
+        import imagehash
+
+        from scanner import hasher
+
+        arr = _photo_array(2000, 400)
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(hasher, "rawpy", _fake_rawpy(None, 2000, 400, opens, postprocess_array=arr))
+        f = tmp_path / "strip.dng"
+        f.write_bytes(b"\x00" * 64)
+
+        out = hasher.compute_hashes(f, "raw")
+
+        full = Image.fromarray(arr, "RGB")
+        assert out[1] == str(imagehash.phash(full))
+        assert out[9] == full.resize((32, 32), Image.BOX).tobytes()
+        assert self._long_edge(out[11]) == 512

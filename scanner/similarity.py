@@ -27,6 +27,8 @@ a 0-100 lightness scale); none is fitted to a photo set.
 """
 from __future__ import annotations
 
+from functools import cached_property
+
 import numpy as np
 from PIL import Image
 
@@ -41,6 +43,9 @@ _STRUCTURE_C3 = (0.03 * 100) ** 2 / 2
 _FULL_FRAME = (0.0, 0.0, 1.0, 1.0)
 _SEARCH_SIDE, _REFINE_SIDE = 128, 256
 _SCALE_STEPS, _REFINE_STEPS = 31, 9
+# The score of a one-colour picture in the window search: below every real
+# normalised cross-correlation, which lies in (-1, 1].
+_FEATURELESS = -1.0
 # A full-frame result at or above this already shows SHOWN_CAP; no other
 # placement can show more, so the window search is skipped.
 _CAP_VALUE = (SHOWN_CAP - 0.5) / 100
@@ -127,10 +132,19 @@ class Signature:
     def __init__(self, colour: Image.Image) -> None:
         self.size = colour.size
         self._colour = colour
-        rgb = np.asarray(colour)
-        self._light = Image.fromarray(np.clip(np.rint(_lightness(rgb) * 2.55), 0, 255).astype(np.uint8))
-        self._grey = colour.convert("L")
         self._planes: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+
+    @cached_property
+    def _light(self) -> Image.Image:
+        """Lightness (CIE L* x 2.55). Built on first use: a pair that reads
+        the same in every glance cell never asks for it."""
+        lightness = _lightness(np.asarray(self._colour))
+        return Image.fromarray(np.clip(np.rint(lightness * 2.55), 0, 255).astype(np.uint8))
+
+    @cached_property
+    def _grey(self) -> Image.Image:
+        """Grey picture for the placement search. Built on first use."""
+        return self._colour.convert("L")
 
     @classmethod
     def from_image(cls, image: Image.Image) -> Signature:
@@ -157,7 +171,12 @@ def _window_sum(integral: np.ndarray, h: int, w: int) -> np.ndarray:
 def _search(cont: Signature, inner: Signature, long_side: int, scales: list[float]) -> tuple[float, float, Box] | None:
     """Best normalised cross-correlation of ``inner``, at each width
     ``scale`` x the width of ``cont``, over every offset inside ``cont``.
-    Returns (score, scale, box as fractions of cont)."""
+    Returns (score, scale, box as fractions of cont).
+
+    A featureless ``inner`` (one flat colour) correlates with nothing, so
+    its first, widest fit is returned at the origin with the score
+    :data:`_FEATURELESS` and the other scales are not tried.
+    """
     img, img_fft, sums, squares = cont._plane(long_side)
     h, w = img.shape
     aspect = inner.size[1] / inner.size[0]
@@ -173,14 +192,13 @@ def _search(cont: Signature, inner: Signature, long_side: int, scales: list[floa
         centred = tpl - tpl.mean()
         norm = np.sqrt((centred * centred).sum())
         if norm < 1e-6:
-            score, y, x = -1.0, 0, 0  # featureless: any offset is as good
-        else:
-            corr = np.fft.irfft2(img_fft * np.conj(np.fft.rfft2(centred, s=img.shape)), s=img.shape)
-            corr = corr[: h - th + 1, : w - tw + 1]
-            s1, s2 = _window_sum(sums, th, tw), _window_sum(squares, th, tw)
-            ncc = corr / (np.sqrt(np.maximum(s2 - s1 * s1 / tpl.size, float(tpl.size))) * norm)
-            y, x = (int(v) for v in np.unravel_index(np.argmax(ncc), ncc.shape))
-            score = float(ncc[y, x])
+            return best or (_FEATURELESS, scale, (0.0, 0.0, tw / w, th / h))
+        corr = np.fft.irfft2(img_fft * np.conj(np.fft.rfft2(centred, s=img.shape)), s=img.shape)
+        corr = corr[: h - th + 1, : w - tw + 1]
+        s1, s2 = _window_sum(sums, th, tw), _window_sum(squares, th, tw)
+        ncc = corr / (np.sqrt(np.maximum(s2 - s1 * s1 / tpl.size, float(tpl.size))) * norm)
+        y, x = (int(v) for v in np.unravel_index(np.argmax(ncc), ncc.shape))
+        score = float(ncc[y, x])
         if best is None or score > best[0]:
             best = (score, scale, (x / w, y / h, tw / w, th / h))
     return best
@@ -201,8 +219,8 @@ def _placements(cont: Signature, inner: Signature) -> list[Box]:
             out.append(fit[2])
     scales = [float(s) for s in widest * np.linspace(1.0, 0.5, _SCALE_STEPS)]
     coarse = _search(cont, inner, _SEARCH_SIDE, scales)
-    if coarse is None:
-        return out
+    if coarse is None or coarse[0] <= _FEATURELESS:
+        return out  # nothing fits, or the picture has no feature to place
     step = widest * 0.5 / (_SCALE_STEPS - 1)
     fine = _search(
         cont, inner, _REFINE_SIDE,
@@ -219,9 +237,9 @@ def _cells(x: np.ndarray) -> np.ndarray:
     return x.reshape(h, CELL, w, CELL).transpose(0, 2, 1, 3).reshape(h, w, CELL * CELL)
 
 
-def _credit(glance_a: np.ndarray, glance_b: np.ndarray, light_a: np.ndarray, light_b: np.ndarray) -> float:
-    """Mean credit over the glance cells (steps 1 and 2 of the module doc)."""
-    colour = ciede2000(_lab(glance_a), _lab(glance_b))
+def _credit(colour: np.ndarray, light_a: np.ndarray, light_b: np.ndarray) -> float:
+    """Mean credit over the glance cells (steps 1 and 2 of the module doc),
+    given each cell's colour difference and the two lightness pictures."""
     ca, cb = _cells(light_a), _cells(light_b)
     da, db = ca - ca.mean(-1, keepdims=True), cb - cb.mean(-1, keepdims=True)
     structure = ((da * db).mean(-1) + _STRUCTURE_C3) / (
@@ -232,23 +250,36 @@ def _credit(glance_a: np.ndarray, glance_b: np.ndarray, light_a: np.ndarray, lig
 
 
 def _measure(cont: Signature, inner: Signature, box: Box) -> float:
-    """Credit of ``inner`` laid over ``box`` of ``cont``, times coverage."""
+    """Credit of ``inner`` laid over ``box`` of ``cont``, times coverage.
+
+    Most pairs of a duplicate group read the same in every cell. Those are
+    answered from the glance alone: the lightness pictures are only built
+    when some cell differs visibly, and two identical glances skip the
+    colour difference too. A picture smaller than the glance is measured at
+    its own size; enlarging it would repeat the same cells.
+    """
     x0, y0, w, h = box
-    glance = _fit(inner.size, GLANCE_SIDE)
+    coverage = min(1.0, w * h)
+    glance = _fit(inner.size, min(GLANCE_SIDE, max(inner.size)))
     fine = (glance[0] * CELL, glance[1] * CELL)
+    cw, ch = cont.size
+    region = None if box == _FULL_FRAME else (x0 * cw, y0 * ch, (x0 + w) * cw, (y0 + h) * ch)
 
-    def part(sig: Signature, crop: bool) -> tuple[np.ndarray, np.ndarray]:
-        cw, ch = sig.size
-        region = (x0 * cw, y0 * ch, (x0 + w) * cw, (y0 + h) * ch) if crop else None
-        small = np.asarray(sig._colour.resize(glance, Image.BOX, box=region))
-        light = sig._light
-        if crop or light.size != fine:
-            light = light.resize(fine, Image.BILINEAR, box=region)
-        return small, np.asarray(light, dtype=np.float64) / 2.55
+    glance_a = np.asarray(cont._colour.resize(glance, Image.BOX, box=region))
+    glance_b = np.asarray(inner._colour.resize(glance, Image.BOX))
+    if np.array_equal(glance_a, glance_b):
+        return coverage
+    colour = ciede2000(_lab(glance_a), _lab(glance_b))
+    if not (colour > SAME_COLOUR).any():
+        return coverage
 
-    glance_a, light_a = part(cont, box != _FULL_FRAME)
-    glance_b, light_b = part(inner, False)
-    return _credit(glance_a, glance_b, light_a, light_b) * min(1.0, w * h)
+    def light(sig: Signature, crop: tuple[float, float, float, float] | None) -> np.ndarray:
+        picture = sig._light
+        if crop is not None or picture.size != fine:
+            picture = picture.resize(fine, Image.BILINEAR, box=crop)
+        return np.asarray(picture, dtype=np.float64) / 2.55
+
+    return _credit(colour, light(cont, region), light(inner, None)) * coverage
 
 
 def _same_shape(a: Signature, b: Signature) -> bool:

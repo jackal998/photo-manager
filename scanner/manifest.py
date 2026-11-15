@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS migration_manifest (
     offset_time_original TEXT,
     match_confidence TEXT,
     phash_quality    REAL,
-    content_identifier TEXT
+    content_identifier TEXT,
+    similarity       INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_source_hash ON migration_manifest(source_hash);
 CREATE INDEX IF NOT EXISTS idx_phash       ON migration_manifest(phash);
@@ -59,8 +60,8 @@ INSERT INTO migration_manifest
      pixel_width, pixel_height,
      exif_tag_count, gps_present, xmp_derived, score,
      subsec_time_original, offset_time_original, match_confidence, phash_quality,
-     content_identifier)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?,  ?)
+     content_identifier, similarity)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?)
 """
 
 
@@ -173,6 +174,7 @@ def write_manifest(
                     r.match_confidence,
                     r.phash_quality,
                     r.content_identifier,
+                    r.similarity,
                 )
                 for r in rows
             ],

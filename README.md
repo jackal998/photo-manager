@@ -237,7 +237,7 @@ column), then these columns, left to right:
 | Column | Meaning |
 |--------|---------|
 | **File Name** | File name. Takes whatever width the other columns leave, with a 160 px floor. |
-| **Similarity** | A badge saying how this row relates to its group's chosen keeper: **★ Ref** (the keeper), `100%` (exact duplicate), `N%` (near match), **★ N%** in a dashed pill (linked indirectly through another member), or `—` (video / no comparable image). The ★ marks the two states that are not a direct measurement against the keeper — the keeper itself, and a transitive match. Colour, border style and weight all differ, so the badge still reads in grayscale; the scanner's raw classification sits in its tooltip. How groups are formed (and why): [`docs/grouping-topology.md`](docs/grouping-topology.md). |
+| **Similarity** | A badge saying how this row relates to its group's chosen keeper: **★ Ref** (the keeper), `100%` (a byte-identical copy of the keeper), `N%` (how alike the picture and the keeper look; at most 99 for any other file), **★ N%** in a dashed pill (linked indirectly through another member), or `—` (video / not measurable). The ★ marks the two states that are not a direct measurement against the keeper — the keeper itself, and a transitive match. Colour, border style and weight all differ, so the badge still reads in grayscale; the scanner's raw classification sits in its tooltip. How groups are formed (and why): [`docs/grouping-topology.md`](docs/grouping-topology.md). |
 | **Action** | Your decision, as a three-segment control: **Keep** / **Delete** / **Skip**. |
 | **Score** | Keep-worthiness ranking in `[0.0, 1.0]` (#187). Within-group rows sort by this descending — best copy at the top. Empty for Live Photo MOV passengers. |
 | **Resolution** | Pixel dimensions (e.g. `4032×3024`) |
@@ -527,6 +527,11 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
   is stored; images below 16.0 (near-black / near-flat frames whose degenerate pHash
   bridged unrelated photos) are kept out of pHash grouping but still get exact-SHA dedup.
   Pre-`"5"` rows are `NULL` and group as before until a re-scan
+- **Similarity number** — `similarity` (0–100) says how alike a grouped picture and its group's
+  Ref look, measured at the end of the scan from the review thumbnails the hash pass makes
+  (no second read of any file). The Ref a group was measured against carries 100; `NULL` for
+  videos and for rows that could not be measured; rows scanned before this column are `NULL`
+  and show the pHash-derived number
 - **Apple ContentIdentifier** — `content_identifier` (upper-cased, NULL when absent) is
   the device-written identity that pairs a Live Photo still with its video. HEIC and video identities are read
   through exiftool, so a scan without exiftool makes no Live Photo pairs. Pre-GROUPING-10

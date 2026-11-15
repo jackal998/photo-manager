@@ -41,6 +41,10 @@ def pick_ref_winner(items_list: list[Any]) -> Any | None:
     - Only considers Ref-tier items (priority == 1).
     - Tie-break key: (priority, -(score or -inf), str(file_path)).
     - Returns None if no Ref-tier item exists.
+
+    Also called at the end of a scan with manifest rows (their path is
+    ``source_path``), so the Ref a similarity number is measured against is
+    the one this function shows later.
     """
     best_item: Any | None = None
     best_key: tuple | None = None
@@ -51,7 +55,7 @@ def pick_ref_winner(items_list: list[Any]) -> Any | None:
             continue  # not Ref-tier — skip
         score = getattr(it, "score", None)
         score_key = -(score if score is not None else -math.inf)
-        path_key = str(getattr(it, "file_path", ""))
+        path_key = str(getattr(it, "file_path", None) or getattr(it, "source_path", ""))
         key = (priority, score_key, path_key)
         if best_key is None or key < best_key:
             best_key = key
@@ -102,6 +106,40 @@ def compute_similarity(
     return {"kind": "none", "percent": None}
 
 
+def measured_similarity(action: str, record: Any, is_ref_winner: bool, ref_gone: bool) -> dict[str, Any]:
+    """Structured similarity for a row of a group the scan measured (at
+    least one of its rows carries a stored ``similarity``).
+
+    The stored number says how alike the row and the Ref look; it was taken
+    against the Ref the scan saw. ``ref_gone`` means the row now shown as
+    Ref is not that picture (see :func:`_measured_ref_gone`), so no stored
+    number describes the rows against it: every row shows a dash. A row
+    without a stored number (video, a picture that did not decode) shows a
+    dash too.
+    """
+    if is_ref_winner:
+        return {"kind": "ref", "percent": None}
+    stored = getattr(record, "similarity", None)
+    if ref_gone or stored is None:
+        return {"kind": "none", "percent": None}
+    kind = "percent" if action in ("EXACT", "REVIEW_DUPLICATE") else "passenger"
+    return {"kind": kind, "percent": stored}
+
+
+def _measured_ref_gone(ref: Any | None) -> bool:
+    """True when the row shown as Ref is not the picture a measured group's
+    numbers were taken against.
+
+    The scan stores 100 on the Ref it measured against and on rows with
+    that Ref's own bytes, and at most 99 on anything else. So a shown Ref
+    carrying 100 is that picture, byte for byte, and every stored number is
+    valid against it. No Ref at all, or a Ref with another value or none
+    (the measured Ref was deleted or removed, or a rescore moved the pick),
+    means the numbers describe a picture that is no longer the reference.
+    """
+    return ref is None or getattr(ref, "similarity", None) != 100
+
+
 def _normalize_decision(user_decision: str) -> str:
     """Map legacy 'keep' → '' (canonical undecided); pass all other values through."""
     if user_decision == "keep":
@@ -125,6 +163,8 @@ def _build_file_row(
     record: Any,
     is_ref_winner: bool,
     ref_phash: str | None,
+    measured: bool = False,
+    ref_gone: bool = False,
 ) -> dict[str, Any]:
     """Build a FileRow dict for one PhotoRecord."""
     action = getattr(record, "action", "") or ""
@@ -140,7 +180,11 @@ def _build_file_row(
         "user_decision": _normalize_decision(raw_decision),
         "is_locked": bool(getattr(record, "is_locked", False)),
         "is_ref_winner": is_ref_winner,
-        "similarity": compute_similarity(action, record, is_ref_winner, ref_phash),
+        "similarity": (
+            measured_similarity(action, record, is_ref_winner, ref_gone)
+            if measured
+            else compute_similarity(action, record, is_ref_winner, ref_phash)
+        ),
         "score": getattr(record, "score", None),
         # #680 — the per-dimension signals the composite ``score`` is built
         # from, so the web QA harness can assert extraction→scoring→storage
@@ -191,8 +235,14 @@ def serialize_groups(groups: list[Any]) -> list[dict[str, Any]]:
         ref = pick_ref_winner(items_list)
         ref_phash = getattr(ref, "phash", None) if ref is not None else None
 
+        # A group the scan measured has a stored similarity on at least one
+        # row; whether those numbers still apply depends on the row shown as
+        # Ref (_measured_ref_gone).
+        measured = any(getattr(r, "similarity", None) is not None for r in items_list)
+        ref_gone = _measured_ref_gone(ref)
+
         file_rows = [
-            _build_file_row(record, record is ref, ref_phash)
+            _build_file_row(record, record is ref, ref_phash, measured, ref_gone)
             for record in items_list
         ]
 

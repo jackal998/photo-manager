@@ -138,6 +138,16 @@ class TestTheRuleItself:
         assert 10 < difference < 50
         assert _sim(_flat(pair[0]), _flat(pair[1])) == pytest.approx(1 - difference / 50, abs=0.002)
 
+    def test_a_picture_smaller_than_the_glance_follows_the_same_rule(self):
+        """An 8 px picture is measured at its own size instead of being
+        enlarged first; its number must not depend on that."""
+        def tiny(value: int) -> Image.Image:
+            return Image.new("RGB", (8, 8), (value, value, value))
+
+        difference = _grey_difference(128, 170)
+        assert _sim(tiny(128), tiny(170)) == pytest.approx(1 - difference / 50, abs=0.002)
+        assert _sim(tiny(128), tiny(150)) == 1.0
+
     def test_a_colour_difference_of_50_or_more_keeps_nothing(self):
         assert _grey_difference(40, 220) > 50
         assert _sim(_flat(40), _flat(220)) == 0.0
@@ -146,12 +156,11 @@ class TestTheRuleItself:
         """One visibly different cell whose texture is the mirror image of
         the other's. With lightness levels 40/44 against 44/40 the product
         of the two spreads is 4, so the SSIM structure term is
-        (4.5 - 4) / (4.5 + 4); the tone factor comes from the two glance
-        colours of the cell, black against a dark grey."""
-        black, white = np.zeros((1, 1, 3), np.uint8), np.full((1, 1, 3), 76, np.uint8)
+        (4.5 - 4) / (4.5 + 4); the tone factor comes from the colour
+        difference of the cell, here black against a dark grey."""
         difference = float(ciede2000(np.array([0.0, 0, 0]), np.array([_grey_lightness(76), 0, 0])))
         stripes = np.tile(np.array([40.0, 40.0, 44.0, 44.0]), (4, 1))
-        got = _credit(black, white, stripes, stripes[:, ::-1])
+        got = _credit(np.array([[difference]]), stripes, stripes[:, ::-1])
         assert got == pytest.approx((4.5 - 4) / (4.5 + 4) * (1 - difference / 50), abs=1e-4)
 
 

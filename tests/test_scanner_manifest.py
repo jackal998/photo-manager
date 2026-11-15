@@ -152,6 +152,23 @@ class TestWriteManifest:
         assert stored["/a/IMG_1.HEIC"] == "A1B2C3D4-0000-4000-8000-000000000001"
         assert stored["/a/plain.jpg"] is None
 
+    def test_similarity_round_trips_through_write(self, tmp_path):
+        """The measured 0-100 number is persisted as given. A row the scan could
+        not measure (the Ref, a video) stores NULL, never 0: 0 would read as
+        'nothing alike' on the review screen."""
+        out = tmp_path / "manifest.sqlite"
+        dup = _row("/a/dup.jpg", "REVIEW_DUPLICATE")
+        dup.similarity = 87
+        ref = _row("/a/ref.jpg", "")
+
+        write_manifest([dup, ref], out)
+
+        with sqlite3.connect(out) as conn:
+            stored = dict(conn.execute(
+                "SELECT source_path, similarity FROM migration_manifest"
+            ).fetchall())
+        assert stored == {"/a/dup.jpg": 87, "/a/ref.jpg": None}
+
     def test_overwrites_existing_file(self, tmp_path):
         import gc
         out = tmp_path / "manifest.sqlite"

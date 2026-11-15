@@ -55,6 +55,8 @@ from typing import TYPE_CHECKING, Optional, Union
 from scanner.dedup import HashResult
 from scanner.exif import extract_pil_scoring_signals, parse_exif_date
 from scanner.grey_store import GREY_SIDE, GreyBytes
+from scanner.thumb_store import ThumbBytes
+from scanner.thumbnail import thumbnail_from_image, thumbnail_from_jpeg
 
 if TYPE_CHECKING:
     from scanner.walker import FileRecord
@@ -230,10 +232,45 @@ def _grey_for_route(
     return _grey_signature(img)
 
 
+def _thumbnail_or_none(make, source) -> bytes | None:
+    """``make(source)``, or ``None`` when the thumbnail cannot be made. A
+    thumbnail is an extra: its failure must never cost a file its hashes."""
+    try:
+        return make(source)
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+        # Deliberately broad: Pillow reports a damaged file with whatever
+        # its parser tripped on (OSError, SyntaxError, struct.error, ...),
+        # and none of them may take the file's hashes down with it.
+        return None
+
+
+def _thumbnail_for_route(
+    file_type: str,
+    is_jpeg: bool,
+    img: Image.Image,
+    data: bytes,
+    raw_thumb: bytes | None,
+) -> bytes | None:
+    """The review thumbnail of the picture, by decode route.
+
+    * RAW — made inside the single LibRaw open (``_raw_preview_and_sizes``).
+    * JPEG / MPO — one more reduced decode of the bytes in memory: the
+      working image is drafted to :data:`_DRAFT_TARGET`, which is smaller
+      than a thumbnail for most cameras.
+    * Everything else (PNG, WebP, HEIC) — from the decoded working image,
+      shrunk IN PLACE, so the caller must be done with ``img``.
+    """
+    if file_type == "raw":
+        return raw_thumb
+    if is_jpeg:
+        return _thumbnail_or_none(thumbnail_from_jpeg, data)
+    return _thumbnail_or_none(thumbnail_from_image, img)
+
+
 def _hashes_from_data(
     path: Path, file_type: str, data: bytes
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes]]:
-    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality, rgb32, grey128)``
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes], bytes | None]:
+    """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality, rgb32, grey128, thumb)``
     from bytes that have already been read off disk.
 
     ``phash_quality`` (recipe "5") is :func:`_phash_quality` of the working
@@ -245,6 +282,11 @@ def _hashes_from_data(
 
     ``grey128`` (recipe "6") is the 16,384-byte full-resolution grey signature
     routed by :func:`_grey_for_route`; ``None`` exactly when ``rgb32`` is ``None``.
+
+    ``thumb`` is the review thumbnail (JPEG bytes, :mod:`scanner.thumbnail`)
+    routed by :func:`_thumbnail_for_route`; ``None`` when ``phash`` is ``None``
+    or the thumbnail could not be made. Scan-time only: the similarity number
+    is read from it after grouping.
 
     This is the single implementation used by both :func:`compute_hashes`
     (which reads the bytes) and :func:`compute_from_bytes` (which receives
@@ -259,7 +301,7 @@ def _hashes_from_data(
     sha = hashlib.sha256(data).hexdigest()
 
     if not _HASH_AVAILABLE:
-        return sha, None, None, None, None, None, None, None, None, None, None
+        return sha, None, None, None, None, None, None, None, None, None, None, None
 
     img: Optional[Image.Image] = None
     raw_date: Optional[str] = None
@@ -267,6 +309,7 @@ def _hashes_from_data(
     px_h: Optional[int] = None
     inmemory_signals: Optional[dict] = None
     raw_grey: Optional[bytes] = None  # RAW only: set by _raw_preview_and_sizes
+    raw_thumb: bytes | None = None  # RAW only: set by _raw_preview_and_sizes
     is_jpeg = False  # set by the non-RAW branch from PIL's format
 
     if file_type == "raw":
@@ -278,12 +321,12 @@ def _hashes_from_data(
         # #591 — the in-memory source is a fresh io.BytesIO over the bytes we
         # already read (rawpy 0.26.1 has no module-level open_buffer); no disk
         # re-read.
-        img, px_w, px_h, raw_grey = _raw_preview_and_sizes(io.BytesIO(data))
+        img, px_w, px_h, raw_grey, raw_thumb = _raw_preview_and_sizes(io.BytesIO(data))
         if img is None:
             # In-memory decode failed (genuine LibRaw error / non-camera TIFF
             # routed to 'raw', #75) — retry from the path so the file still
             # skips cleanly. Same recipe on both routes.
-            img, fallback_w, fallback_h, raw_grey = _raw_preview_and_sizes(str(path))
+            img, fallback_w, fallback_h, raw_grey, raw_thumb = _raw_preview_and_sizes(str(path))
             if px_w is None:
                 px_w, px_h = fallback_w, fallback_h
         # True sensor dimensions come from rawpy metadata, never from the
@@ -341,12 +384,12 @@ def _hashes_from_data(
             img = None
 
     if img is None:
-        return sha, None, None, None, raw_date, None, None, inmemory_signals, None, None, None
+        return sha, None, None, None, raw_date, None, None, inmemory_signals, None, None, None, None
     try:
         tiny = img.resize((1, 1), Image.LANCZOS)
         mc = tiny.getpixel((0, 0))[:3]
         phash = str(imagehash.phash(img))
-        return (
+        hashes = (
             sha,
             phash,
             str(imagehash.dhash(img)),
@@ -364,18 +407,22 @@ def _hashes_from_data(
         # Wiping them to None would force scoring._score_resolution to 0.0 even
         # though the dimensions are known and valid; phash failure shouldn't
         # cascade into a fake resolution-zero penalty.
-        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals, None, None, None
+        return sha, None, None, None, raw_date, px_w, px_h, inmemory_signals, None, None, None, None
+    # Last on purpose: the thumbnail may shrink ``img`` in place.
+    return (*hashes, _thumbnail_for_route(file_type, is_jpeg, img, data, raw_thumb))
 
 
 def compute_hashes(
     path: Path, file_type: str
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes]]:
-    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals, phash_quality, rgb32, grey128)``.
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes], bytes | None]:
+    """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals, phash_quality, rgb32, grey128, thumb)``.
 
     ``rgb32`` is the 32×32 RGB pixel signature (3,072 bytes) for the EXACT
     pixel-identity gate; ``None`` for video/skip and on decode failure.
     ``grey128`` is the 128×128 grey signature (16,384 bytes) for the same gate;
     ``None`` exactly when ``rgb32`` is.
+    ``thumb`` is the review thumbnail as JPEG bytes (:mod:`scanner.thumbnail`);
+    ``None`` for video/gif/skip, on decode failure, or when it could not be made.
 
     All values are derived from one in-memory read — no extra file open.
     ``dhash`` is a second, independent perceptual hash (gradient/brightness
@@ -392,7 +439,7 @@ def compute_hashes(
     For videos SHA-256 is streamed in 64 KB chunks so large files never load into RAM.
     """
     if file_type in ("mp4", "mov", "gif", "skip"):
-        return compute_sha256(path), None, None, None, None, None, None, None, None, None, None
+        return compute_sha256(path), None, None, None, None, None, None, None, None, None, None, None
 
     # Single read: delegate all hash computation to _hashes_from_data.
     return _hashes_from_data(path, file_type, path.read_bytes())
@@ -460,7 +507,7 @@ def run_hash_for_record(
     try:
         (
             sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals,
-            phash_quality, rgb32, grey128,
+            phash_quality, rgb32, grey128, thumb,
         ) = compute_hashes(record.path, record.file_type)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # One bad file must never abort the whole scan — caller logs + skips.
@@ -487,6 +534,7 @@ def run_hash_for_record(
         phash_quality=phash_quality,
         rgb32=rgb32,
         grey128=GreyBytes(grey128) if grey128 is not None else None,
+        thumb=ThumbBytes(thumb) if thumb is not None else None,
     )
 
 
@@ -540,11 +588,11 @@ def compute_from_bytes(
             # video/gif/skip: stream SHA from path, no perceptual hashes.
             sha256 = compute_sha256(record.path)
             phash = dhash = mean_color = raw_date = px_w = px_h = inmemory_signals = None
-            phash_quality = rgb32 = grey128 = None
+            phash_quality = rgb32 = grey128 = thumb = None
         else:
             (
                 sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals,
-                phash_quality, rgb32, grey128,
+                phash_quality, rgb32, grey128, thumb,
             ) = _hashes_from_data(record.path, record.file_type, data)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return idx, HashFailure(type(exc).__name__, str(exc))
@@ -568,6 +616,7 @@ def compute_from_bytes(
         phash_quality=phash_quality,
         rgb32=rgb32,
         grey128=GreyBytes(grey128) if grey128 is not None else None,
+        thumb=ThumbBytes(thumb) if thumb is not None else None,
     )
 
 
@@ -700,9 +749,14 @@ def _raw_preview_from_jpeg_bytes(thumb_data: bytes) -> Optional[Image.Image]:
 
 def _raw_preview_and_sizes(
     source: "io.BytesIO | str",
-) -> "tuple[Optional[Image.Image], Optional[int], Optional[int], Optional[bytes]]":
+) -> "tuple[Optional[Image.Image], Optional[int], Optional[int], Optional[bytes], bytes | None]":
     """ONE LibRaw open → ``(hash-ready preview, sensor width, sensor height,
-    grey signature)``.
+    grey signature, review thumbnail)``.
+
+    The fifth value is the review thumbnail (:mod:`scanner.thumbnail`) of the
+    same picture, made here for the same reason as the grey signature: the
+    embedded preview bytes and the postprocessed frame exist only inside this
+    one LibRaw open. ``None`` when it could not be made.
 
     GROUPING 11 — the fourth value is the 128x128 grey signature of the same
     picture at FULL resolution, taken before the working-resolution reduce: the
@@ -722,7 +776,7 @@ def _raw_preview_and_sizes(
     ``io.BytesIO`` per call — a reused/non-zero-position buffer raises
     ``LibRawIOError``.
 
-    Returns ``(None, None, None)`` on any LibRaw failure (incl.
+    Returns five ``None`` on any LibRaw failure (incl.
     ``LibRawFileUnsupportedError`` for a non-camera TIFF routed to ``raw``,
     #75), so the caller can fall back or skip the file cleanly.
 
@@ -731,7 +785,7 @@ def _raw_preview_and_sizes(
     returns a portrait 8064×6048 array from an 8064×6048 landscape sensor).
     """
     if not _RAWPY_AVAILABLE:
-        return None, None, None, None
+        return None, None, None, None, None
     try:
         with rawpy.imread(source) as raw:
             px_w, px_h = raw.sizes.width, raw.sizes.height
@@ -740,7 +794,10 @@ def _raw_preview_and_sizes(
                 if thumb.format == rawpy.ThumbFormat.JPEG:
                     img = _raw_preview_from_jpeg_bytes(thumb.data)
                     if img is not None:
-                        return img, px_w, px_h, _grey_from_jpeg_bytes(thumb.data)
+                        return (
+                            img, px_w, px_h, _grey_from_jpeg_bytes(thumb.data),
+                            _thumbnail_or_none(thumbnail_from_jpeg, thumb.data),
+                        )
             except rawpy.LibRawNoThumbnailError:
                 pass
             # Full decode fallback — slower but always works.
@@ -754,6 +811,9 @@ def _raw_preview_and_sizes(
             # resolutions up to 38 phash bits apart.
             factor = _draft_equivalent_scale(full.size)
             img = full.reduce(factor) if factor > 1 else full
-            return img, px_w, px_h, grey
+            # ``full`` is free to shrink in place once ``img`` is a reduced
+            # copy; when it IS the working image the thumbnail takes a copy.
+            review = _thumbnail_or_none(thumbnail_from_image, full if factor > 1 else full.copy())
+            return img, px_w, px_h, grey, review
     except (OSError, ValueError, AttributeError, rawpy.LibRawError):
-        return None, None, None, None
+        return None, None, None, None, None

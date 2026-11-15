@@ -27,6 +27,7 @@ import pytest
 from PIL import Image as PILImage
 
 import infrastructure.image_service as svc_mod
+from scanner.thumbnail import DRAFT_UNDERSHOOT
 from infrastructure.image_service import (
     PREVIEW_RECIPE_VERSION,
     ImageService,
@@ -647,7 +648,7 @@ class TestDngEmbeddedJpegFastPath:
                 f"expected the half-scale output, got {decoded.size}"
             )
             assert max(decoded.size) <= 2048, "must never exceed the cap"
-            assert max(decoded.size) >= 2048 * (1 - svc_mod._DRAFT_UNDERSHOOT), (
+            assert max(decoded.size) >= 2048 * (1 - DRAFT_UNDERSHOOT), (
                 "must never fall further under the cap than the declared "
                 f"tolerance; got {decoded.size}"
             )
