@@ -798,41 +798,43 @@ def _pixel_count(h: HashResult) -> int | None:
     return h.pixel_width * h.pixel_height
 
 
-def _original_evidence_floor(bucket: list[HashResult]) -> int | None:
-    """GROUPING 19 — the pixel count a dated member must exceed to be taken as
-    the original before the format order.
+def _dated_pixel_ceiling(bucket: list[HashResult]) -> int | None:
+    """GROUPING 19 — the largest pixel count among the dated members of a
+    bucket, or ``None`` when no dated member has a known size."""
+    dated = [
+        pixels
+        for h in bucket
+        if h.exif_date is not None and (pixels := _pixel_count(h)) is not None
+    ]
+    return max(dated, default=None)
+
+
+def _evidence_rank(h: HashResult, dated_ceiling: int | None) -> int:
+    """GROUPING 19 — 1 for a member the evidence names a copy, else 0.
 
     A copy made from a picture normally has no more pixels and no more EXIF
     than its source: a re-encode keeps or shrinks the picture and keeps or
-    strips the capture date. So a member with a capture date and more pixels
-    than every undated member is taken as their source, whatever its format.
-    ``None`` when the bucket carries no such evidence: it has no undated
-    member, or an undated member of unknown size (nothing to exceed for
-    certain)."""
-    undated = [_pixel_count(h) for h in bucket if h.exif_date is None]
-    if not undated or any(pixels is None for pixels in undated):
-        return None
-    return max(undated)
-
-
-def _evidence_rank(h: HashResult, floor: int | None) -> int:
-    """0 for a member the evidence names an original (dated, and more pixels
-    than ``floor``, see ``_original_evidence_floor``), else 1."""
+    strips the capture date. So a member with no capture date and fewer pixels
+    than a dated member of its bucket (``_dated_pixel_ceiling``) is taken as a
+    copy, and it ranks after every member that is not, whatever the formats.
+    A dated member is never ranked down, and neither is an undated member of
+    unknown size or one at least as large as every dated member: nothing names
+    those a copy, so the order below decides between them."""
     pixels = _pixel_count(h)
-    if floor is None or h.exif_date is None or pixels is None:
-        return 1
-    return 0 if pixels > floor else 1
+    if dated_ceiling is None or h.exif_date is not None or pixels is None:
+        return 0
+    return 1 if pixels < dated_ceiling else 0
 
 
 def _keeper_key(
-    h: HashResult, source_priority: dict[str, int], evidence_floor: int | None = None
+    h: HashResult, source_priority: dict[str, int], dated_ceiling: int | None = None
 ) -> tuple:
-    """The keeper rule of an all-lossy bucket: a member the evidence names an
-    original (GROUPING 19, ``_evidence_rank``), then highest format, then
+    """The keeper rule of an all-lossy bucket: a member the evidence names a
+    copy last (GROUPING 19, ``_evidence_rank``), then highest format, then
     highest source priority, then the larger picture (GROUPING 17), then
     lexicographically smallest path (#792)."""
     return (
-        _evidence_rank(h, evidence_floor),
+        _evidence_rank(h, dated_ceiling),
         FORMAT_PRIORITY.get(h.record.file_type, 99),
         _priority(h.record.source_label, source_priority),
         _pixel_rank(h),
@@ -856,8 +858,8 @@ def _pixel_clusters(
     "pixel check unavailable" or a hint, as before.
     """
     clusters: list[list[HashResult]] = []
-    floor = _original_evidence_floor(lossy)
-    for member in sorted(lossy, key=lambda h: _keeper_key(h, source_priority, floor)):
+    ceiling = _dated_pixel_ceiling(lossy)
+    for member in sorted(lossy, key=lambda h: _keeper_key(h, source_priority, ceiling)):
         for cluster in clusters:
             if _pixels_identical(cluster[0], member) is True:
                 cluster.append(member)
@@ -1155,9 +1157,9 @@ def _mean_color_passes(a: HashResult, b: HashResult, threshold: int) -> bool:
 # (``_collect_pair_edges``); the same-folder same-name condition is gone (owner
 # decision 2026-11-14; a census of one 39,814-file library found the identifier
 # never joined two moments and never disagreed with a same-name pair).
-# "19": the keeper of an all-lossy bucket is the member the evidence names an
-# original before the format order: a capture date and more pixels than every
-# undated member (``_original_evidence_floor``; owner decision 2026-11-14: the
+# "19": in an all-lossy bucket a member the evidence names a copy (no capture
+# date, fewer pixels than a dated member; ``_evidence_rank``) ranks after every
+# other member, before the format order is read (owner decision 2026-11-14: the
 # keeper is the true original where it can be found). Measured on two test sets:
 # 4 groups where a larger dated PNG was the duplicate of a smaller undated JPEG.
 GROUPING_STRATEGY_VERSION = "19"

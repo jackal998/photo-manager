@@ -1,12 +1,12 @@
-"""GROUPING_STRATEGY_VERSION "19" — the keeper is the member the evidence names
-an original, before the format order.
+"""GROUPING_STRATEGY_VERSION "19" — a member the evidence names a copy is not
+the keeper, whatever the format order says.
 
 A copy made from a picture normally has no more pixels and no more EXIF than
-its source. So in an all-lossy pHash bucket a member with a capture date and
-more pixels than every undated member is the keeper, whatever its format or
-source priority. Without that evidence (all dated, all undated, an undated
-member at least as large, an undated member of unknown size) the GROUPING 17
-order stands: format, source priority, pixel count, path.
+its source. So in an all-lossy pHash bucket a member with no capture date and
+fewer pixels than a dated member ranks after every other member. Members the
+evidence does not name a copy (every dated member, an undated member at least
+as large as every dated one, an undated member of unknown size) keep the
+GROUPING 17 order between them: format, source priority, pixel count, path.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def _png(path: str, sha: str, **kwargs):
     return _hr(path, sha, file_type="png", **kwargs)
 
 
-class TestEvidenceOriginalIsKeeper:
+class TestEvidenceCopyIsNotKeeper:
     def test_a_larger_dated_png_keeps_over_a_smaller_undated_jpeg(self):
         # The measured case: a screenshot PNG and the smaller JPEG a chat app
         # made of it. Before: JPEG ranks above PNG, so the PNG was the duplicate.
@@ -49,9 +49,9 @@ class TestEvidenceOriginalIsKeeper:
         assert _duplicate_of(rows["/a/a_sent.jpg"]) == "/b/b_shot.png"
         assert rows["/b/b_shot.png"].duplicate_of is None
 
-    def test_c_two_evidence_originals_fall_back_to_the_format_order(self):
-        # Both dated members exceed the undated one, so the format decides
-        # between them and the undated copy is judged against that keeper.
+    def test_c_two_dated_members_fall_back_to_the_format_order(self):
+        # Only the undated copy is ranked down; the format decides between the
+        # two dated members, and the copy is judged against that keeper.
         png = _png("/a/a_big.png", "p", width=4000, height=3000)
         jpeg = _hr("/a/b_mid.jpg", "m", width=3000, height=2250)
         small = _hr("/a/c_small.jpg", "s", exif_date=None, width=2000, height=1500)
@@ -60,6 +60,34 @@ class TestEvidenceOriginalIsKeeper:
         assert _duplicate_of(rows["/a/a_big.png"]) == "/a/b_mid.jpg"
         assert _duplicate_of(rows["/a/c_small.jpg"]) == "/a/b_mid.jpg"
 
+    def test_d_a_stripped_copy_does_not_hand_the_keeper_to_a_larger_export(self):
+        # A dated HEIC, its EXIF-stripped copy (same pixels) and a larger dated
+        # export. The copy says nothing about which dated member is the
+        # original, so the format order still keeps the HEIC.
+        heic = _hr("/a/a_orig.heic", "h", file_type="heic", width=4032, height=3024)
+        copy = _hr("/a/b_copy.jpg", "c", exif_date=None, width=4032, height=3024)
+        export = _hr("/a/c_export.jpg", "e", width=6048, height=4536)
+        for records in ([heic, copy, export], [export, copy, heic]):
+            rows = _rows(classify(records, source_priority=PRIORITY))
+            assert rows["/a/a_orig.heic"].duplicate_of is None
+            assert rows["/a/b_copy.jpg"].action == "EXACT"
+            assert _duplicate_of(rows["/a/b_copy.jpg"]) == "/a/a_orig.heic"
+            assert _duplicate_of(rows["/a/c_export.jpg"]) == "/a/a_orig.heic"
+
+    def test_e_a_ranked_down_copy_loses_even_with_the_best_source(self):
+        # Without the rank the small JPEG of the preferred source would keep
+        # (same format as the huge one, better source), although the dated PNG
+        # names it a copy. The keeper is the best member not named a copy.
+        png = _png("/b/a_big.png", "p", source_label="src_b", width=4000, height=3000)
+        small = _hr("/a/b_small.jpg", "s", exif_date=None, width=2000, height=1500)
+        huge = _hr(
+            "/b/c_huge.jpg", "h", source_label="src_b", exif_date=None, width=6000, height=4500
+        )
+        rows = _rows(classify([png, small, huge], source_priority=PRIORITY_TWO_SOURCES))
+        assert rows["/b/c_huge.jpg"].duplicate_of is None
+        assert _duplicate_of(rows["/a/b_small.jpg"]) == "/b/c_huge.jpg"
+        assert _duplicate_of(rows["/b/a_big.png"]) == "/b/c_huge.jpg"
+
 
 class TestNoEvidenceKeepsTheFormatOrder:
     def _keeper_is_the_jpeg(self, png, jpeg) -> None:
@@ -67,45 +95,45 @@ class TestNoEvidenceKeepsTheFormatOrder:
         assert _duplicate_of(rows["/a/a_big.png"]) == "/a/b_small.jpg"
         assert rows["/a/b_small.jpg"].duplicate_of is None
 
-    def test_d_both_dated(self):
+    def test_f_both_dated(self):
         self._keeper_is_the_jpeg(
             _png("/a/a_big.png", "p", width=4000, height=3000),
             _hr("/a/b_small.jpg", "j", width=2000, height=1500),
         )
 
-    def test_e_both_undated(self):
+    def test_g_both_undated(self):
         self._keeper_is_the_jpeg(
             _png("/a/a_big.png", "p", exif_date=None, width=4000, height=3000),
             _hr("/a/b_small.jpg", "j", exif_date=None, width=2000, height=1500),
         )
 
-    def test_f_the_larger_member_is_the_undated_one(self):
+    def test_h_the_larger_member_is_the_undated_one(self):
         # More pixels on one side, the capture date on the other: no member
-        # leads on both, so nothing names an original.
+        # leads on both, so nothing names a copy.
         self._keeper_is_the_jpeg(
             _png("/a/a_big.png", "p", exif_date=None, width=4000, height=3000),
             _hr("/a/b_small.jpg", "j", width=2000, height=1500),
         )
 
-    def test_g_a_dated_png_of_the_same_size_does_not_lead(self):
-        # "More pixels" is strict: a dated copy of the same size as an undated
-        # one is not promoted (a 90-degree swap keeps the pixel count).
+    def test_i_an_undated_member_of_the_same_size_is_not_ranked_down(self):
+        # "Fewer pixels" is strict: an undated copy of the same size as the
+        # dated one stays in the format order (a 90-degree swap keeps the
+        # pixel count).
         png = _png("/a/a_big.png", "p", width=4000, height=3000)
         jpeg = _hr("/a/b_small.jpg", "j", exif_date=None, width=3000, height=4000)
         rows = _rows(classify([png, jpeg], source_priority=PRIORITY))
-        assert rows["/a/a_big.png"].duplicate_of is not None
         assert _duplicate_of(rows["/a/a_big.png"]) == "/a/b_small.jpg"
         assert rows["/a/b_small.jpg"].duplicate_of is None
 
-    def test_h_an_undated_member_of_unknown_size_blocks_the_evidence(self):
+    def test_j_an_undated_member_of_unknown_size_is_not_ranked_down(self):
         self._keeper_is_the_jpeg(
             _png("/a/a_big.png", "p", width=4000, height=3000),
             _hr("/a/b_small.jpg", "j", exif_date=None, width=None, height=None),
         )
 
-    def test_i_a_larger_undated_member_blocks_the_evidence_for_the_whole_bucket(self):
-        # The dated PNG exceeds one undated JPEG but not the other, so it is
-        # not the source of every undated member and the format order stands.
+    def test_k_a_larger_undated_member_keeps_its_place_in_the_format_order(self):
+        # The dated PNG names the small JPEG a copy but not the huge one, so
+        # the format order decides between the PNG and the huge JPEG.
         png = _png("/a/a_big.png", "p", width=4000, height=3000)
         small = _hr("/a/b_small.jpg", "s", exif_date=None, width=2000, height=1500)
         huge = _hr("/a/c_huge.jpg", "h", exif_date=None, width=6000, height=4500)
