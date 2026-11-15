@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-RULES_VERSION = "v2"
+RULES_VERSION = "v3"  # v3: B6 pairs by identifier and folder, not by file name
 RULE_IDS: tuple[str, ...] = ("B3", "B4", "B5", "B6", "B7", "B8")
 
 

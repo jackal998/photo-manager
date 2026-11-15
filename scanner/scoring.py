@@ -36,10 +36,10 @@ This implementation is a two-tier architecture:
 
 Final score = max(0.0, min(1.0, Tier2 − format_penalty − derived_penalty))
 
-Live Photo passenger rule: a ``.mov`` / ``.mp4`` file whose stem matches
-a HEIC sibling in the same group receives ``score = None`` — it is the
-HEIC's passenger, not a ranking candidate. PR 6's action layer skips
-None-score rows when applying decisions.
+Live Photo passenger rule: a ``.mov`` / ``.mp4`` file that shares its Apple
+ContentIdentifier and its folder with a still of the same group receives
+``score = None`` — it is that still's passenger, not a ranking candidate.
+PR 6's action layer skips None-score rows when applying decisions.
 """
 
 from __future__ import annotations
@@ -48,6 +48,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, TYPE_CHECKING
+
+from scanner.media import is_video
 
 if TYPE_CHECKING:
     from scanner.dedup import ManifestRow
@@ -143,10 +145,11 @@ _BAD_PATH_SEGMENTS: frozenset[str] = frozenset({
     "messenger",
 })
 
-# Video suffixes — used by Live Photo peer detection AND by the EXIF-
-# completeness baseline (video rows are scored against the smaller video
-# tag census, not the image one). #461: ".avi" included so AVI rows (now
-# that they reach scoring) get the video treatment, not the image baseline.
+# Video suffixes — used by the EXIF-completeness baseline (video rows are
+# scored against the smaller video tag census, not the image one). #461:
+# ".avi" included so AVI rows (now that they reach scoring) get the video
+# treatment, not the image baseline. Live Photo peer detection does not read
+# this set: it asks ``scanner.media.is_video`` (``_has_live_peer``).
 _VIDEO_SUFFIXES: frozenset[str] = frozenset({"mov", "mp4", "avi"})
 # HEIC suffixes — the still-image formats whose ORPHAN (no paired video) earns
 # the Live Photo completeness penalty in ``_score_live_photo``. HEIC/HEIF
@@ -154,14 +157,6 @@ _VIDEO_SUFFIXES: frozenset[str] = frozenset({"mov", "mp4", "avi"})
 # a bare JPG does NOT (it is an ordinary photo), so jpg is deliberately excluded
 # here — broadening this set would wrongly penalise every orphan JPEG.
 _HEIC_SUFFIXES: frozenset[str] = frozenset({"heic", "heif"})
-# Still-image formats that pair with a same-stem MOV/MP4 to form a Live Photo —
-# used by the MOV-passenger rule in ``compute_score`` (#738). Broader than
-# ``_HEIC_SUFFIXES``: iPhone's "Most Compatible" mode exports Live Photos as
-# JPG+MOV, so a same-stem jpg/jpeg + video co-occurrence is a Live Photo signal
-# too. This set is NOT used for the orphan penalty above (a lone jpg is normal).
-_LIVE_PHOTO_IMAGE_SUFFIXES: frozenset[str] = frozenset(
-    {"heic", "heif", "jpg", "jpeg"}
-)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -170,11 +165,6 @@ _LIVE_PHOTO_IMAGE_SUFFIXES: frozenset[str] = frozenset(
 def _suffix(row: "ManifestRow") -> str:
     """Lowercase file extension without the leading dot."""
     return Path(row.source_path).suffix.lstrip(".").lower()
-
-
-def _stem_lower(row: "ManifestRow") -> str:
-    """Lowercase filename stem (case-insensitive match for cross-OS fixtures)."""
-    return Path(row.source_path).stem.lower()
 
 
 def _parent_key(row: "ManifestRow") -> str:
@@ -187,27 +177,34 @@ def _parent_key(row: "ManifestRow") -> str:
     return Path(row.source_path).parent.as_posix().casefold()
 
 
-def _has_paired_peer_with_suffixes(
+def _has_live_peer(
     row: "ManifestRow",
     group_rows: Iterable["ManifestRow"],
-    suffix_set: frozenset[str],
+    *,
+    video: bool,
 ) -> bool:
-    """True iff any other row in ``group_rows`` shares this row's stem
-    (case-insensitive) AND parent directory AND has a suffix in ``suffix_set``.
+    """True iff another row in ``group_rows`` is the other half of this row's
+    Live Photo: the same Apple ContentIdentifier, the same parent directory,
+    and a video (``video=True``) or a still (``video=False``).
 
-    Parent comparison is required so cross-folder same-basename MOVs that
-    join a HEIC's group via SHA/pHash edges are not mis-classified as Live
-    Photo passengers (#620). Walker is folder-scoped (walker.py:250); this
-    helper inherits that invariant.
+    The identifier says which capture a file belongs to; the folder says which
+    copy of that capture. A copy of the video in another folder is not this
+    still's passenger (#620), so it keeps a real score there. File names take
+    no part: a renamed video is still the video of its capture (GROUPING 18).
+    A row without an identifier has no Live peer. "Video" is the walker's
+    own test (``is_video``), the one rule B6 uses, so a ``.m4v`` clip is a
+    video here too and two clips of one capture are never each other's still.
     """
-    stem = _stem_lower(row)
+    cid = row.content_identifier or None
+    if cid is None:
+        return False
     row_parent = _parent_key(row)
     for peer in group_rows:
         if peer.source_path == row.source_path:
             continue
         if (
-            _stem_lower(peer) == stem
-            and _suffix(peer) in suffix_set
+            (peer.content_identifier or None) == cid
+            and is_video(peer.source_path) == video
             and _parent_key(peer) == row_parent
         ):
             return True
@@ -393,8 +390,9 @@ def _score_live_photo(
 ) -> float:
     """Live Photo completeness signal for HEIC files.
 
-    * HEIC with a paired MOV/MP4 in the same group: 1.0.
-    * HEIC without a paired video: 0.5 (orphan).
+    * HEIC with its Live video in the same group and folder (same
+      ContentIdentifier, ``_has_live_peer``): 1.0.
+    * HEIC without one: 0.5 (orphan).
     * Anything else (JPEG, RAW, PNG, standalone video): 1.0 (dimension N/A).
 
     The MOV side of a pair is handled separately by ``compute_score``,
@@ -403,10 +401,7 @@ def _score_live_photo(
     suffix = _suffix(row)
     if suffix not in _HEIC_SUFFIXES:
         return 1.0
-    has_video_peer = _has_paired_peer_with_suffixes(
-        row, group_rows, _VIDEO_SUFFIXES
-    )
-    return 1.0 if has_video_peer else 0.5
+    return 1.0 if _has_live_peer(row, group_rows, video=True) else 0.5
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
@@ -420,7 +415,8 @@ def compute_score(
     """Composite keep-worthiness score in ``[0.0, 1.0]``, or ``None``.
 
     Returns ``None`` when ``row`` is a Live Photo MOV/MP4 passenger
-    (its stem matches a HEIC sibling in the same group). The MOV keeps
+    (a still of the same group shares its ContentIdentifier and its
+    folder). The MOV keeps
     its own action (it is not decided by its HEIC) and is not a standalone
     ranking candidate. Under rule B6 its delete decision follows its photo
     (``core/services/live_photo.py``).
@@ -428,12 +424,10 @@ def compute_score(
     Pure function: no I/O, no globals. Same (row, group_rows, weights)
     always produces the same result.
     """
-    # Live Photo passenger rule — a video whose same-stem, same-folder still
-    # sibling is a Live Photo image (HEIC/HEIF or, #738, JPG/JPEG) is a
-    # passenger and does not compete for the KEEP slot.
-    if _suffix(row) in _VIDEO_SUFFIXES and _has_paired_peer_with_suffixes(
-        row, group_rows, _LIVE_PHOTO_IMAGE_SUFFIXES
-    ):
+    # Live Photo passenger rule — a video with a still of its own capture
+    # (same ContentIdentifier) in its folder is a passenger and does not
+    # compete for the KEEP slot. Any still format counts (#738: JPG + MOV).
+    if is_video(row.source_path) and _has_live_peer(row, group_rows, video=False):
         return None
 
     # Tier 1 — categorical penalties (absolute, not weight-scaled).

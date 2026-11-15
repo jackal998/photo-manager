@@ -1108,7 +1108,8 @@ class ManifestRepository:
         Reads every grouped row's scoring-relevant columns
         (``pixel_width/height``, ``file_size_bytes``, ``shot_date``,
         ``mtime``, ``exif_tag_count``, ``gps_present``, ``xmp_derived``,
-        plus ``source_path`` and ``group_id``), runs the scorer in
+        ``content_identifier``, plus ``source_path`` and ``group_id``), runs
+        the scorer in
         memory, and writes the new ``score`` values back with a single
         batched UPDATE.
 
@@ -1141,7 +1142,8 @@ class ManifestRepository:
                 SELECT source_path, action, group_id,
                        pixel_width, pixel_height, file_size_bytes,
                        shot_date, mtime,
-                       exif_tag_count, gps_present, xmp_derived
+                       exif_tag_count, gps_present, xmp_derived,
+                       content_identifier
                 FROM   migration_manifest
                 WHERE  group_id IS NOT NULL
                 """
@@ -1168,6 +1170,7 @@ class ManifestRepository:
                 exif_tag_count=r[8],
                 gps_present=bool(r[9]),
                 xmp_derived=bool(r[10]),
+                content_identifier=r[11],  # the Live passenger rule reads it
             )
             for r in rows_data
         ]
