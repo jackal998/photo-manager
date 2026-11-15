@@ -1,0 +1,1 @@
+A Live Photo video renamed on export now follows its photo: the score and the auto-select Live rule (B6) recognise the pair by the Apple ContentIdentifier and the folder, not by the file name, so the video no longer competes with its photo for the keep slot. (#1072)
