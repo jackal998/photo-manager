@@ -1,0 +1,1 @@
+A JPEG Live Photo still now has its Apple ContentIdentifier read in memory during the scan, so it pairs with its video even when the video was renamed or moved; no JPEG is sent to exiftool for it and scans are not slower (#1069)
