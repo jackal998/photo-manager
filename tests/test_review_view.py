@@ -48,6 +48,8 @@ class _FakeRecord:
     # #1047 — same types/defaults as core.models.PhotoRecord.
     reason: str = ""
     match_confidence: str | None = None
+    # The number the scan stored (manifest ``similarity``); None = not measured.
+    similarity: int | None = None
 
 
 # Phashes for deterministic hamming-distance tests
@@ -399,3 +401,68 @@ class TestReasonAndConfidenceSerialisation:
         assert row["reason"] == ""
         assert row["match_confidence"] is None
         assert row["keep_all"] is False
+
+
+# ---------------------------------------------------------------------------
+# Measured groups: the scan stored a number per row (manifest ``similarity``)
+# ---------------------------------------------------------------------------
+
+def _serialize_one(items):
+    class _Group:
+        group_number = 1
+
+    _Group.items = items
+    return rv.serialize_groups([_Group])[0]["items"]
+
+
+class TestMeasuredGroupSimilarity:
+    def test_stored_numbers_show_and_exact_is_not_forced_to_100(self):
+        """A stored 99 on an EXACT row shows 99: the scan keeps 100 for the
+        same bytes only, so a row that is not byte-identical must not read 100."""
+        rows = _serialize_one([
+            _FakeRecord("/ref.jpg", action="", score=0.9),
+            _FakeRecord("/dup.jpg", action="REVIEW_DUPLICATE", similarity=87),
+            _FakeRecord("/exact.jpg", action="EXACT", similarity=99),
+        ])
+        assert rows[0]["similarity"]["kind"] == "ref"
+        assert rows[1]["similarity"] == {"kind": "percent", "percent": 87}
+        assert rows[2]["similarity"] == {"kind": "percent", "percent": 99}
+
+    def test_ref_tier_passenger_shows_its_stored_number_with_a_star(self):
+        """A Ref-tier non-winner with a stored 64 shows the passenger form."""
+        rows = _serialize_one([
+            _FakeRecord("/ref.jpg", action="", score=0.9),
+            _FakeRecord("/passenger.jpg", action="", score=0.5, similarity=64),
+        ])
+        assert rows[1]["similarity"] == {"kind": "passenger", "percent": 64}
+
+    def test_member_without_a_stored_number_shows_a_dash(self):
+        """A video in a measured group has no number and shows a dash, not a
+        pHash figure computed from a picture it cannot be measured against."""
+        rows = _serialize_one([
+            _FakeRecord("/ref.jpg", action="", score=0.9),
+            _FakeRecord("/dup.jpg", action="REVIEW_DUPLICATE", similarity=80),
+            _FakeRecord("/clip.mov", action="REVIEW_DUPLICATE", phash=_PHASH_NEAR),
+        ])
+        assert rows[2]["similarity"] == {"kind": "none", "percent": None}
+
+    def test_ref_gone_shows_a_dash_on_every_remaining_row(self):
+        """When the row now shown as Ref carries a stored number, the Ref it was
+        measured against has left the group: no row may show a stale number."""
+        rows = _serialize_one([
+            _FakeRecord("/new_ref.jpg", action="", score=0.9, similarity=70),
+            _FakeRecord("/dup.jpg", action="REVIEW_DUPLICATE", similarity=80),
+        ])
+        assert rows[0]["similarity"]["kind"] == "ref"
+        assert rows[1]["similarity"] == {"kind": "none", "percent": None}
+
+    def test_unmeasured_group_keeps_the_phash_behaviour(self):
+        """A group with no stored number at all keeps the old display: EXACT
+        is 100 and a near duplicate shows the pHash formula (hamming 4 -> 94)."""
+        rows = _serialize_one([
+            _FakeRecord("/ref.jpg", action="", score=0.9, phash=_PHASH_A),
+            _FakeRecord("/exact.jpg", action="EXACT", phash=_PHASH_A),
+            _FakeRecord("/dup.jpg", action="REVIEW_DUPLICATE", phash=_PHASH_NEAR),
+        ])
+        assert rows[1]["similarity"] == {"kind": "percent", "percent": 100}
+        assert rows[2]["similarity"] == {"kind": "percent", "percent": 94}

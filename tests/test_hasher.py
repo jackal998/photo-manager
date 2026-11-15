@@ -1433,3 +1433,65 @@ class TestGrey128Signature:
         assert len(grey) == 16384
         assert grey == _box_grey(Image.fromarray(arr, "RGB"))
 
+
+class TestReviewThumbnail:
+    """Element 11 of ``compute_hashes`` is the review screen's own thumbnail.
+
+    A user loses the similarity number for a picture when this is None or
+    oversized, and loses the picture's hashes when making the thumbnail
+    disturbs them (it shrinks the working image in place, so it must run last).
+    """
+
+    @staticmethod
+    def _long_edge(data: bytes) -> int:
+        with Image.open(io.BytesIO(data)) as out:
+            assert out.format == "JPEG"
+            return max(out.size)
+
+    def test_jpeg_source_gives_a_jpeg_thumbnail_within_the_cap(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "big.jpg"
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(f, "JPEG", quality=92)
+
+        thumb = compute_hashes(f, "jpeg")[11]
+
+        assert thumb is not None
+        assert self._long_edge(thumb) <= 512
+
+    def test_png_source_gives_a_jpeg_thumbnail_within_the_cap(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "big.png"
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(f, "PNG")
+
+        thumb = compute_hashes(f, "png")[11]
+
+        assert thumb is not None
+        assert self._long_edge(thumb) <= 512
+
+    def test_video_has_no_review_thumbnail(self, tmp_path):
+        from scanner.hasher import compute_hashes
+
+        v = tmp_path / "clip.mov"
+        v.write_bytes(b"\x00" * 64)
+
+        assert compute_hashes(v, "mov")[11] is None
+
+    def test_making_the_thumbnail_leaves_png_hashes_unchanged(self, tmp_path):
+        """The thumbnail shrinks the working image in place; the pHash and the
+        pixel signature must still be those of the full-size picture."""
+        import imagehash
+
+        from scanner.hasher import compute_hashes
+
+        f = tmp_path / "big.png"
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(f, "PNG")
+        with Image.open(f) as src:
+            full = src.convert("RGB")
+
+        out = compute_hashes(f, "png")
+
+        assert out[1] == str(imagehash.phash(full))
+        assert out[9] == full.resize((32, 32), Image.BOX).tobytes()
+

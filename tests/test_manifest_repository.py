@@ -1859,6 +1859,99 @@ class TestContentIdentifierMigration:
         assert row[0] == "A1B2C3D4-0000-4000-8000-000000000001"
 
 
+class TestSimilarityMigration:
+    """The scan's measured ``similarity`` (0-100) lands on a manifest that
+    predates it. Legacy rows read NULL (no number was measured), a stored value
+    reaches the review screen through ``load``, and the value survives the
+    #433 copy-table rebuild (see _POST_DROP_COLUMNS).
+    """
+
+    def _pre_similarity_db(self, tmp_path: Path, ddl: str = _DDL_PRE_820) -> Path:
+        return _make_manifest(
+            tmp_path,
+            [
+                {
+                    "source_path": "/legacy/dup.jpg",
+                    "source_label": "jdrive",
+                    "action": "REVIEW_DUPLICATE",
+                    "group_id": "/group/a",
+                    "reason": "",
+                    "executed": 0,
+                    "user_decision": "",
+                    "score": 0.5,
+                }
+            ],
+            ddl=ddl,
+        )
+
+    def test_similarity_column_added_to_old_manifest(self, tmp_path):
+        db = self._pre_similarity_db(tmp_path)
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+            row = conn.execute(
+                "SELECT similarity, score FROM migration_manifest "
+                "WHERE source_path = '/legacy/dup.jpg'"
+            ).fetchone()
+        assert "similarity" in cols
+        assert row[0] is None  # no DEFAULT: an unmeasured row is NULL, never 0
+        assert row[1] == pytest.approx(0.5)
+
+    def test_stored_similarity_reaches_the_loaded_record(self, tmp_path):
+        cand = tmp_path / "jdrive" / "a.jpg"
+        ref = tmp_path / "takeout" / "a.jpg"
+        _make_jpeg(cand)
+        _make_jpeg(ref)
+        gid = "/group/a"
+        db = _make_manifest(tmp_path, [
+            _row({"source_path": str(cand), "group_id": gid}),
+            _ref_row({"source_path": str(ref), "group_id": gid}),
+        ])
+        ManifestRepository().ensure_schema(str(db))
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                "UPDATE migration_manifest SET similarity = ? WHERE source_path = ?",
+                (87, str(cand)),
+            )
+            conn.commit()
+
+        records = {r.file_path: r for r in ManifestRepository().load(str(db))}
+
+        assert records[str(cand)].similarity == 87
+        assert records[str(ref)].similarity is None  # the Ref is never measured
+
+    def test_similarity_survives_the_drop_move_rebuild(self, tmp_path):
+        """Same trap as content_identifier: a name missing from
+        _POST_DROP_COLUMNS keeps the column but silently empties every value.
+        The fixture carries a REAL number, so an emptied value fails the assert."""
+        ddl_with_dest_path = _DDL_PRE_820.replace(
+            "outcome          TEXT    NOT NULL DEFAULT ''",
+            "outcome          TEXT    NOT NULL DEFAULT '',\n    dest_path        TEXT",
+        )
+        db = self._pre_similarity_db(tmp_path, ddl=ddl_with_dest_path)
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute("ALTER TABLE migration_manifest ADD COLUMN similarity INTEGER")
+            conn.execute(
+                "UPDATE migration_manifest SET similarity = ? WHERE source_path = ?",
+                (87, "/legacy/dup.jpg"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        ManifestRepository().ensure_schema(str(db))
+
+        with sqlite3.connect(str(db)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(migration_manifest)")}
+            row = conn.execute(
+                "SELECT similarity FROM migration_manifest WHERE source_path = '/legacy/dup.jpg'"
+            ).fetchone()
+        assert "dest_path" not in cols  # the dance really ran
+        assert "similarity" in cols
+        assert row[0] == 87
+
+
 _DDL_WITH_OUTCOME = """
 CREATE TABLE migration_manifest (
     id               INTEGER PRIMARY KEY,
