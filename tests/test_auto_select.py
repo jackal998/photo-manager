@@ -750,15 +750,17 @@ class TestLiveVideoRule:
         assert deletes == set()
         assert "B6:delete" not in trace.values()
 
-    def test_b6_video_without_same_stem_still_not_paired(self):
-        """Catches: pairing a clip with a still of a different name in the same
-        folder, which the rule does not allow."""
+    def test_b6_renamed_video_follows_its_still(self):
+        """Catches: reading the file name. A clip renamed on export is still
+        the video of its capture (same ContentIdentifier) and sits beside the
+        deleted copy, so it follows that copy; the keeper's clip stays."""
         from core.services.auto_select_rules import DEFAULT_RULES
 
         rows = _live_scene()
         rows[2] = _live_row("/b/clip.MOV", "g1", None, cid="C1")
         deletes, _ = _live_plan(rows, DEFAULT_RULES)
-        assert "/b/clip.MOV" not in deletes
+        assert "/b/clip.MOV" in deletes
+        assert "/a/IMG_1.MOV" not in deletes
 
     def test_b6_video_in_other_folder_not_paired(self):
         """Catches: pairing across folders. A copy's still must not pull in a

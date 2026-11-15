@@ -579,7 +579,7 @@ class TestAutoSelectPipeline:
             bus,
         )
 
-        assert any(msg.startswith("Rules v2: ") for msg in bus.logs), bus.logs
+        assert any(msg.startswith("Rules v3: ") for msg in bus.logs), bus.logs
 
 
 # ── #793 acceptance — exiftool-missing mode + malformed EXIF ───────────────

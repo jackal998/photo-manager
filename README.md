@@ -481,7 +481,8 @@ Final = max(0.0, min(1.0, Tier2 − format_penalty − derived_penalty))
 ```
 
 Live Photo MOV passengers get `score = NULL` and are skipped by
-ranking — they inherit the HEIC's decision via pair-cluster logic.
+ranking. A video is a passenger when a still of its group shares its
+Apple ContentIdentifier and its folder; file names are not read.
 
 ### Re-scoring without re-scanning
 

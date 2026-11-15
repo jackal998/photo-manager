@@ -33,7 +33,7 @@ from scanner.scoring import (
     FORMAT_PENALTY,
     IMAGE_EXIF_CENSUS_BASELINE,
     VIDEO_EXIF_CENSUS_BASELINE,
-    _has_paired_peer_with_suffixes,
+    _has_live_peer,
     _parent_key,
     _score_date_provenance,
     _score_exif_completeness,
@@ -44,7 +44,6 @@ from scanner.scoring import (
     _score_path,
     _score_resolution,
     _HEIC_SUFFIXES,
-    _VIDEO_SUFFIXES,
     compute_score,
     score_group,
     validate_weights,
@@ -66,6 +65,7 @@ def _row(
     gps_present: bool = False,
     xmp_derived: bool = False,
     group_id: Optional[str] = "/group/x",
+    content_identifier: str | None = None,
 ) -> ManifestRow:
     """Build a ManifestRow with only the fields the scorer reads.
 
@@ -92,6 +92,7 @@ def _row(
         exif_tag_count=exif_tag_count,
         gps_present=gps_present,
         xmp_derived=xmp_derived,
+        content_identifier=content_identifier,
     )
 
 
@@ -381,31 +382,40 @@ class TestPathScore:
 
 class TestLivePhotoScore:
     def test_heic_with_mov_peer_scores_one(self):
-        heic = _row("/x/IMG_001.heic")
-        mov = _row("/x/IMG_001.mov")
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        mov = _row("/x/IMG_001.mov", content_identifier="C1")
         assert _score_live_photo(heic, [heic, mov]) == 1.0
 
     def test_orphan_heic_scores_half(self):
-        heic = _row("/x/IMG_001.heic")
-        other = _row("/x/IMG_002.jpg")  # different stem
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        other = _row("/x/IMG_002.jpg")  # a still, not this capture's video
         assert _score_live_photo(heic, [heic, other]) == 0.5
+
+    def test_same_name_video_of_another_capture_is_no_peer(self):
+        """The name is not read: a same-stem video that carries another
+        identifier, or none, is not this HEIC's video, so the HEIC is an
+        orphan."""
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        other_capture = _row("/x/IMG_001.mov", content_identifier="C2")
+        no_identity = _row("/x/IMG_001.mp4")
+        assert _score_live_photo(heic, [heic, other_capture, no_identity]) == 0.5
 
     def test_jpeg_not_applicable_full_marks(self):
         """Non-HEIC files always score 1.0 — the dimension is N/A."""
         row = _row("/x/photo.jpg")
         assert _score_live_photo(row, [row]) == 1.0
 
-    def test_case_insensitive_stem_match(self):
-        """A file named IMG_001.HEIC and another named img_001.MOV are
-        still a pair — Windows fixtures may produce mixed case."""
-        heic = _row("/x/IMG_001.HEIC")
-        mov = _row("/x/img_001.MOV")
+    def test_renamed_video_still_counts(self):
+        """A video exported under another name is still this capture's video
+        (same identifier, same folder), so the HEIC is not an orphan."""
+        heic = _row("/x/IMG_001.HEIC", content_identifier="C1")
+        mov = _row("/x/export_2024.MOV", content_identifier="C1")
         assert _score_live_photo(heic, [heic, mov]) == 1.0
 
     def test_mp4_peer_also_counts(self):
         """Some Live Photo pairs use .mp4 instead of .mov."""
-        heic = _row("/x/IMG_001.heic")
-        mp4 = _row("/x/IMG_001.mp4")
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        mp4 = _row("/x/IMG_001.mp4", content_identifier="C1")
         assert _score_live_photo(heic, [heic, mp4]) == 1.0
 
 
@@ -413,20 +423,36 @@ class TestLivePhotoScore:
 
 
 class TestLivePhotoMovPassengerRule:
-    """A MOV/MP4 whose stem matches a HEIC in the same group is a
-    passenger — it inherits the HEIC's KEEP/DELETE decision in the
+    """A MOV/MP4 that shares its ContentIdentifier and its folder with a
+    still of the same group is a passenger — it follows that still in the
     action layer and is not scored as a ranking candidate. The scorer
     enforces this by returning ``None`` for such rows.
     """
 
-    def test_mov_with_heic_peer_returns_none(self):
-        heic = _row("/x/IMG_001.heic")
+    def test_same_name_without_identifier_is_not_a_passenger(self):
+        """The name is not read: a video beside a same-stem still is a
+        ranking candidate unless the identifier says they are one capture."""
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
         mov = _row("/x/IMG_001.mov")
+        other = _row("/x/IMG_001.mp4", content_identifier="C2")
+        assert isinstance(compute_score(mov, [heic, mov, other]), float)
+        assert isinstance(compute_score(other, [heic, mov, other]), float)
+
+    def test_renamed_video_is_a_passenger(self):
+        """A video that joined its still's group by identifier (GROUPING 18)
+        under another name is its passenger, not a rival for the KEEP slot."""
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        mov = _row("/x/export_2024.mov", content_identifier="C1")
+        assert compute_score(mov, [heic, mov]) is None
+
+    def test_mov_with_heic_peer_returns_none(self):
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        mov = _row("/x/IMG_001.mov", content_identifier="C1")
         assert compute_score(mov, [heic, mov]) is None
 
     def test_mp4_with_heic_peer_returns_none(self):
-        heic = _row("/x/IMG_001.heic")
-        mp4 = _row("/x/IMG_001.mp4")
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        mp4 = _row("/x/IMG_001.mp4", content_identifier="C1")
         assert compute_score(mp4, [heic, mp4]) is None
 
     def test_standalone_mov_returns_float(self):
@@ -440,8 +466,8 @@ class TestLivePhotoMovPassengerRule:
     def test_heic_in_pair_still_scored(self):
         """The HEIC side of the pair *is* scored — only the MOV passenger
         gets None. The HEIC's score factors in its live_photo bonus."""
-        heic = _row("/x/IMG_001.heic")
-        mov = _row("/x/IMG_001.mov")
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        mov = _row("/x/IMG_001.mov", content_identifier="C1")
         heic_score = compute_score(heic, [heic, mov])
         assert isinstance(heic_score, float)
 
@@ -449,14 +475,14 @@ class TestLivePhotoMovPassengerRule:
         """#738: iPhone 'Most Compatible' mode exports Live Photos as JPG+MOV.
         The MOV is a passenger exactly like the HEIC+MOV case — before #738 the
         jpg suffix was excluded and the MOV got a real composite score."""
-        jpg = _row("/x/IMG_001.jpg")
-        mov = _row("/x/IMG_001.mov")
+        jpg = _row("/x/IMG_001.jpg", content_identifier="C1")
+        mov = _row("/x/IMG_001.mov", content_identifier="C1")
         assert compute_score(mov, [jpg, mov]) is None
 
     def test_mov_with_jpeg_peer_returns_none(self):
         """#738: the `.jpeg` spelling is recognised the same as `.jpg`."""
-        jpeg = _row("/x/IMG_001.jpeg")
-        mov = _row("/x/IMG_001.mov")
+        jpeg = _row("/x/IMG_001.jpeg", content_identifier="C1")
+        mov = _row("/x/IMG_001.mov", content_identifier="C1")
         assert compute_score(mov, [jpeg, mov]) is None
 
     def test_jpg_orphan_not_penalised_as_live_photo(self):
@@ -647,8 +673,8 @@ class TestScoreGroup:
         """The dict still contains the MOV passenger — its value is None,
         not absent. The action layer iterates the full dict and skips
         Nones explicitly so missing keys would silently break logic."""
-        heic = _row("/x/IMG_001.heic")
-        mov = _row("/x/IMG_001.mov")
+        heic = _row("/x/IMG_001.heic", content_identifier="C1")
+        mov = _row("/x/IMG_001.mov", content_identifier="C1")
         out = score_group([heic, mov])
         assert "/x/IMG_001.mov" in out
         assert out["/x/IMG_001.mov"] is None
@@ -799,8 +825,8 @@ class TestApplyScoringToRows:
 
     def test_live_photo_mov_gets_none_score(self):
         from scanner.scoring import apply_scoring_to_rows
-        heic = _row("/x/IMG_001.heic", group_id="g1")
-        mov = _row("/x/IMG_001.mov", group_id="g1")
+        heic = _row("/x/IMG_001.heic", group_id="g1", content_identifier="C1")
+        mov = _row("/x/IMG_001.mov", group_id="g1", content_identifier="C1")
         apply_scoring_to_rows([heic, mov], extracts={})
         assert mov.score is None
         assert isinstance(heic.score, float)
@@ -926,14 +952,14 @@ class TestManifestRepositoryRescore:
                 source_hash="aaa", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
                 pixel_width=4000, pixel_height=3000,
-                group_id="g1",
+                group_id="g1", content_identifier="C1",
             ),
             ManifestRow(
                 source_path="/x/IMG_001.mov", source_label="src",
                 action="",
                 source_hash="bbb", phash=None, hamming_distance=None,
                 duplicate_of=None, reason="",
-                group_id="g1",
+                group_id="g1", content_identifier="C1",
             ),
         ]
         db = self._make_manifest_with_scoring(tmp_path, rows)
@@ -1046,14 +1072,13 @@ class TestManifestRepositoryRescore:
 
 
 class TestLivePhotoCrossFolderCollision:
-    """#620: cross-folder same-basename MOV must NOT be classified as a
-    HEIC's Live Photo passenger. Walker is folder-scoped (walker.py:250),
-    scoring must inherit that invariant — case-folded parent comparison
-    required for Windows NTFS.
+    """#620: a copy of a Live video in another folder must NOT be classified
+    as the passenger of a still it does not sit beside. The identifier says
+    which capture a file belongs to, the folder says which copy — case-folded
+    parent comparison required for Windows NTFS.
 
-    Without the fix: _has_paired_peer_with_suffixes only checks stem+suffix,
-    so B/IMG_1234.MOV matches A/IMG_1234.HEIC → score=None → "—" Similarity
-    → skipped by auto-select.  With the fix: parent mismatch blocks it.
+    Without the folder condition B/IMG_1234.MOV matches A/IMG_1234.HEIC →
+    score=None → "—" Similarity → skipped by auto-select.
     """
 
     def test_cross_folder_mov_keeps_real_score(self):
@@ -1061,9 +1086,9 @@ class TestLivePhotoCrossFolderCollision:
         the same-folder MOV is the Live Photo passenger (score=None),
         the cross-folder MOV gets a real score (NOT mis-classified as passenger).
         """
-        heic = _row("/A/IMG_1234.heic")
-        mov_same = _row("/A/IMG_1234.mov")   # same folder → passenger
-        mov_cross = _row("/B/IMG_1234.mov")  # different folder → NOT a passenger
+        heic = _row("/A/IMG_1234.heic", content_identifier="C1")
+        mov_same = _row("/A/IMG_1234.mov", content_identifier="C1")   # same folder → passenger
+        mov_cross = _row("/B/IMG_1234.mov", content_identifier="C1")  # different folder → NOT a passenger
 
         group = [heic, mov_same, mov_cross]
         scores = score_group(group)
@@ -1081,8 +1106,8 @@ class TestLivePhotoCrossFolderCollision:
     def test_cross_folder_heic_not_stolen_by_other_folder_mov(self):
         """Symmetric: a HEIC in folder A is not mis-paired with a MOV in
         folder B for the live_photo dimension bonus."""
-        heic = _row("/A/IMG_9999.heic")
-        mov_other = _row("/B/IMG_9999.mov")  # different folder
+        heic = _row("/A/IMG_9999.heic", content_identifier="C1")
+        mov_other = _row("/B/IMG_9999.mov", content_identifier="C1")  # different folder
 
         group = [heic, mov_other]
 
@@ -1098,17 +1123,17 @@ class TestLivePhotoCrossFolderCollision:
         Python even when NTFS treats them as the same dir. _parent_key must
         case-fold so same-folder pairs are not split by drive-letter case.
         """
-        heic = _row("D:/Photos/IMG_0001.heic")
-        mov_upper = _row("D:/Photos/IMG_0001.mov")
-        mov_lower = _row("d:/photos/IMG_0001.mov")  # same dir, different case
+        heic = _row("D:/Photos/IMG_0001.heic", content_identifier="C1")
+        mov_upper = _row("D:/Photos/IMG_0001.mov", content_identifier="C1")
+        mov_lower = _row("d:/photos/IMG_0001.mov", content_identifier="C1")  # same dir, different case
 
         # _parent_key must treat both paths as the same parent
         assert _parent_key(heic) == _parent_key(mov_upper)
         assert _parent_key(heic) == _parent_key(mov_lower)
 
         # Both should be recognised as same-folder peers (passengers)
-        assert _has_paired_peer_with_suffixes(heic, [heic, mov_upper], _VIDEO_SUFFIXES)
-        assert _has_paired_peer_with_suffixes(heic, [heic, mov_lower], _VIDEO_SUFFIXES)
+        assert _has_live_peer(heic, [heic, mov_upper], video=True)
+        assert _has_live_peer(heic, [heic, mov_lower], video=True)
 
     def test_parent_key_helper_isolates_by_folder(self):
         """_parent_key of two rows in genuinely different folders must differ,

@@ -29,7 +29,7 @@ def test_legacy_rules_match_master():
 
 
 def test_rules_version_and_ids_are_pinned():
-    assert RULES_VERSION == "v2"
+    assert RULES_VERSION == "v3"
     assert RULE_IDS == ("B3", "B4", "B5", "B6", "B7", "B8")
 
 
@@ -37,7 +37,7 @@ def test_describe_rules_order():
     from core.services.auto_select_rules import describe_rules
 
     assert describe_rules(DEFAULT_RULES) == (
-        "Rules v2: B3 on, B4 on, B5 on, B6 on, B7 off, B8 on."
+        "Rules v3: B3 on, B4 on, B5 on, B6 on, B7 off, B8 on."
     )
 
 
