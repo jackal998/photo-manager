@@ -133,3 +133,93 @@ def test_same_stem_videos_with_equal_cid_join_a_byte_copy_of_the_mov():
     assert gid is not None
     assert _gid(rows, "/copy/IMG_7.MOV") == gid
     assert _gid(rows, "/cam/IMG_7.MP4") == gid
+
+
+# GROUPING 18 — the ContentIdentifier alone pairs a video with its still. The
+# walker's same-folder same-name cluster is no longer a condition.
+
+
+def _still_with_copy(path: str, cid: str | None):
+    """A HEIC still plus a byte copy elsewhere, so the still is in a group its
+    video can join (a lone pair never forms a group)."""
+    still = _hr(path, sha256="same", file_type="heic", exif_date=_dt(),
+                content_identifier=cid)
+    copy = _hr("/copy/still.HEIC", sha256="same", file_type="heic", exif_date=_dt())
+    return still, copy
+
+
+def test_renamed_video_joins_its_still_by_identifier():
+    """The video was renamed (no shared name, so no walker cluster). The
+    identifier still says it is the same capture."""
+    still, copy = _still_with_copy("/cam/IMG_8.HEIC", "CID-8")
+    mov = _hr("/cam/IMG_8-1.MOV", sha256="m", phash=None, exif_date=_dt(),
+              file_type="mov", content_identifier="CID-8")
+    rows = _rows(classify([still, copy, mov]))
+    gid = _gid(rows, "/cam/IMG_8.HEIC")
+    assert gid is not None
+    assert _gid(rows, "/cam/IMG_8-1.MOV") == gid
+
+
+def test_video_in_another_folder_joins_its_still_by_identifier():
+    still, copy = _still_with_copy("/album/IMG_8.HEIC", "CID-8")
+    mov = _hr("/videos/IMG_8.MOV", sha256="m", phash=None, exif_date=_dt(),
+              file_type="mov", content_identifier="CID-8")
+    rows = _rows(classify([still, copy, mov]))
+    gid = _gid(rows, "/album/IMG_8.HEIC")
+    assert gid is not None
+    assert _gid(rows, "/videos/IMG_8.MOV") == gid
+
+
+def test_renamed_video_with_another_identifier_stays_out():
+    still, copy = _still_with_copy("/cam/IMG_8.HEIC", "CID-8")
+    mov = _hr("/cam/IMG_8-1.MOV", sha256="m", phash=None, exif_date=_dt(),
+              file_type="mov", content_identifier="CID-OTHER")
+    rows = _rows(classify([still, copy, mov]))
+    assert _gid(rows, "/cam/IMG_8.HEIC") is not None
+    assert _gid(rows, "/cam/IMG_8-1.MOV") is None
+
+
+def test_lone_renamed_pair_is_still_not_a_group():
+    """A still and its renamed video with nothing else: one Live Photo, no group."""
+    still = _hr("/cam/IMG_8.HEIC", sha256="s", file_type="heic", exif_date=_dt(),
+                content_identifier="CID-8")
+    mov = _hr("/cam/IMG_8-1.MOV", sha256="m", phash=None, exif_date=_dt(),
+              file_type="mov", content_identifier="CID-8")
+    rows = _rows(classify([still, mov]))
+    assert _gid(rows, "/cam/IMG_8.HEIC") is None
+    assert _gid(rows, "/cam/IMG_8-1.MOV") is None
+
+
+def test_two_stills_sharing_an_identifier_get_no_pair_edge():
+    """Two stills with one identifier and far-apart pictures: the identifier
+    pairs a video with a still, it never joins two stills."""
+    a = _hr("/cam/IMG_8.HEIC", sha256="a", phash=PHASH, file_type="heic",
+            exif_date=_dt(), content_identifier="CID-8")
+    b = _hr("/cam/IMG_8-1.HEIC", sha256="b", phash=PHASH_FAR, file_type="heic",
+            exif_date=_dt(), content_identifier="CID-8")
+    rows = _rows(classify([a, b]))
+    assert _gid(rows, "/cam/IMG_8.HEIC") is None
+    assert _gid(rows, "/cam/IMG_8-1.HEIC") is None
+
+
+def test_identifier_shared_by_stills_of_two_groups_refuses_the_video():
+    """One identifier on two stills that content keeps apart (the original and a
+    heavy edit, each with a byte copy). The identifier puts the video with both,
+    so joining it would bridge the two groups: it joins neither and says why.
+    Under GROUPING 17 the video sat with the still it was named after."""
+    original = _hr("/a/IMG_9.HEIC", sha256="o", phash=PHASH, file_type="heic",
+                   exif_date=_dt(), content_identifier="CID-9")
+    original_copy = _hr("/b/IMG_9.HEIC", sha256="o", phash=PHASH, file_type="heic",
+                        exif_date=_dt())
+    edit = _hr("/c/IMG_9_edit.HEIC", sha256="e", phash=PHASH_FAR, file_type="heic",
+               exif_date=_dt(), content_identifier="CID-9")
+    edit_copy = _hr("/d/IMG_9_edit.HEIC", sha256="e", phash=PHASH_FAR, file_type="heic",
+                    exif_date=_dt())
+    mov = _hr("/a/IMG_9.MOV", sha256="m", phash=None, exif_date=_dt(),
+              file_type="mov", content_identifier="CID-9")
+    rows = _rows(classify([original, original_copy, edit, edit_copy, mov]))
+    original_gid = _gid(rows, "/a/IMG_9.HEIC")
+    edit_gid = _gid(rows, "/c/IMG_9_edit.HEIC")
+    assert original_gid is not None and edit_gid is not None and original_gid != edit_gid
+    assert _gid(rows, "/a/IMG_9.MOV") is None
+    assert "pair link skipped: its stills are in different groups" in rows["/a/IMG_9.MOV"].reason

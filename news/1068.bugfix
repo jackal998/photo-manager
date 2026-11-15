@@ -1,0 +1,1 @@
+GROUPING 18: a Live Photo video now pairs with its still by the Apple ContentIdentifier alone, so a renamed or moved video still joins its photo's group; the same-folder same-name condition is gone (#1068)
