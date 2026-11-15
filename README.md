@@ -529,8 +529,9 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
   Pre-`"5"` rows are `NULL` and group as before until a re-scan
 - **Similarity number** — `similarity` (0–100) says how alike a grouped picture and its group's
   Ref look, measured at the end of the scan from the review thumbnails the hash pass makes
-  (no second read of any file). `NULL` for the Ref, for videos and for rows that could not be
-  measured; rows scanned before this column are `NULL` and show the pHash-derived number
+  (no second read of any file). The Ref a group was measured against carries 100; `NULL` for
+  videos and for rows that could not be measured; rows scanned before this column are `NULL`
+  and show the pHash-derived number
 - **Apple ContentIdentifier** — `content_identifier` (upper-cased, NULL when absent) is
   the device-written identity that pairs a Live Photo still with its video. HEIC and video identities are read
   through exiftool, so a scan without exiftool makes no Live Photo pairs. Pre-GROUPING-10

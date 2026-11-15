@@ -39,8 +39,9 @@ Web slice:
           (the ``similarity`` column, read here straight from the manifest
           with sqlite3) and is at most 99: the files differ, and only a
           byte-identical copy shows 100.
-       c. the row shown as Ref has no stored number - the scan measured every
-          row against exactly the Ref the review shows.
+       c. the row shown as Ref carries the stored number 100 - the mark the
+          scan leaves on the Ref it measured against, so every row was
+          measured against exactly the Ref the review shows.
 
      Since the similarity measure (scanner/similarity.py) the number is no
      longer the pHash bit distance: it says how alike the two pictures look
@@ -52,14 +53,16 @@ Qt divergences:
   D1. The Qt driver reads sqlite directly (via ``sqlite3`` against
       ``qa/run-manifest.sqlite``).  The web port reads the API layer
       (GET /api/manifest) — STRONGER: exercises the full serialisation path
-      including ``_build_file_row``, ``compute_similarity``, and
+      including ``_build_file_row``, ``measured_similarity``, and
       ``pick_ref_winner`` rather than bypassing them for raw column values.
+      It reads sqlite too, but only for the stored ``similarity`` column the
+      API value is compared with.
 
   D2. The Qt driver imports ``imagehash`` to compute the cross-ref Hamming
       distance and compares it to the legacy stored distance as a diagnostic.
-      The web port verifies that ``similarity.percent`` in the JSON matches
-      the formula applied to the ref's phash and the dup's phash — asserting
-      what the USER SEES is the #253 invariant, not the intermediate distance.
+      The web port verifies that ``similarity.percent`` in the JSON is the
+      number the scan stored for the row — asserting what the USER SEES. The
+      pHash formula is no longer what a freshly scanned row shows.
 
   D3. The Qt driver's ``_pick_displayed_ref`` replicates the Qt renderer's
       tie-break logic in Python so it can identify which row is the "Ref".
@@ -150,7 +153,7 @@ def run(*, base_url: str) -> None:
          a. ``similarity.kind == 'percent'``
          b. ``similarity.percent`` equals the ``similarity`` column the scan
             stored for the row, and is at most 99.
-         c. the row shown as Ref has no stored number.
+         c. the row shown as Ref carries the stored number 100.
     """
     tmpdir = tempfile.mkdtemp(prefix="qa_s52_")
     src_subdir = os.path.join(tmpdir, "s52_source")
@@ -240,9 +243,10 @@ def run(*, base_url: str) -> None:
             stored = _stored_similarity(db_path)
 
             # 3c — the scan measured against the Ref the review shows
-            assert stored.get(ref_item["basename"]) is None, (
-                f"the row shown as Ref ({ref_item['basename']}) carries a stored "
-                f"similarity {stored.get(ref_item['basename'])!r}: the scan measured "
+            assert stored.get(ref_item["basename"]) == 100, (
+                f"the row shown as Ref ({ref_item['basename']}) carries the stored "
+                f"similarity {stored.get(ref_item['basename'])!r}, not the 100 the "
+                f"scan leaves on the Ref it measured against: the scan measured "
                 f"against a different Ref than the one displayed, so every row of "
                 f"the group would show a dash"
             )

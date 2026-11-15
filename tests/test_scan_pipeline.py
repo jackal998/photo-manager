@@ -769,6 +769,42 @@ def _capture_grey_stores(monkeypatch) -> list:
     return created
 
 
+def _capture_thumb_stores(monkeypatch) -> list:
+    """Record each ThumbStore the pipeline creates, through its factory seam."""
+    import core.app_service.scan_runner as _sr
+
+    created: list = []
+    real_factory = _sr._new_thumb_store
+
+    def _factory():
+        store = real_factory()
+        created.append(store)
+        return store
+
+    monkeypatch.setattr(_sr, "_new_thumb_store", _factory)
+    return created
+
+
+def _assert_similarity_stored_and_no_thumb_file(
+    manifest: Path, created: list, *, spilled: bool
+) -> None:
+    """The metadata-only copy pair: the Ref the scan measured against carries
+    100, its pixel-identical copy with other bytes 99, and the scan's
+    thumbnail file is gone."""
+    import sqlite3
+
+    with sqlite3.connect(manifest) as conn:
+        stored = sorted(conn.execute("SELECT action, similarity FROM migration_manifest"))
+    assert sorted(v for _a, v in stored) == [99, 100], f"stored similarity: {stored!r}"
+    assert ("EXACT", 99) in stored, f"the copy is not byte-identical, it must read 99: {stored!r}"
+    assert len(created) == 1, f"expected one thumbnail store per scan, got {len(created)}"
+    store_path = created[0].path
+    if spilled:
+        assert store_path is not None, "no thumbnail reached the store"
+    if store_path is not None:
+        assert not store_path.exists(), f"thumbnail store file left behind: {store_path}"
+
+
 def _assert_one_exact_and_no_store_file(
     manifest: Path, created: list, *, spilled: bool
 ) -> None:
@@ -846,6 +882,97 @@ class TestGreySignatureSpill:
         assert instantiated == [True], "process mode must select ProcessPoolExecutor"
         assert not failed, f"scan must not fail: {failed}"
         _assert_one_exact_and_no_store_file(out, created, spilled=False)
+
+
+class TestThumbnailSpill:
+    """The review thumbnails leave RAM for a scan-local file, are read back by
+    the similarity pass at the end of the scan, and the file is deleted.
+
+    Same shape as ``TestGreySignatureSpill``: the thread path always spills
+    before the pass; the process path spills from a future callback that may
+    land later, so it only asserts that no file survives. Either way the
+    numbers must reach the manifest.
+    """
+
+    def test_similarity_is_stored_and_the_file_deleted_on_thread_path(
+        self, tmp_path, monkeypatch
+    ):
+        _metadata_only_copy_pair(tmp_path)
+        out = tmp_path / "m.sqlite"
+        created = _capture_thumb_stores(monkeypatch)
+        failed: list[str] = []
+        worker = _PipelineRun(
+            sources={"s": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"s": False},
+            workers=2,
+        )
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert not failed, f"scan must not fail: {failed}"
+        _assert_similarity_stored_and_no_thumb_file(out, created, spilled=True)
+
+    def test_similarity_is_stored_and_the_file_deleted_on_process_path(
+        self, tmp_path, monkeypatch
+    ):
+        import concurrent.futures as _cf
+
+        _metadata_only_copy_pair(tmp_path)
+        out = tmp_path / "m.sqlite"
+        created = _capture_thumb_stores(monkeypatch)
+        real_thread_pool = _cf.ThreadPoolExecutor
+
+        class SpyProcessPool(real_thread_pool):
+            # Thread-backed stand-in (no OS spawn), as in TestHashPoolSetting.
+            pass
+
+        monkeypatch.setattr(_cf, "ProcessPoolExecutor", SpyProcessPool)
+        failed: list[str] = []
+        worker = _PipelineRun(
+            sources={"s": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"s": False},
+            workers=2,
+            hash_pool="process",
+        )
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert not failed, f"scan must not fail: {failed}"
+        _assert_similarity_stored_and_no_thumb_file(out, created, spilled=False)
+
+    def test_the_numbers_are_taken_against_the_ref_auto_select_leaves(self, tmp_path):
+        """Auto-select keeps the copy with the fuller EXIF (``b_copy``), which
+        makes it the row the review shows as Ref. The similarity pass runs
+        after that stamp, so ``b_copy`` carries the Ref's 100 and the
+        classifier's own keeper reads 99. Measured before the stamp, the
+        shown Ref would carry 99 and the review would blank the whole group.
+        """
+        import sqlite3
+
+        _metadata_only_copy_pair(tmp_path)
+        out = tmp_path / "m.sqlite"
+        failed: list[str] = []
+        worker = _PipelineRun(
+            sources={"s": str(tmp_path)},
+            output_path=str(out),
+            recursive_map={"s": False},
+            workers=2,
+            auto_select_enabled=True,
+        )
+        worker.failed.connect(failed.append)
+        worker.run()
+
+        assert not failed, f"scan must not fail: {failed}"
+        with sqlite3.connect(out) as conn:
+            stored = {
+                Path(path).name: (action, value)
+                for path, action, value in conn.execute(
+                    "SELECT source_path, action, similarity FROM migration_manifest"
+                )
+            }
+        assert stored == {"a_original.jpg": ("", 99), "b_copy.jpg": ("KEEP", 100)}
 
 
 class TestHashPoolCalibration:
@@ -1576,6 +1703,7 @@ class TestPipelineLateCancel:
             )
 
         created = _capture_grey_stores(monkeypatch)
+        created_thumbs = _capture_thumb_stores(monkeypatch)
         monkeypatch.setattr(_hasher, "_hashes_from_data", cancel_during_hash)
         monkeypatch.setattr(_dedup, "classify", must_not_run_classify)
         monkeypatch.setattr(_scoring, "apply_scoring_to_rows", must_not_run_score)
@@ -1606,6 +1734,11 @@ class TestPipelineLateCancel:
         assert len(created) == 1, f"expected one grey store, got {len(created)}"
         assert created[0].path is None or not created[0].path.exists(), (
             f"grey store file left behind after cancel: {created[0].path}"
+        )
+        # The thumbnail store is deleted on the same exit path.
+        assert len(created_thumbs) == 1, f"expected one thumbnail store, got {len(created_thumbs)}"
+        assert created_thumbs[0].path is None or not created_thumbs[0].path.exists(), (
+            f"thumbnail store file left behind after cancel: {created_thumbs[0].path}"
         )
 
     def test_cancel_before_write_only_preserves_existing_manifest(

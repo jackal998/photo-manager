@@ -1495,3 +1495,75 @@ class TestReviewThumbnail:
         assert out[1] == str(imagehash.phash(full))
         assert out[9] == full.resize((32, 32), Image.BOX).tobytes()
 
+    def test_thumbnail_is_the_review_size_not_the_hash_working_size(self, tmp_path):
+        """The hash pass drafts a 1600 px JPEG down to 400 px. A thumbnail
+        made from that would be too small for the review screen; it must be
+        the 512 px one (a JPEG may land up to the draft undershoot under)."""
+        from scanner.hasher import compute_hashes
+        from scanner.thumbnail import DRAFT_UNDERSHOOT, THUMBNAIL_SIDE
+
+        jpg, png = tmp_path / "big.jpg", tmp_path / "big.png"
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(jpg, "JPEG", quality=92)
+        Image.fromarray(_photo_array(1600, 1200), "RGB").save(png, "PNG")
+
+        assert self._long_edge(compute_hashes(jpg, "jpeg")[11]) >= THUMBNAIL_SIDE * (1 - DRAFT_UNDERSHOOT)
+        assert self._long_edge(compute_hashes(png, "png")[11]) == THUMBNAIL_SIDE
+
+    def test_raw_thumbnail_comes_from_the_embedded_preview(self, tmp_path, monkeypatch):
+        """A RAW file with an embedded JPEG preview: the thumbnail is made
+        from the preview inside the one LibRaw open."""
+        from scanner import hasher
+        from scanner.thumbnail import DRAFT_UNDERSHOOT, THUMBNAIL_SIDE
+
+        buf = io.BytesIO()
+        Image.fromarray(_photo_array(2048, 1536), "RGB").save(buf, "JPEG", quality=85)
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(hasher, "rawpy", _fake_rawpy(buf.getvalue(), 8064, 6048, opens))
+        f = tmp_path / "shot.dng"
+        f.write_bytes(b"\x00" * 64)
+
+        thumb = hasher.compute_hashes(f, "raw")[11]
+
+        assert len(opens) == 1
+        assert THUMBNAIL_SIDE * (1 - DRAFT_UNDERSHOOT) <= self._long_edge(thumb) <= THUMBNAIL_SIDE
+
+    def test_raw_thumbnail_comes_from_the_postprocess_when_there_is_no_preview(self, tmp_path, monkeypatch):
+        from scanner import hasher
+        from scanner.thumbnail import THUMBNAIL_SIDE
+
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(
+            hasher, "rawpy", _fake_rawpy(None, 8064, 6048, opens, postprocess_array=_photo_array(2048, 1536))
+        )
+        f = tmp_path / "nothumb.dng"
+        f.write_bytes(b"\x00" * 64)
+
+        thumb = hasher.compute_hashes(f, "raw")[11]
+
+        assert len(opens) == 1
+        assert self._long_edge(thumb) == THUMBNAIL_SIDE
+
+    def test_raw_frame_that_is_its_own_working_image_is_not_shrunk_before_hashing(self, tmp_path, monkeypatch):
+        """A 2000x400 postprocessed frame is too narrow to be reduced, so the
+        frame itself is the picture that gets hashed. The thumbnail shrinks
+        its input in place and must work on a copy here, or the hashes would
+        be those of a 512 px picture."""
+        import imagehash
+
+        from scanner import hasher
+
+        arr = _photo_array(2000, 400)
+        opens: list = []
+        monkeypatch.setattr(hasher, "_RAWPY_AVAILABLE", True)
+        monkeypatch.setattr(hasher, "rawpy", _fake_rawpy(None, 2000, 400, opens, postprocess_array=arr))
+        f = tmp_path / "strip.dng"
+        f.write_bytes(b"\x00" * 64)
+
+        out = hasher.compute_hashes(f, "raw")
+
+        full = Image.fromarray(arr, "RGB")
+        assert out[1] == str(imagehash.phash(full))
+        assert out[9] == full.resize((32, 32), Image.BOX).tobytes()
+        assert self._long_edge(out[11]) == 512
