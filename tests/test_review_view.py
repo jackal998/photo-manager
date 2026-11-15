@@ -451,6 +451,17 @@ class TestMeasuredGroupSimilarity:
         ])
         assert rows[2]["similarity"] == {"kind": "none", "percent": None}
 
+    def test_a_row_the_scan_could_not_measure_shows_a_dash_not_a_phash_figure(self):
+        """Only the Ref carries a number (the other picture's thumbnail could
+        not be made): the group still counts as measured, so the row shows a
+        dash and not a pHash percentage beside rows of other groups that
+        show the new measure."""
+        rows = _serialize_one([
+            _FakeRecord("/ref.jpg", action="", score=0.9, similarity=100, phash=_PHASH_A),
+            _FakeRecord("/dup.jpg", action="REVIEW_DUPLICATE", phash=_PHASH_NEAR),
+        ])
+        assert rows[1]["similarity"] == {"kind": "none", "percent": None}
+
     def test_a_measured_passenger_taking_over_as_ref_blanks_the_group(self):
         """The measured Ref was deleted and a row measured at 70 against it
         is now shown as Ref: the stored numbers describe a picture that is

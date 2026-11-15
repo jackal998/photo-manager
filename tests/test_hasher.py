@@ -1495,6 +1495,23 @@ class TestReviewThumbnail:
         assert out[1] == str(imagehash.phash(full))
         assert out[9] == full.resize((32, 32), Image.BOX).tobytes()
 
+    def test_a_thumbnail_that_cannot_be_made_is_none_not_an_error(self):
+        """A JPEG whose EXIF block is cut short: Pillow raises ``struct.error``
+        while reading the Orientation, an exception none of the usual guards
+        name. The thumbnail is an extra, so the answer is "no thumbnail" and
+        the caller goes on to return the file's hashes."""
+        from scanner import hasher
+        from scanner.thumbnail import thumbnail_from_jpeg
+
+        buf = io.BytesIO()
+        Image.fromarray(_photo_array(160, 120), "RGB").save(
+            buf, "JPEG", dpi=(72, 72), exif=b"Exif\x00\x00II*\x00\x08"
+        )
+
+        with pytest.raises(Exception):  # noqa: B017, PT011 - the type is Pillow's to choose
+            thumbnail_from_jpeg(buf.getvalue())
+        assert hasher._thumbnail_or_none(thumbnail_from_jpeg, buf.getvalue()) is None
+
     def test_thumbnail_is_the_review_size_not_the_hash_working_size(self, tmp_path):
         """The hash pass drafts a 1600 px JPEG down to 400 px. A thumbnail
         made from that would be too small for the review screen; it must be

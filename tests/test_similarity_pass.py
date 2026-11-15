@@ -75,8 +75,8 @@ def _row(
 
 
 class TestMeasuredGroup:
-    def test_ref_is_none_same_bytes_is_100_darker_copy_is_measured(self):
-        """The group's Ref carries no number, a byte-identical copy reads 100,
+    def test_ref_and_same_bytes_are_100_darker_copy_is_measured(self):
+        """The group's Ref carries 100, a byte-identical copy reads 100,
         a visibly different copy reads a real percentage strictly between 30
         and 99, a video and an ungrouped picture stay blank, and the count of
         measured rows is returned."""
@@ -123,8 +123,8 @@ class TestMeasuredGroup:
 
     def test_the_ref_is_the_row_pick_ref_winner_picks(self):
         """With two Ref-tier rows (undecided and KEEP) the one with the higher
-        score is the Ref the review screen shows. It must carry no number; the
-        other must carry one measured against it."""
+        score is the Ref the review screen shows. It must carry the Ref's 100;
+        the other must carry a number measured against it."""
         pic = _scene(3)
         other = _darker(pic)
         low = _row("/p/low.jpg", "", "low", score=0.4)
