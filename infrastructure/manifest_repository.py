@@ -441,7 +441,7 @@ def _photo_record(
     db_xmp_derived: "int | None" = None,
     db_match_confidence: "str | None" = None,
     db_reason: "str | None" = None,
-    db_similarity: "int | None" = None,
+    db_similarity: int | None = None,
 ) -> PhotoRecord:
     """Build a PhotoRecord, preferring cached DB metadata over filesystem reads.
 

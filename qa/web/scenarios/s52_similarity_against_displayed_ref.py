@@ -35,17 +35,18 @@ Web slice:
      items in the group.
   6. Assert invariant 3 — for each ``REVIEW_DUPLICATE`` item:
        a. ``similarity.kind == 'percent'``
-       b. ``similarity.percent`` matches ``round((64 - d) / 64 * 100)``
-          where ``d = hamming(ref_phash, item_phash)`` — computed here in
-          Python to verify the server did NOT use the stored
-          ``hamming_distance`` (which is relative to the scanner's anchor,
-          not the displayed Ref).
+       b. ``similarity.percent`` is the number the scan stored for that row
+          (the ``similarity`` column, read here straight from the manifest
+          with sqlite3) and is at most 99: the files differ, and only a
+          byte-identical copy shows 100.
+       c. the row shown as Ref has no stored number - the scan measured every
+          row against exactly the Ref the review shows.
 
-     When ``imagehash`` is not importable (CI without optional deps) the
-     arithmetic cross-check falls back to verifying only that
-     ``similarity.percent`` is in [0, 100] and that the value is consistent
-     with the stored ``hamming_distance`` via the same formula — a weaker
-     but still non-vacuous check.
+     Since the similarity measure (scanner/similarity.py) the number is no
+     longer the pHash bit distance: it says how alike the two pictures look
+     and is taken at the end of the scan against the displayed Ref. What #253
+     pinned - the number refers to the DISPLAYED Ref, not to the classifier's
+     anchor row - is now pinned by 3c.
 
 Qt divergences:
   D1. The Qt driver reads sqlite directly (via ``sqlite3`` against
@@ -80,6 +81,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import urllib.parse
 import urllib.request
@@ -118,13 +120,18 @@ def _get_manifest(base_url: str, db_path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Similarity arithmetic — mirrors review_view.compute_similarity exactly
+# The number the scan stored
 # ---------------------------------------------------------------------------
 
 
-def _phash_percent(hamming: int) -> int:
-    """round((64 - hamming) / 64 * 100) — verbatim formula from compute_similarity."""
-    return round((64 - hamming) / 64 * 100)
+def _stored_similarity(db_path: str) -> dict[str, int | None]:
+    """``{file name: similarity column}`` read straight from the manifest."""
+    con = sqlite3.connect(Path(db_path).as_uri() + "?mode=ro", uri=True)
+    try:
+        rows = con.execute("SELECT source_path, similarity FROM migration_manifest").fetchall()
+    finally:
+        con.close()
+    return {Path(path).name: value for path, value in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +140,7 @@ def _phash_percent(hamming: int) -> int:
 
 
 def run(*, base_url: str) -> None:
-    """Scan near-duplicates; assert phash, ref-winner, and similarity arithmetic.
+    """Scan near-duplicates; assert phash, ref-winner, and the stored similarity.
 
     Assertions
     ----------
@@ -141,11 +148,9 @@ def run(*, base_url: str) -> None:
     2. Exactly one item has ``is_ref_winner == True``.
     3. For each ``REVIEW_DUPLICATE`` item:
          a. ``similarity.kind == 'percent'``
-         b. ``similarity.percent`` equals ``round((64 - d) / 64 * 100)`` where
-            ``d`` is the Hamming distance between the ref's pHash and the dup's
-            pHash, computed here in Python (requires ``imagehash`` for the full
-            cross-ref check; falls back to stored-hamming consistency when the
-            optional dep is absent).
+         b. ``similarity.percent`` equals the ``similarity`` column the scan
+            stored for the row, and is at most 99.
+         c. the row shown as Ref has no stored number.
     """
     tmpdir = tempfile.mkdtemp(prefix="qa_s52_")
     src_subdir = os.path.join(tmpdir, "s52_source")
@@ -223,9 +228,8 @@ def run(*, base_url: str) -> None:
                 f"{[r['basename'] for r in ref_items]}"
             )
             ref_item = ref_items[0]
-            ref_phash: str = ref_item["phash"]
 
-            # ── Invariant 3: REVIEW_DUPLICATE similarity arithmetic ───────────
+            # ── Invariant 3: the shown number is the one the scan stored ──────
             dup_items = [
                 item for item in all_items if item.get("action") == "REVIEW_DUPLICATE"
             ]
@@ -233,13 +237,15 @@ def run(*, base_url: str) -> None:
                 f"expected at least one REVIEW_DUPLICATE item in the near-duplicates "
                 f"fixture group; got none — near-duplicate classifier may have changed"
             )
+            stored = _stored_similarity(db_path)
 
-            # Try importing imagehash for the full cross-ref distance check.
-            try:
-                import imagehash as _imagehash
-                _imagehash_available = True
-            except ImportError:
-                _imagehash_available = False
+            # 3c — the scan measured against the Ref the review shows
+            assert stored.get(ref_item["basename"]) is None, (
+                f"the row shown as Ref ({ref_item['basename']}) carries a stored "
+                f"similarity {stored.get(ref_item['basename'])!r}: the scan measured "
+                f"against a different Ref than the one displayed, so every row of "
+                f"the group would show a dash"
+            )
 
             failures: list[str] = []
             for item in dup_items:
@@ -251,78 +257,26 @@ def run(*, base_url: str) -> None:
                 if kind != "percent":
                     failures.append(
                         f"{basename}: similarity.kind={kind!r}, expected 'percent' "
-                        f"(REVIEW_DUPLICATE rows must always produce a computable "
-                        f"percent when phash is present)"
+                        f"(a REVIEW_DUPLICATE picture of a freshly scanned group "
+                        f"must carry a measured number)"
                     )
                     continue
 
-                server_pct: int | None = similarity.get("percent")
-                if server_pct is None:
+                # 3b — the number the scan stored, and never 100 for another file
+                server_pct = similarity.get("percent")
+                if server_pct != stored.get(basename):
                     failures.append(
-                        f"{basename}: similarity.kind='percent' but similarity.percent "
-                        f"is None — compute_similarity returned inconsistent data"
+                        f"{basename}: server similarity.percent={server_pct!r} != "
+                        f"stored similarity column {stored.get(basename)!r}"
                     )
-                    continue
-
-                # 3b — arithmetic cross-check
-                if _imagehash_available:
-                    # Full check: recompute Hamming distance between ref and this dup
-                    # using the phash values the server also has; verify the formula.
-                    try:
-                        ref_h = _imagehash.hex_to_hash(ref_phash)
-                        dup_h = _imagehash.hex_to_hash(item["phash"])
-                        distance = ref_h - dup_h
-                        expected_pct = _phash_percent(distance)
-                    except (ValueError, TypeError) as exc:
-                        failures.append(
-                            f"{basename}: could not compute cross-ref distance: {exc}"
-                        )
-                        continue
-
-                    if server_pct != expected_pct:
-                        failures.append(
-                            f"{basename}: server similarity.percent={server_pct} "
-                            f"!= expected {expected_pct} "
-                            f"(ref_phash={ref_phash!r}, dup_phash={item['phash']!r}, "
-                            f"hamming={distance}); server may be using stored "
-                            f"hamming_distance instead of recomputing against the "
-                            f"displayed Ref (regression of #253)"
-                        )
-                    else:
-                        # Sanity: result in [0, 100]
-                        if not (0 <= server_pct <= 100):
-                            failures.append(
-                                f"{basename}: similarity.percent={server_pct} "
-                                f"out of range [0, 100]"
-                            )
-                else:
-                    # Weaker fallback when imagehash not installed: verify the
-                    # formula is self-consistent using the server's own hamming_distance
-                    # field (which is stored, not recomputed, but still validates the
-                    # arithmetic round() behaviour and the [0, 100] range).
-                    stored_hamming = item.get("hamming_distance")
-                    if stored_hamming is not None:
-                        formula_pct = _phash_percent(stored_hamming)
-                        # The server MAY have recomputed with a different distance;
-                        # only assert the range here (not exact equality with the
-                        # stored-hamming formula, since the server uses ref-phash).
-                        if not (0 <= server_pct <= 100):
-                            failures.append(
-                                f"{basename}: similarity.percent={server_pct} "
-                                f"out of range [0, 100] (imagehash unavailable; "
-                                f"stored_hamming={stored_hamming}, "
-                                f"stored-formula={formula_pct})"
-                            )
-                    else:
-                        # No hamming stored and no imagehash — just range-check
-                        if not (0 <= server_pct <= 100):
-                            failures.append(
-                                f"{basename}: similarity.percent={server_pct} "
-                                f"out of range [0, 100]"
-                            )
+                elif not isinstance(server_pct, int) or not 0 <= server_pct <= 99:
+                    failures.append(
+                        f"{basename}: similarity.percent={server_pct!r} must be an "
+                        f"int in [0, 99] (only a byte-identical copy shows 100)"
+                    )
 
             assert not failures, (
-                "REVIEW_DUPLICATE similarity arithmetic failures:\n"
+                "REVIEW_DUPLICATE similarity failures:\n"
                 + "\n".join(f"  {f}" for f in failures)
             )
 

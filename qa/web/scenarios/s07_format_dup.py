@@ -250,10 +250,10 @@ def run(*, base_url: str) -> None:
             )
 
             # ── Assertion E: JPG similarity is a near-dup percent ────────────
-            # review_view.compute_similarity renders a percent for a
-            # REVIEW_DUPLICATE row: (64 - hamming) / 64 * 100 against the Ref's
-            # pHash.  Assert the KIND and a sane range, NOT the exact value
-            # (which depends on HEIC/JPG compression and would be brittle).
+            # A REVIEW_DUPLICATE row of a freshly scanned group shows the
+            # similarity the scan measured against the Ref (how alike the two
+            # pictures look).  Assert the KIND and a sane range, NOT the exact
+            # value (which depends on HEIC/JPG compression and would be brittle).
             jpg_sim = jpg_row.get("similarity") or {}
             assert jpg_sim.get("kind") == "percent", (
                 f"JPG ({_JPG_BASENAME}) similarity kind must be 'percent' "

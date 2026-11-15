@@ -119,7 +119,7 @@ class HashResult:
     # (StoredThumb). Never persisted by the scanner. None for video, hash
     # failure, and any HashResult rebuilt without it: such a row gets no
     # similarity number.
-    thumb: Optional[Thumb] = None
+    thumb: Thumb | None = None
     # GROUPING 10 (G3): Apple ContentIdentifier, upper-cased, backfilled from
     # the exiftool extract in scan_runner. Persisted (``content_identifier``
     # column). None for stills without an Apple MakerNote and for non-Apple files.
@@ -256,7 +256,7 @@ class ManifestRow:
     # None for the Ref itself, for ungrouped rows and for rows without a
     # thumbnail (video, a picture that did not decode). Persisted
     # (``similarity`` column).
-    similarity: Optional[int] = None
+    similarity: int | None = None
 
 
 # ---------------------------------------------------------------------------

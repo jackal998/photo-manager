@@ -232,7 +232,7 @@ def _grey_for_route(
     return _grey_signature(img)
 
 
-def _thumbnail_or_none(make, source) -> Optional[bytes]:
+def _thumbnail_or_none(make, source) -> bytes | None:
     """``make(source)``, or ``None`` when the thumbnail cannot be made. A
     thumbnail is an extra: its failure must never cost a file its hashes."""
     try:
@@ -244,10 +244,10 @@ def _thumbnail_or_none(make, source) -> Optional[bytes]:
 def _thumbnail_for_route(
     file_type: str,
     is_jpeg: bool,
-    img: "Image.Image",
+    img: Image.Image,
     data: bytes,
-    raw_thumb: Optional[bytes],
-) -> Optional[bytes]:
+    raw_thumb: bytes | None,
+) -> bytes | None:
     """The review thumbnail of the picture, by decode route.
 
     * RAW — made inside the single LibRaw open (``_raw_preview_and_sizes``).
@@ -266,7 +266,7 @@ def _thumbnail_for_route(
 
 def _hashes_from_data(
     path: Path, file_type: str, data: bytes
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes], Optional[bytes]]:
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes], bytes | None]:
     """Derive ``(sha256, phash, dhash, mean_color, raw_date, px_w, px_h, inmemory_signals, phash_quality, rgb32, grey128, thumb)``
     from bytes that have already been read off disk.
 
@@ -306,7 +306,7 @@ def _hashes_from_data(
     px_h: Optional[int] = None
     inmemory_signals: Optional[dict] = None
     raw_grey: Optional[bytes] = None  # RAW only: set by _raw_preview_and_sizes
-    raw_thumb: Optional[bytes] = None  # RAW only: set by _raw_preview_and_sizes
+    raw_thumb: bytes | None = None  # RAW only: set by _raw_preview_and_sizes
     is_jpeg = False  # set by the non-RAW branch from PIL's format
 
     if file_type == "raw":
@@ -411,7 +411,7 @@ def _hashes_from_data(
 
 def compute_hashes(
     path: Path, file_type: str
-) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes], Optional[bytes]]:
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[int], Optional[int], Optional[dict], Optional[float], Optional[bytes], Optional[bytes], bytes | None]:
     """Single file read: ``(sha256, phash, dhash, mean_color, raw_exif_date, width, height, inmemory_signals, phash_quality, rgb32, grey128, thumb)``.
 
     ``rgb32`` is the 32×32 RGB pixel signature (3,072 bytes) for the EXACT
@@ -746,7 +746,7 @@ def _raw_preview_from_jpeg_bytes(thumb_data: bytes) -> Optional[Image.Image]:
 
 def _raw_preview_and_sizes(
     source: "io.BytesIO | str",
-) -> "tuple[Optional[Image.Image], Optional[int], Optional[int], Optional[bytes], Optional[bytes]]":
+) -> "tuple[Optional[Image.Image], Optional[int], Optional[int], Optional[bytes], bytes | None]":
     """ONE LibRaw open → ``(hash-ready preview, sensor width, sensor height,
     grey signature, review thumbnail)``.
 

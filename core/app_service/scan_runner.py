@@ -1540,6 +1540,7 @@ def _run_pipeline(
         logger.warning("Scan cancelled by user before similarity pass")
         bus.failed("Scan cancelled.")
         return
+    bus.log("Measuring similarity against each group's Ref…")
     measured = apply_similarity_to_rows(rows, hash_results, cancel_token)
     bus.log(f"Similarity: measured {measured:,} picture(s) against their group's Ref.")
     if thumb_store.failures:
