@@ -527,7 +527,7 @@ SQL update — ~1–3 seconds for 100k rows, zero file I/O.
   bridged unrelated photos) are kept out of pHash grouping but still get exact-SHA dedup.
   Pre-`"5"` rows are `NULL` and group as before until a re-scan
 - **Apple ContentIdentifier** — `content_identifier` (upper-cased, NULL when absent) is
-  the device-written identity that pairs a Live Photo still with its video. It is read
+  the device-written identity that pairs a Live Photo still with its video. HEIC and video identities are read
   through exiftool, so a scan without exiftool makes no Live Photo pairs. Pre-GROUPING-10
   rows are `NULL`
 - **Keep-worthiness scoring** — composite score in `[0.0, 1.0]` per file (#187);
