@@ -1,0 +1,1 @@
+The Similarity label now says how alike a picture and its group's Ref look: the scan measures it at its end and stores it, 100% only for a byte-identical copy and at most 99% for any other file. Older scan results keep the pHash-derived number until rescanned. (#1074)
