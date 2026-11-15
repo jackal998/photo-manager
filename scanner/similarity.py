@@ -43,6 +43,9 @@ _STRUCTURE_C3 = (0.03 * 100) ** 2 / 2
 _FULL_FRAME = (0.0, 0.0, 1.0, 1.0)
 _SEARCH_SIDE, _REFINE_SIDE = 128, 256
 _SCALE_STEPS, _REFINE_STEPS = 31, 9
+# The score of a one-colour picture in the window search: below every real
+# normalised cross-correlation, which lies in (-1, 1].
+_FEATURELESS = -1.0
 # A full-frame result at or above this already shows SHOWN_CAP; no other
 # placement can show more, so the window search is skipped.
 _CAP_VALUE = (SHOWN_CAP - 0.5) / 100
@@ -170,12 +173,11 @@ def _search(cont: Signature, inner: Signature, long_side: int, scales: list[floa
     ``scale`` x the width of ``cont``, over every offset inside ``cont``.
     Returns (score, scale, box as fractions of cont).
 
-    The search never runs above the picture's own size: enlarging a small
-    picture adds work and no information. A featureless ``inner`` (one flat
-    colour) correlates with nothing, so its first, widest fit is returned at
-    the origin with score -1 and the other scales are not tried.
+    A featureless ``inner`` (one flat colour) correlates with nothing, so
+    its first, widest fit is returned at the origin with the score
+    :data:`_FEATURELESS` and the other scales are not tried.
     """
-    img, img_fft, sums, squares = cont._plane(min(long_side, max(cont.size)))
+    img, img_fft, sums, squares = cont._plane(long_side)
     h, w = img.shape
     aspect = inner.size[1] / inner.size[0]
     best: tuple[float, float, Box] | None = None
@@ -190,7 +192,7 @@ def _search(cont: Signature, inner: Signature, long_side: int, scales: list[floa
         centred = tpl - tpl.mean()
         norm = np.sqrt((centred * centred).sum())
         if norm < 1e-6:
-            return best or (-1.0, scale, (0.0, 0.0, tw / w, th / h))
+            return best or (_FEATURELESS, scale, (0.0, 0.0, tw / w, th / h))
         corr = np.fft.irfft2(img_fft * np.conj(np.fft.rfft2(centred, s=img.shape)), s=img.shape)
         corr = corr[: h - th + 1, : w - tw + 1]
         s1, s2 = _window_sum(sums, th, tw), _window_sum(squares, th, tw)
@@ -217,8 +219,8 @@ def _placements(cont: Signature, inner: Signature) -> list[Box]:
             out.append(fit[2])
     scales = [float(s) for s in widest * np.linspace(1.0, 0.5, _SCALE_STEPS)]
     coarse = _search(cont, inner, _SEARCH_SIDE, scales)
-    if coarse is None or coarse[0] <= 0:
-        return out  # nothing fits, or no window correlates with the picture
+    if coarse is None or coarse[0] <= _FEATURELESS:
+        return out  # nothing fits, or the picture has no feature to place
     step = widest * 0.5 / (_SCALE_STEPS - 1)
     fine = _search(
         cont, inner, _REFINE_SIDE,

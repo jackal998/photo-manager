@@ -253,8 +253,9 @@ class ManifestRow:
     content_identifier: Optional[str] = None
     # How alike this row and its group's Ref look, 0-100 (100 only for the
     # same bytes), measured by ``scanner.similarity`` at the end of the scan.
-    # None for the Ref itself, for ungrouped rows and for rows without a
-    # thumbnail (video, a picture that did not decode). Persisted
+    # 100 on the Ref the group was measured against. None for ungrouped
+    # rows, rows without a thumbnail (video, a picture that did not decode)
+    # and groups whose Ref has none. Persisted
     # (``similarity`` column).
     similarity: int | None = None
 

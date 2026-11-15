@@ -66,8 +66,9 @@ class PhotoRecord:
     # to the web review tree (#1047) so the badge tooltip can say how sure.
     match_confidence: str | None = None
     # How alike this row and its group's Ref look, 0-100, measured at the end
-    # of the scan (scanner/similarity.py). None for the Ref, for rows that
-    # could not be measured, and for every row of an older manifest.
+    # of the scan (scanner/similarity.py); 100 on the Ref it was measured
+    # against. None for rows that could not be measured, and for every row
+    # of an older manifest.
     similarity: int | None = None
     # The classifier's reason for this row's grouping (dedup's reason string,
     # e.g. "near-duplicate (hamming=3)" or "unique"); "" when the manifest

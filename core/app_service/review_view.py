@@ -111,10 +111,11 @@ def measured_similarity(action: str, record: Any, is_ref_winner: bool, ref_gone:
     least one of its rows carries a stored ``similarity``).
 
     The stored number says how alike the row and the Ref look; it was taken
-    against the Ref the scan saw. ``ref_gone`` means that Ref has since left
-    the group (deleted or removed), so no stored number describes the row
-    against the Ref now shown: every row shows a dash. A row without a
-    stored number (video, a picture that did not decode) shows a dash too.
+    against the Ref the scan saw. ``ref_gone`` means the row now shown as
+    Ref is not that picture (see :func:`_measured_ref_gone`), so no stored
+    number describes the rows against it: every row shows a dash. A row
+    without a stored number (video, a picture that did not decode) shows a
+    dash too.
     """
     if is_ref_winner:
         return {"kind": "ref", "percent": None}
@@ -123,6 +124,20 @@ def measured_similarity(action: str, record: Any, is_ref_winner: bool, ref_gone:
         return {"kind": "none", "percent": None}
     kind = "percent" if action in ("EXACT", "REVIEW_DUPLICATE") else "passenger"
     return {"kind": kind, "percent": stored}
+
+
+def _measured_ref_gone(ref: Any | None) -> bool:
+    """True when the row shown as Ref is not the picture a measured group's
+    numbers were taken against.
+
+    The scan stores 100 on the Ref it measured against and on rows with
+    that Ref's own bytes, and at most 99 on anything else. So a shown Ref
+    carrying 100 is that picture, byte for byte, and every stored number is
+    valid against it. No Ref at all, or a Ref with another value or none
+    (the measured Ref was deleted or removed, or a rescore moved the pick),
+    means the numbers describe a picture that is no longer the reference.
+    """
+    return ref is None or getattr(ref, "similarity", None) != 100
 
 
 def _normalize_decision(user_decision: str) -> str:
@@ -221,10 +236,10 @@ def serialize_groups(groups: list[Any]) -> list[dict[str, Any]]:
         ref_phash = getattr(ref, "phash", None) if ref is not None else None
 
         # A group the scan measured has a stored similarity on at least one
-        # row and none on its Ref. A stored number on the row shown as Ref
-        # therefore means the measured Ref has left the group.
+        # row; whether those numbers still apply depends on the row shown as
+        # Ref (_measured_ref_gone).
         measured = any(getattr(r, "similarity", None) is not None for r in items_list)
-        ref_gone = ref is not None and getattr(ref, "similarity", None) is not None
+        ref_gone = _measured_ref_gone(ref)
 
         file_rows = [
             _build_file_row(record, record is ref, ref_phash, measured, ref_gone)

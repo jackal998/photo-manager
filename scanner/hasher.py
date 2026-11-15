@@ -237,7 +237,10 @@ def _thumbnail_or_none(make, source) -> bytes | None:
     thumbnail is an extra: its failure must never cost a file its hashes."""
     try:
         return make(source)
-    except (OSError, ValueError, SyntaxError):
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+        # Deliberately broad: Pillow reports a damaged file with whatever
+        # its parser tripped on (OSError, SyntaxError, struct.error, ...),
+        # and none of them may take the file's hashes down with it.
         return None
 
 

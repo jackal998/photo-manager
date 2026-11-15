@@ -97,7 +97,7 @@ class TestMeasuredGroup:
 
         measured = apply_similarity_to_rows(rows, hashes)
 
-        assert ref.similarity is None
+        assert ref.similarity == 100
         assert same.similarity == 100
         assert isinstance(dark.similarity, int)
         assert 30 < dark.similarity < 99
@@ -136,7 +136,7 @@ class TestMeasuredGroup:
 
         apply_similarity_to_rows([low, high], hashes)
 
-        assert high.similarity is None
+        assert high.similarity == 100
         assert isinstance(low.similarity, int)
         assert 0 <= low.similarity < 100
 

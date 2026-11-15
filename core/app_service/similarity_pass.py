@@ -38,12 +38,15 @@ def apply_similarity_to_rows(
     cancelled: Callable[[], bool] = lambda: False,
 ) -> int:
     """Set ``row.similarity`` on every grouped row that can be measured
-    against its group's Ref; return how many rows got a number.
+    against its group's Ref; return how many rows were measured.
 
-    The Ref itself, rows without a thumbnail (video, a picture that did not
-    decode) and every row of a group whose Ref has no thumbnail keep
-    ``None``. A row with the Ref's own bytes is 100 without a measurement.
-    Stops early, leaving the remaining rows unmeasured, once ``cancelled()``.
+    The Ref of a measured group is stored as 100, and so is a row with the
+    Ref's own bytes (no measurement needed); every other row is at most 99.
+    So "the row shown as Ref carries 100" later means: the numbers of this
+    group were taken against this very picture. Rows without a thumbnail
+    (video, a picture that did not decode) and every row of a group whose
+    Ref has no thumbnail keep ``None``.
+    Stops early, leaving the remaining groups unmeasured, once ``cancelled()``.
     """
     hashed_by_path = {str(h.record.path): h for h in hash_results}
     groups: dict[str, list[ManifestRow]] = defaultdict(list)
@@ -59,6 +62,7 @@ def apply_similarity_to_rows(
         ref_signature = _signature(ref_hashed) if ref_hashed is not None else None
         if ref_signature is None:
             continue
+        ref.similarity = percent(1.0, identical=True)
         for row in members:
             hashed = hashed_by_path.get(row.source_path)
             if row is ref or hashed is None:
