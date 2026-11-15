@@ -49,6 +49,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, TYPE_CHECKING
 
+from scanner.media import is_video
+
 if TYPE_CHECKING:
     from scanner.dedup import ManifestRow
     from scanner.media_extract import MediaExtract
@@ -143,10 +145,11 @@ _BAD_PATH_SEGMENTS: frozenset[str] = frozenset({
     "messenger",
 })
 
-# Video suffixes — used by Live Photo peer detection AND by the EXIF-
-# completeness baseline (video rows are scored against the smaller video
-# tag census, not the image one). #461: ".avi" included so AVI rows (now
-# that they reach scoring) get the video treatment, not the image baseline.
+# Video suffixes — used by the EXIF-completeness baseline (video rows are
+# scored against the smaller video tag census, not the image one). #461:
+# ".avi" included so AVI rows (now that they reach scoring) get the video
+# treatment, not the image baseline. Live Photo peer detection does not read
+# this set: it asks ``scanner.media.is_video`` (``_has_live_peer``).
 _VIDEO_SUFFIXES: frozenset[str] = frozenset({"mov", "mp4", "avi"})
 # HEIC suffixes — the still-image formats whose ORPHAN (no paired video) earns
 # the Live Photo completeness penalty in ``_score_live_photo``. HEIC/HEIF
@@ -188,7 +191,9 @@ def _has_live_peer(
     copy of that capture. A copy of the video in another folder is not this
     still's passenger (#620), so it keeps a real score there. File names take
     no part: a renamed video is still the video of its capture (GROUPING 18).
-    A row without an identifier has no Live peer.
+    A row without an identifier has no Live peer. "Video" is the walker's
+    own test (``is_video``), the one rule B6 uses, so a ``.m4v`` clip is a
+    video here too and two clips of one capture are never each other's still.
     """
     cid = row.content_identifier or None
     if cid is None:
@@ -199,7 +204,7 @@ def _has_live_peer(
             continue
         if (
             (peer.content_identifier or None) == cid
-            and (_suffix(peer) in _VIDEO_SUFFIXES) == video
+            and is_video(peer.source_path) == video
             and _parent_key(peer) == row_parent
         ):
             return True
@@ -422,9 +427,7 @@ def compute_score(
     # Live Photo passenger rule — a video with a still of its own capture
     # (same ContentIdentifier) in its folder is a passenger and does not
     # compete for the KEEP slot. Any still format counts (#738: JPG + MOV).
-    if _suffix(row) in _VIDEO_SUFFIXES and _has_live_peer(
-        row, group_rows, video=False
-    ):
+    if is_video(row.source_path) and _has_live_peer(row, group_rows, video=False):
         return None
 
     # Tier 1 — categorical penalties (absolute, not weight-scaled).

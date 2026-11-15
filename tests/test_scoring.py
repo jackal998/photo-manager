@@ -438,6 +438,24 @@ class TestLivePhotoMovPassengerRule:
         assert isinstance(compute_score(mov, [heic, mov, other]), float)
         assert isinstance(compute_score(other, [heic, mov, other]), float)
 
+    def test_rows_without_an_identifier_never_pair(self):
+        """Two rows that both lack an identifier are not one capture: a
+        missing value must not match a missing value. Otherwise every clip
+        beside a photo (an Android MP4 next to JPGs) would leave the ranking,
+        and the HEIC would lose its orphan penalty."""
+        heic = _row("/x/IMG_001.heic")
+        mov = _row("/x/IMG_001.mov")
+        assert isinstance(compute_score(mov, [heic, mov]), float)
+        assert _score_live_photo(heic, [heic, mov]) == 0.5
+
+    def test_two_clips_of_one_capture_are_not_each_others_still(self):
+        """A MOV and an M4V with one identifier and no still in the group are
+        both ranking candidates: an M4V is a video, not the MOV's photo."""
+        mov = _row("/x/IMG_001.mov", content_identifier="C1")
+        m4v = _row("/x/IMG_001.m4v", content_identifier="C1")
+        assert isinstance(compute_score(mov, [mov, m4v]), float)
+        assert isinstance(compute_score(m4v, [mov, m4v]), float)
+
     def test_renamed_video_is_a_passenger(self):
         """A video that joined its still's group by identifier (GROUPING 18)
         under another name is its passenger, not a rival for the KEEP slot."""
